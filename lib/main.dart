@@ -2026,6 +2026,7 @@ class _MainShellState extends State<MainShell> {
     super.initState();
     PaseTemplo.instancia.cargar();
     SonidosTemplo.instancia.cargar();
+    Moderacion.instancia.comprobar();
     PreferenciasPase.instancia.cargar();
     WidgetsBinding.instance.addPostFrameCallback((_) => _primeraVez());
   }
@@ -3562,7 +3563,7 @@ class ConfigSupabase {
 
   /// Quién responde por la app y por los datos (Ley 1581 de 2012). CAMBIA
   /// ESTO por el nombre o la razón social y el documento antes de publicar.
-  static const String responsable = 'Temple of Strength';
+  static const String responsable = 'Johan Sebastián Guerrero Tenjo';
   static const String domicilio = 'Colombia';
 
   /// CAMBIA ESTO por el correo real de soporte antes de publicar la app.
@@ -5236,6 +5237,8 @@ const List<_ApartadoTerminos> _terminosTemplo = <_ApartadoTerminos>[
         'proveedor externo de inteligencia artificial. No envíes datos que no quieras compartir (documentos, '
         'contraseñas, datos bancarios).',
     'Tenshi guarda algunos recuerdos para acompañarte mejor; puedes verlos y borrarlos desde su pantalla.',
+    'Si una respuesta de Tenshi te parece ofensiva, peligrosa o falsa, tócala en «Reportar». La enviamos al equipo junto '
+        'con tu mensaje anterior para revisarla.',
     'Sin el Pase, Tenshi responde con su mente completa hasta 10 mensajes al día, y puedes sumar 3 más por cada '
         'anuncio que veas, hasta 5 anuncios al día; después sigue en modo ligero. Con el Pase hay un límite de uso '
         'justo para evitar abusos. Los avisos de seguridad no tienen límite.',
@@ -5285,6 +5288,7 @@ const List<_ApartadoTerminos> _terminosTemplo = <_ApartadoTerminos>[
     '• Publicar datos personales de otros (dirección, teléfono, documentos, fotos sin su permiso).',
     '• Publicar contenido que no es tuyo sin derechos para hacerlo.',
     '• Intentar contactar a menores de edad siendo adulto, o al revés, por cualquier vía.',
+    'Nuestras normas de seguridad infantil están publicadas en ssguerrerotenjiro-cyber.github.io/seguridad-infantil.html.',
   ]),
   _ApartadoTerminos('Moderación, sanciones y apelaciones', TempleGlyph.campana, <String>[
     'Puedes reportar cualquier publicación, comentario, perfil o mensaje. Lo reportado deja de mostrarse para ti al '
@@ -32805,8 +32809,9 @@ class CerebroTenshi {
           'Llevas ${c.pesoTemplo >= 1000 ? "${(c.pesoTemplo / 1000).toStringAsFixed(1)} t" : "${c.pesoTemplo.round()} kg"}.';
     } else if (t.contains('clan')) {
       explicacion =
-          'El Clan todavía está en obra. Cuando llegue será la parte social: '
-          'publicaciones, récords compartidos y retos entre clanes.';
+          'El Clan es la comunidad del templo: publicas tu progreso, das Respeto, '
+          'comentas y sigues a otros guerreros. Puedes reportar y bloquear a quien '
+          'falte al reglamento.';
     }
 
     return RespuestaTenshi(
@@ -34185,9 +34190,15 @@ class _TenshiScreenState extends State<TenshiScreen> {
                     physics: const BouncingScrollPhysics(),
                     padding: const EdgeInsets.fromLTRB(20, 6, 20, 12),
                     children: <Widget>[
-                      for (final TurnoTenshi t in turnos) ...<Widget>[
-                        _TshTurno(turno: t, tono: c.tono),
-                        if (t.auxilio) const _TshLineasApoyo(),
+                      for (int i = 0; i < turnos.length; i++) ...<Widget>[
+                        _TshTurno(
+                          turno: turnos[i],
+                          tono: c.tono,
+                          onReportar: turnos[i].autor == AutorTurno.tenshi && !turnos[i].auxilio && i > 0
+                              ? () => reportarRespuestaTenshi(context, turnos[i], turnos)
+                              : null,
+                        ),
+                        if (turnos[i].auxilio) const _TshLineasApoyo(),
                         const SizedBox(height: 18),
                       ],
                       if (_ocupado && (_borrador == null || _borrador!.isEmpty))
@@ -34518,10 +34529,13 @@ class _TshHojaRecuerdosState extends State<_TshHojaRecuerdos> {
 /// anotación en un pergamino. Solo el usuario tiene contenedor: así se
 /// distingue de un vistazo quién habla, sin etiquetas.
 class _TshTurno extends StatelessWidget {
-  const _TshTurno({required this.turno, required this.tono});
+  const _TshTurno({required this.turno, required this.tono, this.onReportar});
 
   final TurnoTenshi turno;
   final TonoTenshi tono;
+
+  /// Reportar esta respuesta (sección 50). Null = sin botón.
+  final VoidCallback? onReportar;
 
   @override
   Widget build(BuildContext context) {
@@ -34573,13 +34587,41 @@ class _TshTurno extends StatelessWidget {
           ),
         ),
         Expanded(
-          child: SelectableText(
-            turno.texto,
-            style: TextStyle(
-              fontSize: 14,
-              height: 1.62,
-              color: sobrio ? TempleColors.blancoLuna : TempleColors.texto,
-            ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: <Widget>[
+              SelectableText(
+                turno.texto,
+                style: TextStyle(
+                  fontSize: 14,
+                  height: 1.62,
+                  color: sobrio ? TempleColors.blancoLuna : TempleColors.texto,
+                ),
+              ),
+              if (onReportar != null)
+                Align(
+                  alignment: Alignment.centerRight,
+                  child: Semantics(
+                    button: true,
+                    label: 'Reportar esta respuesta',
+                    child: InkWell(
+                      borderRadius: BorderRadius.circular(99),
+                      onTap: onReportar,
+                      child: const Padding(
+                        padding: EdgeInsets.fromLTRB(8, 4, 2, 2),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: <Widget>[
+                            Icon(Icons.outlined_flag_rounded, size: 14, color: TempleColors.textoTenue),
+                            SizedBox(width: 3),
+                            Text('Reportar', style: TextStyle(fontSize: 11, color: TempleColors.textoTenue)),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+            ],
           ),
         ),
       ],
@@ -40673,6 +40715,10 @@ Future<void> mostrarMenuTemplo(
         PaseTemplo.instancia.activo ? 'Mi Pase del Templo' : 'El Pase del Templo', () => abrirPase(context)),
     OpcionHoja(Icons.cloud_outlined, 'Mi progreso en la nube', () => mostrarEstadoNube(context)),
     OpcionHoja(Icons.music_note_outlined, 'Sonidos del templo', () => abrirAjustesSonido(context)),
+    if (Moderacion.instancia.soyModerador)
+      OpcionHoja(Icons.shield_outlined, 'Moderación', () {
+        Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => const ModeracionScreen()));
+      }),
     if (usuario != null)
       OpcionHoja(Icons.map_outlined, 'Repetir el recorrido del templo', () {
         Navigator.of(context).push(MaterialPageRoute<void>(
@@ -60880,4 +60926,815 @@ Future<void> abrirAjustesSonido(BuildContext context) {
       ),
     ),
   );
+}
+
+// ===========================================================================
+// 50. REPORTAR A TENSHI Y PANEL DE MODERACIÓN
+//
+//   50.1  Reportar una respuesta de Tenshi (Google lo exige a las apps con IA)
+//   50.2  Moderación: quién modera y qué hay pendiente
+//   50.3  Panel de moderación
+// ===========================================================================
+
+// ---------------------------------------------------------------------------
+// 50.1 REPORTAR UNA RESPUESTA DE TENSHI
+// ---------------------------------------------------------------------------
+
+const List<MapEntry<String, String>> kMotivosTenshi = <MapEntry<String, String>>[
+  MapEntry<String, String>('ofensiva', 'Ofensiva o irrespetuosa'),
+  MapEntry<String, String>('peligrosa', 'Un consejo peligroso para la salud'),
+  MapEntry<String, String>('sexual', 'Contenido sexual o inapropiado'),
+  MapEntry<String, String>('falsa', 'Información falsa o inventada'),
+  MapEntry<String, String>('otro', 'Otro motivo'),
+];
+
+/// Abre la hoja para reportar una respuesta. Envía la respuesta y el mensaje
+/// que la provocó, porque la conversación vive solo en el teléfono.
+Future<void> reportarRespuestaTenshi(BuildContext context, TurnoTenshi turno, List<TurnoTenshi> turnos) async {
+  String pregunta = '';
+  final int i = turnos.indexOf(turno);
+  for (int j = i - 1; j >= 0; j--) {
+    if (turnos[j].autor == AutorTurno.usuario) {
+      pregunta = turnos[j].texto;
+      break;
+    }
+  }
+  final bool? ok = await showModalBottomSheet<bool>(
+    context: context,
+    isScrollControlled: true,
+    backgroundColor: TempleColors.grafito,
+    shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(24))),
+    builder: (_) => _HojaReporteTenshi(turno: turno, pregunta: pregunta),
+  );
+  if (ok == true && context.mounted) {
+    avisoClan(context, 'Gracias. Revisaremos esta respuesta para que Tenshi aprenda a hacerlo mejor.');
+  }
+}
+
+class _HojaReporteTenshi extends StatefulWidget {
+  const _HojaReporteTenshi({required this.turno, required this.pregunta});
+  final TurnoTenshi turno;
+  final String pregunta;
+
+  @override
+  State<_HojaReporteTenshi> createState() => _HojaReporteTenshiState();
+}
+
+class _HojaReporteTenshiState extends State<_HojaReporteTenshi> {
+  final TextEditingController _detalle = TextEditingController();
+  String? _motivo;
+  bool _enviando = false;
+  String? _error;
+
+  @override
+  void dispose() {
+    _detalle.dispose();
+    super.dispose();
+  }
+
+  static String _corta(String t, int max) => t.length <= max ? t : t.substring(0, max);
+
+  Future<void> _enviar() async {
+    final String? motivo = _motivo;
+    if (motivo == null || _enviando) return;
+    setState(() {
+      _enviando = true;
+      _error = null;
+    });
+    try {
+      await supa.from('reportes_tenshi').insert(<String, dynamic>{
+        'turno': _corta(widget.turno.id, 80),
+        'pregunta': _corta(widget.pregunta, 2000),
+        'respuesta': _corta(widget.turno.texto, 6000),
+        'motivo': motivo,
+        'detalle': _corta(_detalle.text.trim(), 500),
+      });
+      if (mounted) Navigator.of(context).pop(true);
+    } on PostgrestException catch (e) {
+      // Ya la habías reportado.
+      if (e.code == '23505') {
+        if (mounted) Navigator.of(context).pop(true);
+        return;
+      }
+      if (mounted) setState(() => _error = SesionTemplo.mensajeDe(e));
+    } catch (e) {
+      if (mounted) setState(() => _error = 'No se pudo enviar. Revisa tu conexión e inténtalo de nuevo.');
+    } finally {
+      if (mounted) setState(() => _enviando = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: EdgeInsets.only(bottom: MediaQuery.viewInsetsOf(context).bottom),
+      child: SafeArea(
+        top: false,
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.fromLTRB(20, 18, 20, 16),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: <Widget>[
+              const Text('Reportar esta respuesta',
+                  style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600, color: TempleColors.blancoLuna)),
+              const SizedBox(height: 6),
+              const Text(
+                'Tenshi es una inteligencia artificial y puede equivocarse. Enviaremos esta respuesta y tu mensaje '
+                'anterior al equipo para revisarlos.',
+                style: TextStyle(fontSize: 12.5, height: 1.45, color: TempleColors.textoSuave),
+              ),
+              const SizedBox(height: 12),
+              Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: TempleColors.superficie,
+                  borderRadius: BorderRadius.circular(TempleRadius.campo),
+                  border: Border.all(color: TempleColors.borde),
+                ),
+                child: Text(widget.turno.texto,
+                    maxLines: 4,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(fontSize: 12.5, height: 1.45, color: TempleColors.texto)),
+              ),
+              const SizedBox(height: 12),
+              for (final MapEntry<String, String> m in kMotivosTenshi)
+                _OpcionMotivo(
+                  texto: m.value,
+                  elegido: _motivo == m.key,
+                  onTap: () => setState(() => _motivo = m.key),
+                ),
+              if (_motivo == 'peligrosa') ...<Widget>[
+                const SizedBox(height: 6),
+                const Text(
+                  'No sigas ese consejo. Si sientes dolor o malestar, para y consulta a un profesional de la salud.',
+                  style: TextStyle(fontSize: 12.5, height: 1.45, color: TempleColors.alertaSuave),
+                ),
+              ],
+              const SizedBox(height: 12),
+              TextField(
+                controller: _detalle,
+                maxLength: 500,
+                minLines: 2,
+                maxLines: 4,
+                textCapitalization: TextCapitalization.sentences,
+                style: const TextStyle(fontSize: 13.5, color: TempleColors.blancoLuna),
+                cursorColor: TempleColors.violetaClaro,
+                decoration: InputDecoration(
+                  hintText: '¿Qué estuvo mal? (opcional)',
+                  hintStyle: const TextStyle(color: TempleColors.textoTenue),
+                  counterStyle: const TextStyle(color: TempleColors.textoTenue, fontSize: 11),
+                  filled: true,
+                  fillColor: TempleColors.superficie,
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(TempleRadius.campo),
+                    borderSide: const BorderSide(color: TempleColors.borde),
+                  ),
+                  enabledBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(TempleRadius.campo),
+                    borderSide: const BorderSide(color: TempleColors.borde),
+                  ),
+                  focusedBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(TempleRadius.campo),
+                    borderSide: const BorderSide(color: TempleColors.violeta),
+                  ),
+                ),
+              ),
+              if (_error != null) ...<Widget>[
+                const SizedBox(height: 4),
+                Text(_error!, style: const TextStyle(fontSize: 12.5, color: TempleColors.error)),
+              ],
+              const SizedBox(height: 10),
+              AnimatedOpacity(
+                duration: TempleMotion.rapido,
+                opacity: _motivo == null ? 0.5 : 1,
+                child: DojoPrimaryButton(
+                  texto: 'Enviar reporte',
+                  cargando: _enviando,
+                  onPressed: () {
+                    if (_motivo == null) {
+                      setState(() => _error = 'Elige un motivo.');
+                      return;
+                    }
+                    _enviar();
+                  },
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// 50.2 MODERACIÓN
+// ---------------------------------------------------------------------------
+
+class ElementoModeracion {
+  ElementoModeracion({
+    required this.tipo,
+    required this.objetivo,
+    required this.reportes,
+    required this.motivos,
+    required this.detalles,
+    required this.ultimo,
+    required this.texto,
+    required this.pregunta,
+    required this.medios,
+    required this.oculta,
+    required this.autorId,
+    required this.autorUsuario,
+    required this.autorMenor,
+    required this.suspendidoHasta,
+    required this.existe,
+  });
+
+  final String tipo;
+  final String objetivo;
+  final int reportes;
+  final List<String> motivos;
+  final List<String> detalles;
+  final DateTime ultimo;
+  final String texto;
+  final String pregunta;
+  final List<ClanMedio> medios;
+  final bool oculta;
+  final String? autorId;
+  final String autorUsuario;
+  final bool autorMenor;
+  final DateTime? suspendidoHasta;
+
+  /// El contenido sigue existiendo (pudo borrarlo su autor).
+  final bool existe;
+
+  bool get esTenshi => tipo == 'tenshi';
+
+  static List<String> _textos(Object? o) =>
+      o is List ? o.whereType<Object>().map((Object e) => e.toString()).toList() : <String>[];
+
+  static ElementoModeracion desde(Map<dynamic, dynamic> m) {
+    final Object? c = m['contenido'];
+    final Map<dynamic, dynamic> k = c is Map ? c : <dynamic, dynamic>{};
+    final List<ClanMedio> medios = <ClanMedio>[];
+    final Object? lm = k['medios'];
+    if (lm is List) {
+      for (final Object? x in lm) {
+        if (x is Map && x['ruta'] is String) {
+          medios.add(ClanMedio(ruta: x['ruta'] as String, tipo: (x['tipo'] as String?) ?? 'foto'));
+        }
+      }
+    }
+    return ElementoModeracion(
+      tipo: (m['tipo'] as String?) ?? '',
+      objetivo: (m['objetivo'] as String?) ?? '',
+      reportes: (m['reportes'] as num?)?.toInt() ?? 1,
+      motivos: _textos(m['motivos']),
+      detalles: _textos(m['detalles']),
+      ultimo: DateTime.tryParse('${m['ultimo']}')?.toLocal() ?? DateTime.now(),
+      texto: (k['texto'] as String?) ?? '',
+      pregunta: (k['pregunta'] as String?) ?? '',
+      medios: medios,
+      oculta: k['oculta'] == true,
+      autorId: k['autor'] as String?,
+      autorUsuario: (k['autor_usuario'] as String?) ?? 'desconocido',
+      autorMenor: k['autor_menor'] == true,
+      suspendidoHasta: DateTime.tryParse('${m['suspendido_hasta']}')?.toLocal(),
+      existe: c is Map,
+    );
+  }
+}
+
+class Moderacion extends ChangeNotifier {
+  Moderacion._();
+  static final Moderacion instancia = Moderacion._();
+
+  bool soyModerador = false;
+
+  Future<void> comprobar() async {
+    try {
+      final Object? r = await supa.rpc('soy_moderador');
+      soyModerador = r == true;
+      notifyListeners();
+    } catch (_) {}
+  }
+
+  Future<List<ElementoModeracion>> lista(String ver) async {
+    final Object? r = await supa.rpc('mod_reportes', params: <String, dynamic>{'ver': ver});
+    if (r is! List) return <ElementoModeracion>[];
+    return <ElementoModeracion>[
+      for (final Object? x in r)
+        if (x is Map) ElementoModeracion.desde(x),
+    ];
+  }
+
+  Future<void> resolver(ElementoModeracion e, String accion, {String nota = ''}) => supa.rpc('mod_resolver',
+      params: <String, dynamic>{'p_tipo': e.tipo, 'p_objetivo': e.objetivo, 'p_accion': accion, 'p_nota': nota});
+
+  Future<void> suspender(String usuario, int dias, String motivo) => supa.rpc('mod_suspender',
+      params: <String, dynamic>{'u': usuario, 'dias': dias, 'motivo': motivo});
+}
+
+String _nombreTipoModeracion(String t) => switch (t) {
+      'publicacion' => 'Publicación',
+      'comentario' => 'Comentario',
+      'mensaje' => 'Mensaje privado',
+      'perfil' => 'Perfil',
+      'tenshi' => 'Respuesta de Tenshi',
+      _ => t,
+    };
+
+String _nombreMotivo(String m) {
+  for (final MapEntry<String, String> e in <MapEntry<String, String>>[...kMotivosReporte, ...kMotivosTenshi]) {
+    if (e.key == m) return e.value;
+  }
+  return m;
+}
+
+bool _motivoGrave(String m) => m == 'menor_en_riesgo' || m == 'desnudez' || m == 'autolesion' || m == 'sexual';
+
+// ---------------------------------------------------------------------------
+// 50.3 PANEL DE MODERACIÓN
+// ---------------------------------------------------------------------------
+
+class ModeracionScreen extends StatefulWidget {
+  const ModeracionScreen({super.key});
+
+  @override
+  State<ModeracionScreen> createState() => _ModeracionScreenState();
+}
+
+class _ModeracionScreenState extends State<ModeracionScreen> {
+  String _ver = 'pendiente';
+  String _filtro = 'todo';
+  List<ElementoModeracion>? _lista;
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    _cargar();
+  }
+
+  Future<void> _cargar() async {
+    setState(() {
+      _lista = null;
+      _error = null;
+    });
+    try {
+      final List<ElementoModeracion> l = await Moderacion.instancia.lista(_ver);
+      if (mounted) setState(() => _lista = l);
+    } catch (e) {
+      if (mounted) setState(() => _error = SesionTemplo.mensajeDe(e));
+    }
+  }
+
+  List<ElementoModeracion> get _visibles {
+    final List<ElementoModeracion> l = _lista ?? <ElementoModeracion>[];
+    return switch (_filtro) {
+      'clan' => l.where((ElementoModeracion e) => !e.esTenshi).toList(),
+      'tenshi' => l.where((ElementoModeracion e) => e.esTenshi).toList(),
+      'grave' => l.where((ElementoModeracion e) => e.motivos.any(_motivoGrave)).toList(),
+      _ => l,
+    };
+  }
+
+  Future<void> _accion(ElementoModeracion e, String accion) async {
+    if (accion == 'borrar') {
+      final bool ok = await confirmarClan(
+        context,
+        titulo: '¿Borrar para siempre?',
+        texto: e.motivos.contains('menor_en_riesgo')
+            ? 'Si puede ser explotación de un menor, primero repórtalo a las autoridades (ver la nota arriba). '
+                'Ocultar conserva la prueba; borrar la elimina.'
+            : 'El contenido se elimina y no se puede recuperar. Ocultarlo es reversible.',
+        accion: 'Borrar',
+        peligro: true,
+      );
+      if (!ok) return;
+    }
+    try {
+      await Moderacion.instancia.resolver(e, accion);
+      HapticFeedback.selectionClick();
+      if (mounted) {
+        avisoClan(
+            context,
+            switch (accion) {
+              'ocultar' => 'Oculto para todos.',
+              'restaurar' => 'Vuelve a verse.',
+              'borrar' => 'Borrado.',
+              'descartar' => 'Reporte descartado.',
+              _ => 'Marcado como revisado.',
+            });
+      }
+      await _cargar();
+    } catch (err) {
+      if (mounted) avisoClan(context, SesionTemplo.mensajeDe(err), error: true);
+    }
+  }
+
+  Future<void> _suspender(ElementoModeracion e) async {
+    final String? autor = e.autorId;
+    if (autor == null) return;
+    final TextEditingController motivo = TextEditingController();
+    int dias = 7;
+    final int? elegido = await showModalBottomSheet<int>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: TempleColors.grafito,
+      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(24))),
+      builder: (BuildContext ctx) => StatefulBuilder(
+        builder: (BuildContext ctx, StateSetter set) => Padding(
+          padding: EdgeInsets.fromLTRB(20, 18, 20, 16 + MediaQuery.viewInsetsOf(ctx).bottom),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: <Widget>[
+              Text('Suspender a @${e.autorUsuario}',
+                  style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w600, color: TempleColors.blancoLuna)),
+              const SizedBox(height: 6),
+              const Text('Mientras dure, no podrá publicar, comentar ni escribir mensajes. Puede apelar por correo.',
+                  style: TextStyle(fontSize: 12.5, height: 1.45, color: TempleColors.textoSuave)),
+              const SizedBox(height: 12),
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: <Widget>[
+                  for (final (int, String) o in const <(int, String)>[
+                    (1, '1 día'),
+                    (7, '7 días'),
+                    (30, '30 días'),
+                    (3650, 'Indefinida'),
+                  ])
+                    ChoiceChip(
+                      label: Text(o.$2),
+                      selected: dias == o.$1,
+                      onSelected: (_) => set(() => dias = o.$1),
+                      selectedColor: TempleColors.violeta.withValues(alpha: 0.3),
+                      backgroundColor: TempleColors.superficie,
+                      labelStyle: const TextStyle(color: TempleColors.texto, fontSize: 12.5),
+                      side: const BorderSide(color: TempleColors.borde),
+                    ),
+                ],
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: motivo,
+                maxLength: 300,
+                style: const TextStyle(fontSize: 13.5, color: TempleColors.blancoLuna),
+                decoration: const InputDecoration(
+                  hintText: 'Motivo (queda en el registro)',
+                  hintStyle: TextStyle(color: TempleColors.textoTenue),
+                  counterStyle: TextStyle(color: TempleColors.textoTenue, fontSize: 11),
+                ),
+              ),
+              const SizedBox(height: 8),
+              DojoPrimaryButton(texto: 'Suspender', onPressed: () => Navigator.of(ctx).pop(dias)),
+            ],
+          ),
+        ),
+      ),
+    );
+    final String nota = motivo.text.trim();
+    motivo.dispose();
+    if (elegido == null) return;
+    try {
+      await Moderacion.instancia.suspender(autor, elegido, nota);
+      if (mounted) avisoClan(context, '@${e.autorUsuario} queda suspendido.');
+      await _cargar();
+    } catch (err) {
+      if (mounted) avisoClan(context, SesionTemplo.mensajeDe(err), error: true);
+    }
+  }
+
+  Future<void> _levantar(ElementoModeracion e) async {
+    final String? autor = e.autorId;
+    if (autor == null) return;
+    try {
+      await Moderacion.instancia.suspender(autor, 0, 'Suspensión levantada');
+      if (mounted) avisoClan(context, 'Suspensión levantada.');
+      await _cargar();
+    } catch (err) {
+      if (mounted) avisoClan(context, SesionTemplo.mensajeDe(err), error: true);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final List<ElementoModeracion> l = _visibles;
+    return Scaffold(
+      backgroundColor: TempleColors.negro,
+      body: FondoTemplo(
+        child: Column(
+          children: <Widget>[
+            const BarraClan(titulo: 'Moderación', subtitulo: 'Reportes del Clan y de Tenshi', pase: false),
+            Padding(
+              padding: EdgeInsets.fromLTRB(TempleSpace.borde, 4, TempleSpace.borde, 8),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: <Widget>[
+                  SegmentedButton<String>(
+                    segments: const <ButtonSegment<String>>[
+                      ButtonSegment<String>(value: 'pendiente', label: Text('Pendientes')),
+                      ButtonSegment<String>(value: 'revisado', label: Text('Revisados')),
+                      ButtonSegment<String>(value: 'descartado', label: Text('Descartados')),
+                    ],
+                    selected: <String>{_ver},
+                    showSelectedIcon: false,
+                    onSelectionChanged: (Set<String> s) {
+                      _ver = s.first;
+                      _cargar();
+                    },
+                  ),
+                  const SizedBox(height: 8),
+                  SingleChildScrollView(
+                    scrollDirection: Axis.horizontal,
+                    child: Row(
+                      children: <Widget>[
+                        for (final (String, String) f in const <(String, String)>[
+                          ('todo', 'Todo'),
+                          ('grave', 'Graves'),
+                          ('clan', 'Clan'),
+                          ('tenshi', 'Tenshi'),
+                        ])
+                          Padding(
+                            padding: const EdgeInsets.only(right: 8),
+                            child: ChoiceChip(
+                              label: Text(f.$2),
+                              selected: _filtro == f.$1,
+                              onSelected: (_) => setState(() => _filtro = f.$1),
+                              selectedColor: TempleColors.violeta.withValues(alpha: 0.3),
+                              backgroundColor: TempleColors.superficie,
+                              labelStyle: const TextStyle(color: TempleColors.texto, fontSize: 12.5),
+                              side: const BorderSide(color: TempleColors.borde),
+                            ),
+                          ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            Expanded(
+              child: RefreshIndicator(
+                onRefresh: _cargar,
+                child: _lista == null && _error == null
+                    ? const Center(child: CircularProgressIndicator(color: TempleColors.violetaClaro))
+                    : ListView(
+                        padding: EdgeInsets.fromLTRB(
+                            TempleSpace.borde, 4, TempleSpace.borde, 28 + MediaQuery.paddingOf(context).bottom),
+                        children: <Widget>[
+                          if (_ver == 'pendiente') const _NotaModeracion(),
+                          if (_error != null)
+                            Padding(
+                              padding: const EdgeInsets.only(top: 24),
+                              child: Text(_error!,
+                                  textAlign: TextAlign.center, style: const TextStyle(color: TempleColors.error)),
+                            )
+                          else if (l.isEmpty)
+                            Padding(
+                              padding: const EdgeInsets.only(top: 40),
+                              child: Text(
+                                _ver == 'pendiente' ? 'No hay reportes pendientes. El Clan está en calma.' : 'Nada por aquí.',
+                                textAlign: TextAlign.center,
+                                style: const TextStyle(fontSize: 13.5, color: TempleColors.textoSuave),
+                              ),
+                            )
+                          else
+                            for (final ElementoModeracion e in l)
+                              _TarjetaModeracion(
+                                e: e,
+                                pendiente: _ver == 'pendiente',
+                                onAccion: (String a) => _accion(e, a),
+                                onSuspender: () => _suspender(e),
+                                onLevantar: () => _levantar(e),
+                              ),
+                        ],
+                      ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _NotaModeracion extends StatelessWidget {
+  const _NotaModeracion();
+
+  @override
+  Widget build(BuildContext context) => Container(
+        margin: const EdgeInsets.only(bottom: 14),
+        padding: const EdgeInsets.all(14),
+        decoration: BoxDecoration(
+          color: TempleColors.superficie,
+          borderRadius: BorderRadius.circular(TempleRadius.tarjeta),
+          border: Border.all(color: TempleColors.borde),
+        ),
+        child: const Text(
+          'Revisa esto cada día: los términos prometen hacerlo en menos de 24 horas. Lo grave (menores, desnudez, '
+          'autolesión) ya se ocultó solo al reportarse. Si algo puede ser explotación de un menor, no lo borres: '
+          'ocúltalo y denúncialo en el CAI Virtual de la Policía o en Te Protejo (teprotejo.org).',
+          style: TextStyle(fontSize: 12.5, height: 1.5, color: TempleColors.textoSuave),
+        ),
+      );
+}
+
+class _TarjetaModeracion extends StatelessWidget {
+  const _TarjetaModeracion({
+    required this.e,
+    required this.pendiente,
+    required this.onAccion,
+    required this.onSuspender,
+    required this.onLevantar,
+  });
+
+  final ElementoModeracion e;
+  final bool pendiente;
+  final ValueChanged<String> onAccion;
+  final VoidCallback onSuspender;
+  final VoidCallback onLevantar;
+
+  Widget _boton(String texto, String accion, {bool peligro = false}) => TextButton(
+        onPressed: () => onAccion(accion),
+        style: TextButton.styleFrom(
+          foregroundColor: peligro ? TempleColors.error : TempleColors.violetaClaro,
+          padding: const EdgeInsets.symmetric(horizontal: 10),
+          visualDensity: VisualDensity.compact,
+        ),
+        child: Text(texto),
+      );
+
+  @override
+  Widget build(BuildContext context) {
+    final bool grave = e.motivos.any(_motivoGrave);
+    final DateTime? susp = e.suspendidoHasta;
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 12),
+      child: TempleCard(
+        destacada: grave && pendiente,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: <Widget>[
+            Row(
+              children: <Widget>[
+                Expanded(
+                  child: Text(
+                    '${_nombreTipoModeracion(e.tipo)} · @${e.autorUsuario}${e.esTenshi ? ' (quien reporta)' : ''}',
+                    style: const TextStyle(fontSize: 13.5, fontWeight: FontWeight.w600, color: TempleColors.blancoLuna),
+                  ),
+                ),
+                Text(tiempoClan(e.ultimo), style: const TextStyle(fontSize: 11.5, color: TempleColors.textoTenue)),
+              ],
+            ),
+            const SizedBox(height: 6),
+            Wrap(
+              spacing: 6,
+              runSpacing: 6,
+              children: <Widget>[
+                if (e.autorMenor) const _EtiquetaMod(texto: 'Menor de edad', color: TempleColors.alertaSuave),
+                if (e.reportes > 1) _EtiquetaMod(texto: '${e.reportes} reportes', color: TempleColors.violetaClaro),
+                if (e.oculta) const _EtiquetaMod(texto: 'Oculto', color: TempleColors.textoSuave),
+                if (!e.existe) const _EtiquetaMod(texto: 'Ya no existe', color: TempleColors.textoSuave),
+                if (susp != null)
+                  _EtiquetaMod(texto: 'Suspendido hasta ${susp.day}/${susp.month}/${susp.year}', color: TempleColors.error),
+                for (final String m in e.motivos)
+                  _EtiquetaMod(texto: _nombreMotivo(m), color: _motivoGrave(m) ? TempleColors.error : TempleColors.textoSuave),
+              ],
+            ),
+            if (e.esTenshi && e.pregunta.isNotEmpty) ...<Widget>[
+              const SizedBox(height: 10),
+              Text('Le preguntaron: ${e.pregunta}',
+                  style: const TextStyle(fontSize: 12.5, height: 1.45, color: TempleColors.textoSuave)),
+            ],
+            if (e.texto.isNotEmpty) ...<Widget>[
+              const SizedBox(height: 10),
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: TempleColors.superficie,
+                  borderRadius: BorderRadius.circular(TempleRadius.campo),
+                ),
+                child: SelectableText(e.texto,
+                    style: const TextStyle(fontSize: 13, height: 1.5, color: TempleColors.texto)),
+              ),
+            ],
+            if (e.medios.isNotEmpty) ...<Widget>[
+              const SizedBox(height: 10),
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: <Widget>[for (final ClanMedio m in e.medios) _MiniaturaMod(medio: m)],
+              ),
+            ],
+            for (final String d in e.detalles) ...<Widget>[
+              const SizedBox(height: 8),
+              Text('«$d»',
+                  style: const TextStyle(fontSize: 12, fontStyle: FontStyle.italic, color: TempleColors.textoSuave)),
+            ],
+            if (pendiente) ...<Widget>[
+              const SizedBox(height: 8),
+              Wrap(
+                alignment: WrapAlignment.end,
+                children: <Widget>[
+                  if (e.tipo == 'publicacion' || e.tipo == 'comentario')
+                    e.oculta ? _boton('Mostrar de nuevo', 'restaurar') : _boton('Ocultar', 'ocultar'),
+                  if (e.existe && (e.tipo == 'publicacion' || e.tipo == 'comentario' || e.tipo == 'mensaje'))
+                    _boton('Borrar', 'borrar', peligro: true),
+                  if (!e.esTenshi && e.autorId != null)
+                    susp != null
+                        ? TextButton(onPressed: onLevantar, child: const Text('Levantar suspensión'))
+                        : TextButton(
+                            onPressed: onSuspender,
+                            style: TextButton.styleFrom(foregroundColor: TempleColors.error),
+                            child: const Text('Suspender'),
+                          ),
+                  if (e.esTenshi || e.tipo == 'perfil' || e.tipo == 'mensaje') _boton('Revisado', 'revisar'),
+                  _boton('Descartar', 'descartar'),
+                ],
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _EtiquetaMod extends StatelessWidget {
+  const _EtiquetaMod({required this.texto, required this.color});
+  final String texto;
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) => Container(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+        decoration: BoxDecoration(
+          color: color.withValues(alpha: 0.12),
+          borderRadius: BorderRadius.circular(99),
+          border: Border.all(color: color.withValues(alpha: 0.45)),
+        ),
+        child: Text(texto, style: TextStyle(fontSize: 11, color: color)),
+      );
+}
+
+/// Miniatura de un archivo reportado (enlace firmado de 10 minutos).
+class _MiniaturaMod extends StatefulWidget {
+  const _MiniaturaMod({required this.medio});
+  final ClanMedio medio;
+
+  @override
+  State<_MiniaturaMod> createState() => _MiniaturaModState();
+}
+
+class _MiniaturaModState extends State<_MiniaturaMod> {
+  String? _url;
+  bool _fallo = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _firmar();
+  }
+
+  Future<void> _firmar() async {
+    try {
+      final String u = await supa.storage.from('clan').createSignedUrl(widget.medio.ruta, 600);
+      if (mounted) setState(() => _url = u);
+    } catch (_) {
+      if (mounted) setState(() => _fallo = true);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final String? u = _url;
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(10),
+      child: Container(
+        width: 96,
+        height: 96,
+        color: TempleColors.superficie,
+        child: widget.medio.esVideo
+            ? GestureDetector(
+                onTap: u == null ? null : () => launchUrl(Uri.parse(u), mode: LaunchMode.externalApplication),
+                child: const Center(child: Icon(Icons.play_circle_outline_rounded, color: TempleColors.textoSuave, size: 32)),
+              )
+            : u != null
+                ? Image.network(u,
+                    fit: BoxFit.cover,
+                    errorBuilder: (_, __, ___) =>
+                        const Center(child: Icon(Icons.broken_image_outlined, color: TempleColors.textoTenue)))
+                : Center(
+                    child: _fallo
+                        ? const Icon(Icons.broken_image_outlined, color: TempleColors.textoTenue)
+                        : const SizedBox(
+                            width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2, color: TempleColors.violetaClaro)),
+                  ),
+      ),
+    );
+  }
 }

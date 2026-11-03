@@ -60,11 +60,15 @@ jobs:
       - name: Construir APK
         run: flutter build apk --release --build-number=${{ github.run_number }}
 
+      - name: Construir AAB (para Google Play)
+        run: flutter build appbundle --release --build-number=${{ github.run_number }}
+
       - name: Preparar archivo
         id: info
         run: |
           mkdir -p salida
           cp build/app/outputs/flutter-apk/app-release.apk salida/TempleOfStrength.apk
+          cp build/app/outputs/bundle/release/app-release.aab salida/TempleOfStrength.aab
           VERSION=$(grep '^version:' pubspec.yaml | sed -E 's/version:[[:space:]]*([^+]+).*/\1/')
           BYTES=$(stat -c %s salida/TempleOfStrength.apk)
           MB=$(python3 -c "print(round($BYTES/1048576))")
@@ -84,6 +88,6 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           TAG="v${{ steps.info.outputs.version }}-${{ github.run_number }}"
-          gh release create "$TAG" salida/TempleOfStrength.apk salida/apk-info.json \
+          gh release create "$TAG" salida/TempleOfStrength.apk salida/TempleOfStrength.aab salida/apk-info.json \
             --title "Temple of Strength ${{ steps.info.outputs.version }} (compilación ${{ github.run_number }})" \
             --notes "APK construido automáticamente desde ${{ github.sha }}." --latest
