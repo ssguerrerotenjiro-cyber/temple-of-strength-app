@@ -1,0 +1,89 @@
+name: Construir APK
+
+# Cada cambio en el código construye un APK nuevo, firmado, y lo publica
+# como «Release» de este repositorio.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: apk
+  cancel-in-progress: true
+
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Crear el proyecto Android
+        run: flutter create --org com.templeofstrength --project-name temple_of_strength --platforms android .
+
+      - name: Llave de firma
+        env:
+          LLAVE_BASE64: ${{ secrets.LLAVE_BASE64 }}
+          LLAVE_CLAVE: ${{ secrets.LLAVE_CLAVE }}
+        run: |
+          if [ -n "$LLAVE_BASE64" ] && [ -n "$LLAVE_CLAVE" ]; then
+            echo "$LLAVE_BASE64" | base64 -d > android/app/templo-llave.jks
+            printf 'storePassword=%s\nkeyPassword=%s\nkeyAlias=templo\nstoreFile=templo-llave.jks\n' "$LLAVE_CLAVE" "$LLAVE_CLAVE" > android/key.properties
+            echo "Firmando con la llave del templo."
+          else
+            echo "::warning::No hay llave de firma en los secretos: el APK se firma con una llave de prueba."
+          fi
+
+      - name: Ajustar Android (internet, nombre, icono, AdMob, firma)
+        env:
+          ADMOB_APP_ID: ${{ vars.ADMOB_APP_ID }}
+        run: python3 ci/preparar_android.py
+
+      - name: Paquetes e icono
+        run: |
+          flutter pub get
+          dart run flutter_launcher_icons
+
+      - name: Construir APK
+        run: flutter build apk --release --build-number=${{ github.run_number }}
+
+      - name: Preparar archivo
+        id: info
+        run: |
+          mkdir -p salida
+          cp build/app/outputs/flutter-apk/app-release.apk salida/TempleOfStrength.apk
+          VERSION=$(grep '^version:' pubspec.yaml | sed -E 's/version:[[:space:]]*([^+]+).*/\1/')
+          BYTES=$(stat -c %s salida/TempleOfStrength.apk)
+          MB=$(python3 -c "print(round($BYTES/1048576))")
+          SHA=$(sha256sum salida/TempleOfStrength.apk | cut -d' ' -f1)
+          FIRMADO=false; [ -f android/key.properties ] && FIRMADO=true
+          printf '{"version":"%s","build":%s,"tamano":"%s MB","sha256":"%s","firmado":%s}\n' "$VERSION" "${{ github.run_number }}" "$MB" "$SHA" "$FIRMADO" > salida/apk-info.json
+          cat salida/apk-info.json
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: TempleOfStrength-${{ steps.info.outputs.version }}-${{ github.run_number }}
+          path: salida/
+
+      - name: Publicar Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="v${{ steps.info.outputs.version }}-${{ github.run_number }}"
+          gh release create "$TAG" salida/TempleOfStrength.apk salida/apk-info.json \
+            --title "Temple of Strength ${{ steps.info.outputs.version }} (compilación ${{ github.run_number }})" \
+            --notes "APK construido automáticamente desde ${{ github.sha }}." --latest

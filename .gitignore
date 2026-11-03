@@ -1,0 +1,19 @@
+# Las carpetas de cada plataforma las genera GitHub al construir.
+/android/
+/ios/
+/web/
+/linux/
+/macos/
+/windows/
+/test/
+/build/
+.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+.packages
+*.iml
+.idea/
+# Nunca subir llaves de firma
+*.jks
+*.keystore
+key.properties
