@@ -19,7 +19,7 @@ import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:flutter/foundation.dart' show kIsWeb, kDebugMode, defaultTargetPlatform, TargetPlatform, debugPrint, ChangeNotifier;
+import 'package:flutter/foundation.dart' show kIsWeb, kDebugMode, defaultTargetPlatform, TargetPlatform, debugPrint, ChangeNotifier, compute;
 import 'package:flutter/rendering.dart' show RenderRepaintBoundary;
 import 'dart:typed_data' show Uint8List, Float64List, ByteData;
 
@@ -74,6 +74,20 @@ import 'package:audioplayers/audioplayers.dart'
         ReleaseMode,
         PlayerMode,
         AssetSource;
+import 'package:flutter_local_notifications/flutter_local_notifications.dart'
+    show
+        FlutterLocalNotificationsPlugin,
+        InitializationSettings,
+        AndroidInitializationSettings,
+        DarwinInitializationSettings,
+        AndroidFlutterLocalNotificationsPlugin,
+        NotificationDetails,
+        AndroidNotificationDetails,
+        Importance,
+        Priority,
+        AndroidScheduleMode;
+import 'package:timezone/timezone.dart' as tz;
+import 'package:crypto/crypto.dart' show sha256;
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -2028,6 +2042,11 @@ class _MainShellState extends State<MainShell> {
     SonidosTemplo.instancia.cargar();
     Moderacion.instancia.comprobar();
     PreferenciasPase.instancia.cargar();
+    // Recordatorios del teléfono, tu clan y las cifras para los retos.
+    Recordatorios.instancia.cargar(widget.perfil.nombre);
+    ActividadRepo.instancia.reiniciar();
+    ClanesRepo.instancia.cargarMio();
+    Future<void>.delayed(const Duration(seconds: 4), () => RetosRepo.instancia.aportar(widget.perfil.nombre));
     WidgetsBinding.instance.addPostFrameCallback((_) => _primeraVez());
   }
 
@@ -3559,7 +3578,7 @@ class ConfigSupabase {
   static const String dominioInterno = 'templeofstrength.internal';
 
   /// Versión de los términos. Si cambian, se sube aquí y en la función.
-  static const String versionTerminos = '2026-12';
+  static const String versionTerminos = '2027-01';
 
   /// Quién responde por la app y por los datos (Ley 1581 de 2012). CAMBIA
   /// ESTO por el nombre o la razón social y el documento antes de publicar.
@@ -3806,6 +3825,7 @@ class SesionTemplo {
     required DateTime nacimiento,
     required String genero,
     required bool autorizacionTutor,
+    Map<String, dynamic>? captcha,
   }) async {
     final String fecha = '${nacimiento.year.toString().padLeft(4, '0')}-'
         '${nacimiento.month.toString().padLeft(2, '0')}-'
@@ -3821,6 +3841,7 @@ class SesionTemplo {
           'genero': genero,
           'terminos_version': ConfigSupabase.versionTerminos,
           'tutor': autorizacionTutor,
+          if (captcha != null) 'captcha': captcha,
         },
       );
       final Object? d = r.data;
@@ -4411,6 +4432,10 @@ class _RegistroScreenState extends State<RegistroScreen> {
       return;
     }
 
+    // El reto del templo (captcha): lo comprueba el servidor al crear la cuenta.
+    final Map<String, dynamic>? captcha = await resolverRetoTemplo(context);
+    if (captcha == null || !mounted) return;
+
     setState(() => _cargando = true);
     try {
       final String usuario = _usuario.text.trim();
@@ -4420,6 +4445,7 @@ class _RegistroScreenState extends State<RegistroScreen> {
         nacimiento: _nacimiento!,
         genero: _genero!,
         autorizacionTutor: _tutor,
+        captcha: captcha,
       );
       if (!mounted) return;
       HapticFeedback.heavyImpact();
@@ -5291,7 +5317,7 @@ const List<_ApartadoTerminos> _terminosTemplo = <_ApartadoTerminos>[
     'Nuestras normas de seguridad infantil están publicadas en ssguerrerotenjiro-cyber.github.io/seguridad-infantil.html.',
   ]),
   _ApartadoTerminos('Moderación, sanciones y apelaciones', TempleGlyph.campana, <String>[
-    'Puedes reportar cualquier publicación, comentario, perfil o mensaje. Lo reportado deja de mostrarse para ti al '
+    'Puedes reportar cualquier publicación, comentario, perfil, mensaje o clan. Lo reportado deja de mostrarse para ti al '
         'instante, y para todos si es grave o lo reportan varias personas. Procuramos revisar los reportes en menos '
         'de 24 horas.',
     'Según la gravedad, podemos: avisarte, retirar el contenido, limitar funciones (publicar, comentar, escribir), '
@@ -5300,6 +5326,19 @@ const List<_ApartadoTerminos> _terminosTemplo = <_ApartadoTerminos>[
     'También puedes bloquear a cualquiera: dejará de ver tu perfil, de seguirte y de poder escribirte.',
     'Si crees que una sanción fue un error, escríbenos a ${ConfigSupabase.correoSoporte} explicando el caso. '
         'Revisaremos la decisión y te responderemos.',
+  ]),
+  _ApartadoTerminos('Clanes, retos y recordatorios', TempleGlyph.bandera, <String>[
+    'Un clan es un grupo de hasta 50 personas con nombre, emblema y muro propio. Quien lo funda lo lidera: puede '
+        'nombrar oficiales, aceptar o rechazar solicitudes y expulsar miembros. Solo puedes estar en un clan a la vez.',
+    'Los clanes también están separados por edad: los de menores de 18 años y los de adultos no se ven entre sí. Al '
+        'cumplir 18 años sales del clan de menores.',
+    'El nombre, el lema, la descripción y el muro de un clan siguen el reglamento del Clan. Quien visite un clan '
+        'puede ver su muro, sus miembros y sus cifras de la semana. Un clan se puede reportar y, si incumple, se elimina.',
+    'Para las tablas de los clanes y los retos se comparten las cifras de cada sesión (volumen, series, minutos y '
+        'experiencia), nunca el detalle de tus ejercicios. Las calcula tu teléfono: alterarlas incumple estos términos.',
+    'Los retos semanales del templo y del clan dan mon al cumplirse. Ese mon sigue las reglas del mon: no es dinero.',
+    'Los recordatorios de entrenar, tomar agua y cuidar tu llama los programa tu propio teléfono; no los enviamos desde '
+        'un servidor. Los activas, cambias o apagas cuando quieras en el menú, en «Recordatorios».',
   ]),
   _ApartadoTerminos('Tu contenido', TempleGlyph.chispa, <String>[
     'Lo que publicas sigue siendo tuyo. Para poder mostrarlo en la app nos das un permiso gratuito, mundial y no '
@@ -5384,7 +5423,8 @@ const List<_ApartadoTerminos> _terminosTemplo = <_ApartadoTerminos>[
         'Tratamos tus datos conforme a la Ley 1581 de 2012 de Colombia y sus decretos reglamentarios.',
     'Qué datos tratamos: tu cuenta (usuario, fecha de nacimiento, género), tu perfil público, tus entrenamientos, '
         'medidas, fotos de progreso, tu meta, tus conversaciones con Tenshi y sus recuerdos, tus publicaciones, '
-        'comentarios, mensajes, seguidores, reportes, tu Pase y datos técnicos de uso.',
+        'comentarios, mensajes, seguidores, tu clan, las cifras de tus sesiones para los retos, reportes, tu Pase y '
+        'datos técnicos de uso.',
     'Para qué: que la app funcione, guardar tu progreso en la nube, personalizar rutinas y a Tenshi, mantener el '
         'Clan seguro, gestionar el Pase, atender tus solicitudes y mejorar el servicio. No vendemos tus datos ni los '
         'usamos para publicidad de terceros.',
@@ -5407,6 +5447,8 @@ const List<_ApartadoTerminos> _terminosTemplo = <_ApartadoTerminos>[
     'Cómo ejercerlos: escribe a ${ConfigSupabase.correoSoporte} desde la app o indicando tu @usuario. Respondemos '
         'las consultas en un máximo de 10 días hábiles y los reclamos en un máximo de 15 días hábiles, prorrogables '
         'como permite la ley.',
+    'Al crear la cuenta resuelves un reto visual (captcha). Para frenar las cuentas falsas guardamos durante dos días '
+        'una huella cifrada de la conexión desde la que se creó (no la dirección IP en sí) y después la borramos.',
     'Seguridad: protegemos tus datos con medidas técnicas razonables (acceso solo con tu sesión, almacenes privados, '
         'reglas en el servidor). Ningún sistema es infalible: si ocurre un incidente que te afecte, te avisaremos.',
   ]),
@@ -5547,7 +5589,7 @@ class _TerminosScreenState extends State<TerminosScreen> {
                       ],
                       const SizedBox(height: 6),
                       const Text(
-                        'Última actualización: 30 de octubre de 2026.',
+                        'Última actualización: 3 de noviembre de 2026.',
                         textAlign: TextAlign.center,
                         style: TextStyle(fontSize: 11.5, color: TempleColors.textoTenue),
                       ),
@@ -9225,6 +9267,10 @@ class _SesionScreenState extends State<SesionScreen> {
     final int mon = MonedaTemplo.instancia
         .recompensarSesion(widget.usuario, resumen, nov);
     AlmacenAnuncios.instancia.registrarSesion(widget.usuario, mon);
+    // Sus cifras van a los retos y a la tabla del clan; los recordatorios de
+    // hoy se recalculan (ya entrenaste).
+    unawaited(RetosRepo.instancia.aportar(widget.usuario, forzar: true));
+    unawaited(Recordatorios.instancia.reprogramar());
     // La sesión terminada se guarda ya en el teléfono y en la nube; la racha,
     // la llama y el nivel nuevos pasan al perfil público al subir.
     NubeTemplo.instancia.marcarCambio();
@@ -10256,6 +10302,8 @@ class ResumenSesionScreen extends StatelessWidget {
 
               TarjetaOfrendaDoble(usuario: s.usuario),
 
+              TarjetaCompartirSesion(resumen: resumen),
+
               const EtiquetaSeccion('Experiencia ganada'),
               TempleCard(
                 child: Column(
@@ -10610,6 +10658,19 @@ class _DojoScreenState extends State<DojoScreen>
                   ],
                 ),
               ),
+            ),
+            const SizedBox(height: TempleSpace.l),
+          ],
+
+          // La primera vez: ¿te recuerdo entrenar y tomar agua? (sección 51).
+          if (TarjetaRecordatoriosDojo.tocaMostrar()) ...<Widget>[
+            Aparece(
+              controlador: _entrada,
+              desde: 0.14,
+              hasta: 0.62,
+              child: TarjetaRecordatoriosDojo(onCambio: () {
+                if (mounted) setState(() {});
+              }),
             ),
             const SizedBox(height: TempleSpace.l),
           ],
@@ -11480,6 +11541,10 @@ class _CierreDelDia extends StatelessWidget {
                   a.guardarRegistro(
                       usuario, r.copyWith(vasosAgua: r.vasosAgua + 1));
                   HapticFeedback.selectionClick();
+                  // Al llegar a la meta del día se callan los avisos de agua.
+                  if (r.vasosAgua + 1 == Recordatorios.metaVasos) {
+                    unawaited(Recordatorios.instancia.reprogramar());
+                  }
                   onCambio();
                 },
               ),
@@ -35096,6 +35161,8 @@ class ClanPublicacion {
     required this.creadoEn,
     required this.oculta,
     required this.yoRespeto,
+    this.adjunto,
+    this.clanId,
   });
 
   final String id;
@@ -35108,6 +35175,12 @@ class ClanPublicacion {
   final DateTime creadoEn;
   final bool oculta;
   bool yoRespeto;
+
+  /// Récord, sesión o rutina que acompaña a la publicación (sección 55).
+  final Map<String, dynamic>? adjunto;
+
+  /// Si es del muro de un clan.
+  final String? clanId;
 
   bool get esMia => autor.id == SesionTemplo.instancia.uid;
 
@@ -35135,6 +35208,8 @@ class ClanPublicacion {
       creadoEn: _fechaClan(m['creado_en']),
       oculta: m['oculta'] == true,
       yoRespeto: m['yo_respeto'] == true,
+      adjunto: m['adjunto'] is Map ? Map<String, dynamic>.from(m['adjunto'] as Map) : null,
+      clanId: m['clan_id']?.toString(),
     );
   }
 }
@@ -35375,6 +35450,7 @@ class ClanRepo {
     String? deAutor,
     String? etiqueta,
     String? soloId,
+    String? deClan,
     int limite = 15,
   }) async {
     final Object? r = await supa.rpc('publicaciones_lista', params: <String, dynamic>{
@@ -35384,6 +35460,7 @@ class ClanRepo {
       'de_autor': deAutor,
       'filtro_etiqueta': etiqueta,
       'solo_id': soloId,
+      if (deClan != null) 'de_clan': deClan,
     });
     final List<ClanPublicacion> lista =
         _filas(r).map(ClanPublicacion.desdeMapa).toList();
@@ -35403,12 +35480,16 @@ class ClanRepo {
     required String id,
     required String texto,
     required List<ClanMedio> medios,
+    Map<String, dynamic>? adjunto,
+    String? clanId,
   }) async {
     await supa.from('publicaciones').insert(<String, dynamic>{
       'id': id,
       'autor': _yo,
       'texto': texto.trim(),
       'medios': medios.map((ClanMedio m) => m.aMapa()).toList(),
+      if (adjunto != null) 'adjunto': adjunto,
+      if (clanId != null) 'clan_id': clanId,
     });
   }
 
@@ -36233,10 +36314,14 @@ class _ClanScreenState extends State<ClanScreen> {
   }
 
   Future<void> _publicar() async {
+    final MiClanInfo? mio = ClanesRepo.instancia.mio;
+    final bool alMuro = _pestana == 2 && mio != null && mio.activo;
     final bool? hecho = await Navigator.of(context).push<bool>(
-      MaterialPageRoute<bool>(builder: (_) => const PublicarScreen()),
+      MaterialPageRoute<bool>(
+        builder: (_) => alMuro ? PublicarScreen(clanId: mio.id, clanNombre: mio.nombre) : const PublicarScreen(),
+      ),
     );
-    if (hecho == true) {
+    if (hecho == true && !alMuro) {
       _paraTi.currentState?.recargar();
       _siguiendo.currentState?.recargar();
     }
@@ -36272,16 +36357,21 @@ class _ClanScreenState extends State<ClanScreen> {
                                   color: TempleColors.blancoLuna)),
                           SizedBox(height: 2),
                           Text('Aquí solo se habla de progreso',
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
                               style: TextStyle(fontSize: 12.5, color: TempleColors.textoSuave)),
                         ],
                       ),
                     ),
+                    const BotonActividad(),
                     IconButton(
+                      visualDensity: VisualDensity.compact,
                       tooltip: 'Buscar',
                       onPressed: () => _abrir(const BuscarClanScreen()),
                       icon: const Icon(Icons.search_rounded, color: TempleColors.texto),
                     ),
                     IconButton(
+                      visualDensity: VisualDensity.compact,
                       tooltip: 'Mensajes',
                       onPressed: () => _abrir(const BandejaScreen()),
                       icon: Badge(
@@ -36293,6 +36383,7 @@ class _ClanScreenState extends State<ClanScreen> {
                       ),
                     ),
                     IconButton(
+                      visualDensity: VisualDensity.compact,
                       tooltip: 'Mi perfil del Clan',
                       onPressed: yo == null ? null : () => _abrir(PerfilClanScreen(id: yo)),
                       icon: const Icon(Icons.person_outline_rounded, color: TempleColors.texto),
@@ -36306,7 +36397,7 @@ class _ClanScreenState extends State<ClanScreen> {
                 padding: const EdgeInsets.symmetric(horizontal: TempleSpace.borde),
                 child: _PestanasClan(
                   indice: _pestana,
-                  opciones: const <String>['Para ti', 'Siguiendo'],
+                  opciones: const <String>['Para ti', 'Siguiendo', 'Mi clan', 'Retos'],
                   onCambio: (int i) {
                     HapticFeedback.selectionClick();
                     setState(() => _pestana = i);
@@ -36342,15 +36433,24 @@ class _ClanScreenState extends State<ClanScreen> {
                         onAccion: () => _abrir(const BuscarClanScreen()),
                       ),
                     ),
+                    const PestanaMiClan(),
+                    PestanaRetos(onIrAClan: () => setState(() => _pestana = 2)),
                   ],
                 ),
               ),
             ],
           ),
-          Positioned(
-            right: TempleSpace.borde,
-            bottom: kAlturaNavBar + MediaQuery.paddingOf(context).bottom + 18,
-            child: _BotonPublicar(onTap: _publicar),
+          ListenableBuilder(
+            listenable: ClanesRepo.instancia,
+            builder: (BuildContext context, _) {
+              final bool ver = _pestana < 2 || (_pestana == 2 && (ClanesRepo.instancia.mio?.activo ?? false));
+              if (!ver) return const SizedBox.shrink();
+              return Positioned(
+                right: TempleSpace.borde,
+                bottom: kAlturaNavBar + MediaQuery.paddingOf(context).bottom + 18,
+                child: _BotonPublicar(onTap: _publicar),
+              );
+            },
           ),
         ],
       ),
@@ -36398,8 +36498,11 @@ class _PestanasClan extends StatelessWidget {
                   ),
                   child: Text(
                     opciones[i],
+                    maxLines: 1,
+                    overflow: TextOverflow.fade,
+                    softWrap: false,
                     style: TextStyle(
-                      fontSize: 13,
+                      fontSize: opciones.length > 3 ? 12 : 13,
                       fontWeight: i == indice ? FontWeight.w600 : FontWeight.w400,
                       color: i == indice ? TempleColors.blancoLuna : TempleColors.textoSuave,
                     ),
@@ -36461,6 +36564,8 @@ class FeedClan extends StatefulWidget {
     this.modo = 'para_ti',
     this.etiqueta,
     this.deAutor,
+    this.clanId,
+    this.alRecargar,
     required this.vacio,
     this.cabecera,
     this.relleno = const EdgeInsets.fromLTRB(TempleSpace.borde, 8, TempleSpace.borde, 0),
@@ -36469,6 +36574,12 @@ class FeedClan extends StatefulWidget {
   final String modo;
   final String? etiqueta;
   final String? deAutor;
+
+  /// El muro de un clan.
+  final String? clanId;
+
+  /// Al tirar para recargar (la cabecera también se refresca).
+  final Future<void> Function()? alRecargar;
   final Widget vacio;
   final Widget? cabecera;
   final EdgeInsets relleno;
@@ -36505,7 +36616,8 @@ class _FeedClanState extends State<FeedClan> {
       _fin = false;
       _error = null;
     });
-    await _mas();
+    final Future<void> Function()? extra = widget.alRecargar;
+    await Future.wait(<Future<void>>[_mas(), if (extra != null) extra()]);
   }
 
   Future<void> _mas() async {
@@ -36516,6 +36628,7 @@ class _FeedClanState extends State<FeedClan> {
         modo: widget.modo,
         etiqueta: widget.etiqueta,
         deAutor: widget.deAutor,
+        deClan: widget.clanId,
         antes: _lista.isEmpty ? null : _lista.last.creadoEn,
       );
       if (!mounted) return;
@@ -36822,6 +36935,13 @@ class _TarjetaPublicacionState extends State<TarjetaPublicacion> {
                   ),
                 ),
               ),
+            ),
+
+          // -- Récord, sesión o rutina (sección 55) ---------------------------
+          if (p.adjunto != null)
+            Padding(
+              padding: EdgeInsets.fromLTRB(12, p.texto.trim().isEmpty ? 0 : 2, 12, p.medios.isEmpty ? 12 : 10),
+              child: TarjetaAdjunto(adjunto: p.adjunto!),
             ),
 
           // -- Medios --------------------------------------------------------
@@ -37224,7 +37344,15 @@ class _ArchivoElegido {
 }
 
 class PublicarScreen extends StatefulWidget {
-  const PublicarScreen({super.key});
+  const PublicarScreen({super.key, this.adjunto, this.clanId, this.clanNombre, this.textoInicial});
+
+  /// Récord, sesión o rutina que se comparte (sección 55).
+  final Map<String, dynamic>? adjunto;
+
+  /// Publicar en el muro de este clan.
+  final String? clanId;
+  final String? clanNombre;
+  final String? textoInicial;
 
   @override
   State<PublicarScreen> createState() => _PublicarScreenState();
@@ -37243,11 +37371,18 @@ class _PublicarScreenState extends State<PublicarScreen> {
 
   bool get _tieneVideo => _archivos.any((_ArchivoElegido a) => a.video);
   bool get _puedePublicar =>
-      !_publicando && (_texto.text.trim().isNotEmpty || _archivos.isNotEmpty);
+      !_publicando && (_texto.text.trim().isNotEmpty || _archivos.isNotEmpty || widget.adjunto != null);
+
+  /// En el muro del clan (si tienes uno) o en todo el Clan.
+  late bool _enMuro = widget.clanId != null;
+
+  String? get _clanDestino => widget.clanId ?? ClanesRepo.instancia.mio?.id;
+  String? get _nombreClanDestino => widget.clanNombre ?? ClanesRepo.instancia.mio?.nombre;
 
   @override
   void initState() {
     super.initState();
+    if ((widget.textoInicial ?? '').isNotEmpty) _texto.text = widget.textoInicial!;
     _texto.addListener(() => setState(() {}));
   }
 
@@ -37394,7 +37529,15 @@ class _PublicarScreenState extends State<PublicarScreen> {
         ));
         if (mounted) setState(() => _subidos = i + 1);
       }
-      await ClanRepo.instancia.publicar(id: id, texto: _texto.text, medios: subidos);
+      final String? clan = _enMuro ? _clanDestino : null;
+      await ClanRepo.instancia.publicar(
+        id: id,
+        texto: _texto.text,
+        medios: subidos,
+        adjunto: widget.adjunto,
+        clanId: clan,
+      );
+      if (clan != null) ClanesRepo.instancia.muro.value++;
       if (!mounted) return;
       HapticFeedback.heavyImpact();
       Navigator.of(context).pop(true);
@@ -37443,9 +37586,11 @@ class _PublicarScreenState extends State<PublicarScreen> {
                         onPressed: _publicando ? null : () => Navigator.of(context).maybePop(),
                         icon: const Icon(Icons.close_rounded, color: TempleColors.textoSuave),
                       ),
-                      const Expanded(
-                        child: Text('Nueva publicación',
-                            style: TextStyle(
+                      Expanded(
+                        child: Text(_enMuro && _nombreClanDestino != null ? 'Muro de $_nombreClanDestino' : 'Nueva publicación',
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
                                 fontSize: 17,
                                 fontWeight: FontWeight.w600,
                                 color: TempleColors.blancoLuna)),
@@ -37532,6 +37677,34 @@ class _PublicarScreenState extends State<PublicarScreen> {
                           ),
                         ],
                       ),
+                      if (widget.adjunto != null) ...<Widget>[
+                        const SizedBox(height: 12),
+                        TarjetaAdjunto(adjunto: widget.adjunto!),
+                      ],
+                      if (_clanDestino != null && (widget.clanId == null || ClanesRepo.instancia.mio?.activo == true)) ...<Widget>[
+                        const SizedBox(height: 14),
+                        Wrap(
+                          spacing: 8,
+                          runSpacing: 8,
+                          crossAxisAlignment: WrapCrossAlignment.center,
+                          children: <Widget>[
+                            const Text('Dónde:', style: TextStyle(fontSize: 12.5, color: TempleColors.textoSuave)),
+                            for (final bool muro in const <bool>[false, true])
+                              ChoiceChip(
+                                label: Text(muro ? 'Muro de ${_nombreClanDestino ?? 'mi clan'}' : 'Todo el Clan',
+                                    style: const TextStyle(fontSize: 12)),
+                                selected: _enMuro == muro,
+                                showCheckmark: false,
+                                onSelected: _publicando ? null : (_) => setState(() => _enMuro = muro),
+                                selectedColor: TempleColors.violeta.withValues(alpha: 0.28),
+                                backgroundColor: TempleColors.superficie,
+                                side: BorderSide(color: _enMuro == muro ? TempleColors.violeta : TempleColors.borde),
+                                labelStyle: TextStyle(
+                                    color: _enMuro == muro ? TempleColors.blancoLuna : TempleColors.textoSuave),
+                              ),
+                          ],
+                        ),
+                      ],
                       if (_archivos.isNotEmpty) ...<Widget>[
                         const SizedBox(height: 14),
                         SizedBox(
@@ -40182,6 +40355,8 @@ class _HojaReporteState extends State<_HojaReporte> {
         return 'este comentario';
       case 'mensaje':
         return 'este mensaje';
+      case 'clan':
+        return 'este clan';
       default:
         return 'a @${widget.persona.usuario}';
     }
@@ -40714,6 +40889,7 @@ Future<void> mostrarMenuTemplo(
     OpcionHoja(Icons.workspace_premium_outlined,
         PaseTemplo.instancia.activo ? 'Mi Pase del Templo' : 'El Pase del Templo', () => abrirPase(context)),
     OpcionHoja(Icons.cloud_outlined, 'Mi progreso en la nube', () => mostrarEstadoNube(context)),
+    OpcionHoja(Icons.notifications_none_rounded, 'Recordatorios', () => abrirRecordatorios(context)),
     OpcionHoja(Icons.music_note_outlined, 'Sonidos del templo', () => abrirAjustesSonido(context)),
     if (Moderacion.instancia.soyModerador)
       OpcionHoja(Icons.shield_outlined, 'Moderación', () {
@@ -61241,6 +61417,7 @@ String _nombreTipoModeracion(String t) => switch (t) {
       'comentario' => 'Comentario',
       'mensaje' => 'Mensaje privado',
       'perfil' => 'Perfil',
+      'clan' => 'Clan (grupo)',
       'tenshi' => 'Respuesta de Tenshi',
       _ => t,
     };
@@ -61642,7 +61819,7 @@ class _TarjetaModeracion extends StatelessWidget {
                 children: <Widget>[
                   if (e.tipo == 'publicacion' || e.tipo == 'comentario')
                     e.oculta ? _boton('Mostrar de nuevo', 'restaurar') : _boton('Ocultar', 'ocultar'),
-                  if (e.existe && (e.tipo == 'publicacion' || e.tipo == 'comentario' || e.tipo == 'mensaje'))
+                  if (e.existe && (e.tipo == 'publicacion' || e.tipo == 'comentario' || e.tipo == 'mensaje' || e.tipo == 'clan'))
                     _boton('Borrar', 'borrar', peligro: true),
                   if (!e.esTenshi && e.autorId != null)
                     susp != null
@@ -61652,7 +61829,7 @@ class _TarjetaModeracion extends StatelessWidget {
                             style: TextButton.styleFrom(foregroundColor: TempleColors.error),
                             child: const Text('Suspender'),
                           ),
-                  if (e.esTenshi || e.tipo == 'perfil' || e.tipo == 'mensaje') _boton('Revisado', 'revisar'),
+                  if (e.esTenshi || e.tipo == 'perfil' || e.tipo == 'mensaje' || e.tipo == 'clan') _boton('Revisado', 'revisar'),
                   _boton('Descartar', 'descartar'),
                 ],
               ),
@@ -61734,6 +61911,4311 @@ class _MiniaturaModState extends State<_MiniaturaMod> {
                         : const SizedBox(
                             width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2, color: TempleColors.violetaClaro)),
                   ),
+      ),
+    );
+  }
+}
+
+// ===========================================================================
+// 51. RECORDATORIOS — entrenar, tomar agua y cuidar la llama
+//
+// Los programa el propio teléfono (notificaciones locales): no hace falta un
+// servidor. Cada vez que se abre la app o se cierra una sesión se vuelven a
+// calcular los de los próximos días, así el recordatorio de hoy desaparece
+// si ya entrenaste y el del agua se calla cuando llegas a tus vasos.
+//
+//   51.1  Ajustes
+//   51.2  Motor
+//   51.3  Hoja de ajustes
+//   51.4  Tarjeta del Dojo (la primera vez)
+// ===========================================================================
+
+// ---------------------------------------------------------------------------
+// 51.1 AJUSTES
+// ---------------------------------------------------------------------------
+
+class AjustesRecordatorios {
+  AjustesRecordatorios();
+
+  bool entreno = false;
+  Set<int> dias = <int>{1, 3, 5};
+  int horaEntreno = 18;
+  int minutoEntreno = 0;
+
+  bool agua = false;
+  int aguaDesde = 9;
+  int aguaHasta = 21;
+  int aguaCada = 2;
+
+  bool llama = false;
+  int horaLlama = 19;
+
+  bool regreso = true;
+
+  /// Ya respondió a la tarjeta del Dojo (activar o «ahora no»).
+  bool configurado = false;
+
+  bool get algunoActivo => entreno || agua || llama || regreso;
+
+  Map<String, dynamic> aMapa() => <String, dynamic>{
+        'entreno': entreno,
+        'dias': dias.toList()..sort(),
+        'hora_entreno': horaEntreno,
+        'minuto_entreno': minutoEntreno,
+        'agua': agua,
+        'agua_desde': aguaDesde,
+        'agua_hasta': aguaHasta,
+        'agua_cada': aguaCada,
+        'llama': llama,
+        'hora_llama': horaLlama,
+        'regreso': regreso,
+        'configurado': configurado,
+      };
+
+  factory AjustesRecordatorios.desde(Map<dynamic, dynamic> m) {
+    int n(Object? v, int def, int min, int max) => v is num ? v.toInt().clamp(min, max) : def;
+    final AjustesRecordatorios a = AjustesRecordatorios()
+      ..entreno = m['entreno'] == true
+      ..horaEntreno = n(m['hora_entreno'], 18, 0, 23)
+      ..minutoEntreno = n(m['minuto_entreno'], 0, 0, 59)
+      ..agua = m['agua'] == true
+      ..aguaDesde = n(m['agua_desde'], 9, 5, 22)
+      ..aguaHasta = n(m['agua_hasta'], 21, 6, 23)
+      ..aguaCada = n(m['agua_cada'], 2, 1, 4)
+      ..llama = m['llama'] == true
+      ..horaLlama = n(m['hora_llama'], 19, 6, 22)
+      ..regreso = m['regreso'] != false
+      ..configurado = m['configurado'] == true;
+    final Object? d = m['dias'];
+    if (d is List) {
+      a.dias = <int>{
+        for (final Object? x in d)
+          if (x is num && x >= 1 && x <= 7) x.toInt(),
+      };
+    }
+    if (a.aguaHasta <= a.aguaDesde) a.aguaHasta = (a.aguaDesde + 1).clamp(6, 23);
+    return a;
+  }
+
+  /// Días sugeridos según lo que dijo en El Ascenso.
+  static Set<int> diasSugeridos(String usuario) {
+    switch (AlmacenTemplo.instancia.de(usuario).ascenso['dias']) {
+      case '2':
+        return <int>{2, 5};
+      case '5':
+        return <int>{1, 2, 3, 4, 5};
+      case '6':
+        return <int>{1, 2, 3, 4, 5, 6};
+      default:
+        return <int>{1, 3, 5};
+    }
+  }
+}
+
+String _horaTexto(int h, [int m = 0]) =>
+    '${h.toString().padLeft(2, '0')}:${m.toString().padLeft(2, '0')}';
+
+const List<String> _letrasDias = <String>['L', 'M', 'X', 'J', 'V', 'S', 'D'];
+
+// ---------------------------------------------------------------------------
+// 51.2 MOTOR
+// ---------------------------------------------------------------------------
+
+class Recordatorios extends ChangeNotifier {
+  Recordatorios._();
+  static final Recordatorios instancia = Recordatorios._();
+
+  /// Solo en la app instalada (Android). En Chrome o Windows no hay
+  /// notificaciones programadas.
+  static bool get soportado =>
+      !kIsWeb && (defaultTargetPlatform == TargetPlatform.android || defaultTargetPlatform == TargetPlatform.iOS);
+
+  /// Vasos de agua del día con los que se callan los avisos de hoy.
+  static const int metaVasos = 8;
+
+  final FlutterLocalNotificationsPlugin _plugin = FlutterLocalNotificationsPlugin();
+  bool _listo = false;
+  String? _usuario;
+  AjustesRecordatorios ajustes = AjustesRecordatorios();
+
+  String _clave(String u) => 'recordatorios_v1_$u';
+
+  Future<void> cargar(String usuario) async {
+    _usuario = usuario;
+    try {
+      final SharedPreferences p = await SharedPreferences.getInstance();
+      final String? t = p.getString(_clave(usuario));
+      ajustes = t == null
+          ? (AjustesRecordatorios()..dias = AjustesRecordatorios.diasSugeridos(usuario))
+          : AjustesRecordatorios.desde(convert.jsonDecode(t) as Map<dynamic, dynamic>);
+    } catch (_) {
+      ajustes = AjustesRecordatorios()..dias = AjustesRecordatorios.diasSugeridos(usuario);
+    }
+    notifyListeners();
+    await reprogramar();
+  }
+
+  Future<void> guardar() async {
+    final String? u = _usuario;
+    if (u == null) return;
+    notifyListeners();
+    try {
+      final SharedPreferences p = await SharedPreferences.getInstance();
+      await p.setString(_clave(u), convert.jsonEncode(ajustes.aMapa()));
+    } catch (_) {}
+    await reprogramar();
+  }
+
+  Future<bool> _iniciar() async {
+    if (!soportado) return false;
+    if (_listo) return true;
+    try {
+      await _plugin.initialize(
+        settings: const InitializationSettings(
+          android: AndroidInitializationSettings('ic_notificacion'),
+          iOS: DarwinInitializationSettings(
+            requestAlertPermission: false,
+            requestBadgePermission: false,
+            requestSoundPermission: false,
+          ),
+        ),
+      );
+      _listo = true;
+    } catch (e) {
+      debugPrint('Recordatorios: no se iniciaron: $e');
+    }
+    return _listo;
+  }
+
+  /// Pide el permiso de notificaciones (Android 13 o más). Devuelve false si
+  /// la persona lo negó.
+  Future<bool> pedirPermiso() async {
+    if (!await _iniciar()) return false;
+    try {
+      final AndroidFlutterLocalNotificationsPlugin? a =
+          _plugin.resolvePlatformSpecificImplementation<AndroidFlutterLocalNotificationsPlugin>();
+      if (a != null) return (await a.requestNotificationsPermission()) ?? true;
+    } catch (e) {
+      debugPrint('Recordatorios: permiso: $e');
+    }
+    return true;
+  }
+
+  static const List<String> _frasesEntreno = <String>[
+    'El dojo está abierto. Una sesión hoy te acerca a tu próximo rango.',
+    'Tu cuerpo recuerda lo que entrenas. Hoy toca volver al dojo.',
+    'Diez minutos cuentan más que cero. Empieza y el resto llega solo.',
+    'Tenshi preparó tu entrenamiento de hoy. Te espera.',
+    'La disciplina es elegir lo que quieres sobre lo que te apetece. Al dojo.',
+    'Tu llama crece con cada sesión. Aliméntala hoy.',
+  ];
+
+  static const List<String> _frasesAgua = <String>[
+    'Un vaso de agua ahora. Tus músculos son agua en un 75 %.',
+    'Pausa del templo: bebe un vaso de agua y sigue.',
+    'Hidratarte también es entrenar. Un vaso, ahora.',
+    'El agua refleja la luna. Bebe un vaso y súmalo en el Dojo.',
+  ];
+
+  NotificationDetails _detalles(String canal, String nombre, String descripcion) => NotificationDetails(
+        android: AndroidNotificationDetails(
+          canal,
+          nombre,
+          channelDescription: descripcion,
+          importance: Importance.defaultImportance,
+          priority: Priority.defaultPriority,
+          color: TempleColors.violeta,
+        ),
+      );
+
+  Future<void> _programar(
+    int id,
+    DateTime cuando, {
+    required String canal,
+    required String nombreCanal,
+    required String descripcion,
+    required String titulo,
+    required String cuerpo,
+  }) async {
+    try {
+      await _plugin.zonedSchedule(
+        id: id,
+        scheduledDate: tz.TZDateTime.from(cuando.toUtc(), tz.UTC),
+        notificationDetails: _detalles(canal, nombreCanal, descripcion),
+        androidScheduleMode: AndroidScheduleMode.inexactAllowWhileIdle,
+        title: titulo,
+        body: cuerpo,
+        payload: canal,
+      );
+    } catch (e) {
+      debugPrint('Recordatorios: no se programó $id: $e');
+    }
+  }
+
+  /// Vuelve a calcular todos los recordatorios. Es barato: se llama al abrir la
+  /// app, al cerrar una sesión y al cambiar los ajustes.
+  Future<void> reprogramar() async {
+    final String? u = _usuario;
+    if (u == null || !soportado) return;
+    if (!await _iniciar()) return;
+    try {
+      await _plugin.cancelAll();
+    } catch (_) {}
+    final AjustesRecordatorios a = ajustes;
+    final DateTime ahora = DateTime.now();
+    final DateTime hoy = DateTime(ahora.year, ahora.month, ahora.day);
+    final DatosUsuario d = AlmacenTemplo.instancia.de(u);
+    bool entrenoEl(DateTime dia) => d.completadas.any((Sesion s) {
+          final DateTime f = s.fin ?? s.inicio;
+          return f.year == dia.year && f.month == dia.month && f.day == dia.day;
+        });
+    final bool yaEntrenoHoy = entrenoEl(hoy);
+    final math.Random azar = math.Random(hoy.millisecondsSinceEpoch ~/ 86400000);
+
+    // Entrenar: los días elegidos, dos semanas hacia delante.
+    int id = 1;
+    if (a.entreno && a.dias.isNotEmpty) {
+      for (int i = 0; i < 14; i++) {
+        final DateTime dia = hoy.add(Duration(days: i));
+        if (!a.dias.contains(dia.weekday)) continue;
+        if (i == 0 && yaEntrenoHoy) continue;
+        final DateTime t = DateTime(dia.year, dia.month, dia.day, a.horaEntreno, a.minutoEntreno);
+        if (!t.isAfter(ahora)) continue;
+        await _programar(
+          id++,
+          t,
+          canal: 'entreno',
+          nombreCanal: 'Entrenar',
+          descripcion: 'Te recuerda los días que elegiste para entrenar.',
+          titulo: 'Hora de entrenar',
+          cuerpo: _frasesEntreno[azar.nextInt(_frasesEntreno.length)],
+        );
+      }
+    }
+
+    // Agua: cada pocas horas dentro de tu horario, una semana.
+    id = 100;
+    if (a.agua) {
+      final int vasosHoy = AlmacenTemplo.instancia.registroDe(u, hoy).vasosAgua;
+      for (int i = 0; i < 7 && id < 300; i++) {
+        if (i == 0 && vasosHoy >= metaVasos) continue;
+        final DateTime dia = hoy.add(Duration(days: i));
+        for (int h = a.aguaDesde; h <= a.aguaHasta && id < 300; h += a.aguaCada) {
+          final DateTime t = DateTime(dia.year, dia.month, dia.day, h);
+          if (!t.isAfter(ahora)) continue;
+          await _programar(
+            id++,
+            t,
+            canal: 'agua',
+            nombreCanal: 'Tomar agua',
+            descripcion: 'Te recuerda beber agua durante el día.',
+            titulo: 'Agua',
+            cuerpo: _frasesAgua[azar.nextInt(_frasesAgua.length)],
+          );
+        }
+      }
+    }
+
+    // La llama: solo si la semana está en peligro.
+    id = 300;
+    if (a.llama) {
+      final Racha r = MotorProgresion.instancia.racha(u);
+      final int faltan = r.faltan;
+      final int quedan = 8 - hoy.weekday;
+      if (faltan > 0 && faltan >= quedan - 1) {
+        for (int i = 0; i < quedan; i++) {
+          if (i == 0 && yaEntrenoHoy) continue;
+          final DateTime dia = hoy.add(Duration(days: i));
+          final DateTime t = DateTime(dia.year, dia.month, dia.day, a.horaLlama, 30);
+          if (!t.isAfter(ahora)) continue;
+          await _programar(
+            id++,
+            t,
+            canal: 'llama',
+            nombreCanal: 'Tu llama',
+            descripcion: 'Te avisa si tu semana de entrenamiento está en peligro.',
+            titulo: r.semanas > 0 ? 'Tu llama de ${r.semanas} semanas te necesita' : 'Tu semana está en juego',
+            cuerpo: faltan == 1
+                ? 'Te falta una sesión para cumplir la semana. Todavía estás a tiempo.'
+                : 'Te faltan $faltan sesiones para cumplir la semana. Hoy es buen día para una.',
+          );
+        }
+      }
+    }
+
+    // Si pasan días sin abrir la app.
+    id = 400;
+    if (a.regreso) {
+      for (final int dias in const <int>[3, 7]) {
+        final DateTime dia = hoy.add(Duration(days: dias));
+        await _programar(
+          id++,
+          DateTime(dia.year, dia.month, dia.day, 18, 15),
+          canal: 'regreso',
+          nombreCanal: 'El templo te espera',
+          descripcion: 'Un aviso suave si llevas días sin entrar.',
+          titulo: 'El templo te espera',
+          cuerpo: dias == 3
+              ? 'Hace tres días que no pasas por el dojo. Una sesión corta basta para volver.'
+              : 'Una semana sin entrenar. Tu progreso sigue aquí, esperándote.',
+        );
+      }
+    }
+  }
+
+  /// Un recordatorio de prueba dentro de unos segundos.
+  Future<bool> probar() async {
+    if (!await pedirPermiso()) return false;
+    await _programar(
+      999,
+      DateTime.now().add(const Duration(seconds: 8)),
+      canal: 'entreno',
+      nombreCanal: 'Entrenar',
+      descripcion: 'Te recuerda los días que elegiste para entrenar.',
+      titulo: 'Así se ven tus recordatorios',
+      cuerpo: 'Tenshi te avisará a la hora que elegiste. Puedes cambiarlo cuando quieras.',
+    );
+    return true;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// 51.3 HOJA DE AJUSTES
+// ---------------------------------------------------------------------------
+
+Future<void> abrirRecordatorios(BuildContext context) {
+  return showModalBottomSheet<void>(
+    context: context,
+    isScrollControlled: true,
+    backgroundColor: TempleColors.grafito,
+    shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(24))),
+    builder: (BuildContext ctx) => const _HojaRecordatorios(),
+  );
+}
+
+class _HojaRecordatorios extends StatefulWidget {
+  const _HojaRecordatorios();
+
+  @override
+  State<_HojaRecordatorios> createState() => _HojaRecordatoriosState();
+}
+
+class _HojaRecordatoriosState extends State<_HojaRecordatorios> {
+  Recordatorios get _r => Recordatorios.instancia;
+  AjustesRecordatorios get _a => _r.ajustes;
+
+  Future<void> _activar(void Function() cambio, bool encender) async {
+    if (encender) {
+      final bool ok = await _r.pedirPermiso();
+      if (!ok && mounted) {
+        avisoClan(context, 'Activa las notificaciones de Temple of Strength en los ajustes del teléfono.',
+            error: true);
+      }
+    }
+    setState(cambio);
+    _a.configurado = true;
+    await _r.guardar();
+  }
+
+  Future<void> _elegirHora({required int hora, int minuto = 0, required void Function(TimeOfDay t) alElegir}) async {
+    final TimeOfDay? t = await showTimePicker(
+      context: context,
+      initialTime: TimeOfDay(hour: hora, minute: minuto),
+      helpText: 'Elige la hora',
+      cancelText: 'Cancelar',
+      confirmText: 'Listo',
+    );
+    if (t == null || !mounted) return;
+    setState(() => alElegir(t));
+    await _r.guardar();
+  }
+
+  Widget _fila({
+    required TempleGlyph glifo,
+    required String titulo,
+    required String texto,
+    required bool valor,
+    required ValueChanged<bool> onCambio,
+  }) {
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: <Widget>[
+        Padding(
+          padding: const EdgeInsets.only(top: 2),
+          child: TempleIcon(glifo, size: 20, color: valor ? TempleColors.violetaClaro : TempleColors.textoTenue),
+        ),
+        const SizedBox(width: 12),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: <Widget>[
+              Text(titulo, style: const TextStyle(fontSize: 14.5, fontWeight: FontWeight.w600, color: TempleColors.texto)),
+              const SizedBox(height: 2),
+              Text(texto, style: const TextStyle(fontSize: 12, height: 1.4, color: TempleColors.textoSuave)),
+            ],
+          ),
+        ),
+        Switch(
+          value: valor,
+          onChanged: onCambio,
+          activeTrackColor: TempleColors.violeta,
+          inactiveTrackColor: TempleColors.borde,
+        ),
+      ],
+    );
+  }
+
+  Widget _boton(String texto, VoidCallback? onTap) => OutlinedButton(
+        onPressed: onTap,
+        style: OutlinedButton.styleFrom(
+          foregroundColor: TempleColors.violetaClaro,
+          side: const BorderSide(color: TempleColors.bordeVivo),
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(999)),
+        ),
+        child: Text(texto, style: const TextStyle(fontSize: 13)),
+      );
+
+  @override
+  Widget build(BuildContext context) {
+    final AjustesRecordatorios a = _a;
+    return SafeArea(
+      top: false,
+      child: ConstrainedBox(
+        constraints: BoxConstraints(maxHeight: MediaQuery.sizeOf(context).height * 0.88),
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.fromLTRB(22, 18, 22, 20),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: <Widget>[
+              Center(
+                child: Container(
+                  width: 40,
+                  height: 4,
+                  margin: const EdgeInsets.only(bottom: 14),
+                  decoration: BoxDecoration(color: TempleColors.bordeVivo, borderRadius: BorderRadius.circular(2)),
+                ),
+              ),
+              const Text('Recordatorios',
+                  style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600, color: TempleColors.blancoLuna)),
+              const SizedBox(height: 4),
+              const Text(
+                'Los programa tu propio teléfono. Si ya entrenaste hoy o llegaste a tus vasos de agua, Tenshi no '
+                'te molesta.',
+                style: TextStyle(fontSize: 12.5, height: 1.45, color: TempleColors.textoSuave),
+              ),
+              if (!Recordatorios.soportado) ...<Widget>[
+                const SizedBox(height: 12),
+                Container(
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: TempleColors.alertaSuave.withValues(alpha: 0.08),
+                    borderRadius: BorderRadius.circular(TempleRadius.campo),
+                    border: Border.all(color: TempleColors.alertaSuave.withValues(alpha: 0.35)),
+                  ),
+                  child: const Text(
+                    'Los recordatorios llegan en la app instalada en tu celular. Aquí puedes dejarlos listos.',
+                    style: TextStyle(fontSize: 12, height: 1.4, color: TempleColors.texto),
+                  ),
+                ),
+              ],
+              const SizedBox(height: 18),
+
+              // -- Entrenar ----------------------------------------------------
+              _fila(
+                glifo: TempleGlyph.torii,
+                titulo: 'Entrenar',
+                texto: 'Los días que elijas, a tu hora.',
+                valor: a.entreno,
+                onCambio: (bool v) => _activar(() => a.entreno = v, v),
+              ),
+              AnimatedOpacity(
+                duration: TempleMotion.rapido,
+                opacity: a.entreno ? 1 : 0.4,
+                child: IgnorePointer(
+                  ignoring: !a.entreno,
+                  child: Padding(
+                    padding: const EdgeInsets.only(left: 32, top: 8),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: <Widget>[
+                        Wrap(
+                          spacing: 6,
+                          runSpacing: 6,
+                          children: <Widget>[
+                            for (int d = 1; d <= 7; d++)
+                              GestureDetector(
+                                onTap: () async {
+                                  HapticFeedback.selectionClick();
+                                  setState(() => a.dias.contains(d) ? a.dias.remove(d) : a.dias.add(d));
+                                  await _r.guardar();
+                                },
+                                child: AnimatedContainer(
+                                  duration: TempleMotion.rapido,
+                                  width: 36,
+                                  height: 36,
+                                  alignment: Alignment.center,
+                                  decoration: BoxDecoration(
+                                    shape: BoxShape.circle,
+                                    color: a.dias.contains(d)
+                                        ? TempleColors.violeta.withValues(alpha: 0.25)
+                                        : TempleColors.superficie,
+                                    border: Border.all(
+                                      color: a.dias.contains(d) ? TempleColors.violeta : TempleColors.borde,
+                                    ),
+                                  ),
+                                  child: Text(_letrasDias[d - 1],
+                                      style: TextStyle(
+                                          fontSize: 13,
+                                          fontWeight: FontWeight.w600,
+                                          color: a.dias.contains(d) ? TempleColors.blancoLuna : TempleColors.textoSuave)),
+                                ),
+                              ),
+                          ],
+                        ),
+                        const SizedBox(height: 10),
+                        _boton(
+                          'A las ${_horaTexto(a.horaEntreno, a.minutoEntreno)}',
+                          () => _elegirHora(
+                            hora: a.horaEntreno,
+                            minuto: a.minutoEntreno,
+                            alElegir: (TimeOfDay t) {
+                              a.horaEntreno = t.hour;
+                              a.minutoEntreno = t.minute;
+                            },
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+              Divider(height: 30, color: TempleColors.borde.withValues(alpha: 0.7)),
+
+              // -- Agua --------------------------------------------------------
+              _fila(
+                glifo: TempleGlyph.gota,
+                titulo: 'Tomar agua',
+                texto: 'Hasta que sumes ${Recordatorios.metaVasos} vasos en el Dojo.',
+                valor: a.agua,
+                onCambio: (bool v) => _activar(() => a.agua = v, v),
+              ),
+              AnimatedOpacity(
+                duration: TempleMotion.rapido,
+                opacity: a.agua ? 1 : 0.4,
+                child: IgnorePointer(
+                  ignoring: !a.agua,
+                  child: Padding(
+                    padding: const EdgeInsets.only(left: 32, top: 8),
+                    child: Wrap(
+                      spacing: 8,
+                      runSpacing: 8,
+                      crossAxisAlignment: WrapCrossAlignment.center,
+                      children: <Widget>[
+                        _boton(
+                          'Desde ${_horaTexto(a.aguaDesde)}',
+                          () => _elegirHora(
+                            hora: a.aguaDesde,
+                            alElegir: (TimeOfDay t) {
+                              a.aguaDesde = t.hour.clamp(5, 22);
+                              if (a.aguaHasta <= a.aguaDesde) a.aguaHasta = (a.aguaDesde + 1).clamp(6, 23);
+                            },
+                          ),
+                        ),
+                        _boton(
+                          'Hasta ${_horaTexto(a.aguaHasta)}',
+                          () => _elegirHora(
+                            hora: a.aguaHasta,
+                            alElegir: (TimeOfDay t) {
+                              a.aguaHasta = t.hour.clamp(6, 23);
+                              if (a.aguaHasta <= a.aguaDesde) a.aguaDesde = (a.aguaHasta - 1).clamp(5, 22);
+                            },
+                          ),
+                        ),
+                        for (final int c in const <int>[1, 2, 3])
+                          ChoiceChip(
+                            label: Text('Cada $c h', style: const TextStyle(fontSize: 12)),
+                            selected: a.aguaCada == c,
+                            onSelected: (_) async {
+                              setState(() => a.aguaCada = c);
+                              await _r.guardar();
+                            },
+                            selectedColor: TempleColors.violeta.withValues(alpha: 0.28),
+                            backgroundColor: TempleColors.superficie,
+                            side: BorderSide(color: a.aguaCada == c ? TempleColors.violeta : TempleColors.borde),
+                            labelStyle: TextStyle(
+                                color: a.aguaCada == c ? TempleColors.blancoLuna : TempleColors.textoSuave),
+                            showCheckmark: false,
+                          ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+              Divider(height: 30, color: TempleColors.borde.withValues(alpha: 0.7)),
+
+              // -- La llama ----------------------------------------------------
+              _fila(
+                glifo: TempleGlyph.llama,
+                titulo: 'Cuidar mi llama',
+                texto: 'Solo si tu semana está en peligro de no cumplirse.',
+                valor: a.llama,
+                onCambio: (bool v) => _activar(() => a.llama = v, v),
+              ),
+              if (a.llama)
+                Padding(
+                  padding: const EdgeInsets.only(left: 32, top: 8),
+                  child: Align(
+                    alignment: Alignment.centerLeft,
+                    child: _boton(
+                      'A las ${_horaTexto(a.horaLlama, 30)}',
+                      () => _elegirHora(
+                        hora: a.horaLlama,
+                        minuto: 30,
+                        alElegir: (TimeOfDay t) => a.horaLlama = t.hour.clamp(6, 22),
+                      ),
+                    ),
+                  ),
+                ),
+              Divider(height: 30, color: TempleColors.borde.withValues(alpha: 0.7)),
+
+              // -- Regreso -----------------------------------------------------
+              _fila(
+                glifo: TempleGlyph.campana,
+                titulo: 'Si llevo días sin entrar',
+                texto: 'Un aviso suave a los 3 y a los 7 días.',
+                valor: a.regreso,
+                onCambio: (bool v) => _activar(() => a.regreso = v, v),
+              ),
+              const SizedBox(height: 20),
+              if (Recordatorios.soportado)
+                TextButton.icon(
+                  onPressed: () async {
+                    final bool ok = await _r.probar();
+                    if (!context.mounted) return;
+                    avisoClan(
+                      context,
+                      ok
+                          ? 'Te llegará un recordatorio de prueba en unos segundos.'
+                          : 'Activa las notificaciones de Temple of Strength en los ajustes del teléfono.',
+                      error: !ok,
+                    );
+                  },
+                  icon: const Icon(Icons.notifications_active_outlined, size: 18, color: TempleColors.violetaClaro),
+                  label: const Text('Probar un recordatorio', style: TextStyle(color: TempleColors.violetaClaro)),
+                ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// 51.4 TARJETA DEL DOJO (la primera vez)
+// ---------------------------------------------------------------------------
+
+class TarjetaRecordatoriosDojo extends StatelessWidget {
+  const TarjetaRecordatoriosDojo({super.key, required this.onCambio});
+  final VoidCallback onCambio;
+
+  static bool tocaMostrar() => Recordatorios.soportado && !Recordatorios.instancia.ajustes.configurado;
+
+  @override
+  Widget build(BuildContext context) {
+    final Recordatorios r = Recordatorios.instancia;
+    return TempleCard(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: <Widget>[
+          const Row(
+            children: <Widget>[
+              TempleIcon(TempleGlyph.campana, size: 20, color: TempleColors.violetaClaro),
+              SizedBox(width: 10),
+              Expanded(
+                child: Text('¿Te recuerdo entrenar y tomar agua?',
+                    style: TextStyle(fontSize: 14.5, fontWeight: FontWeight.w600, color: TempleColors.blancoLuna)),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          const Text(
+            'Un aviso los días que elijas, otro para beber agua durante el día y uno solo si tu semana está en '
+            'peligro. Nada más.',
+            style: TextStyle(fontSize: 12.5, height: 1.45, color: TempleColors.textoSuave),
+          ),
+          const SizedBox(height: 12),
+          Row(
+            children: <Widget>[
+              FilledButton(
+                onPressed: () async {
+                  HapticFeedback.selectionClick();
+                  await r.pedirPermiso();
+                  r.ajustes
+                    ..entreno = true
+                    ..agua = true
+                    ..llama = true
+                    ..configurado = true;
+                  await r.guardar();
+                  onCambio();
+                  if (context.mounted) await abrirRecordatorios(context);
+                  onCambio();
+                },
+                style: FilledButton.styleFrom(
+                  backgroundColor: TempleColors.violeta,
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(999)),
+                ),
+                child: const Text('Activar'),
+              ),
+              const SizedBox(width: 8),
+              TextButton(
+                onPressed: () async {
+                  r.ajustes.configurado = true;
+                  await r.guardar();
+                  onCambio();
+                },
+                child: const Text('Ahora no', style: TextStyle(color: TempleColors.textoSuave)),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// ===========================================================================
+// 52. EL RETO DEL TEMPLO — captcha al crear la cuenta
+//
+// El servidor dibuja figuras con trazos que cambian en cada reto (giro,
+// tamaño, espejo, temblor y garabatos). Hay que tocar todas las casillas con
+// la misma figura que la de arriba. Mientras tanto el teléfono resuelve una
+// pequeña prueba de trabajo (un segundo): a quien quiere crear miles de
+// cuentas le sale caro. La respuesta la comprueba el servidor, nunca la app.
+// ===========================================================================
+
+class RetoTemploDatos {
+  const RetoTemploDatos({
+    required this.id,
+    required this.objetivo,
+    required this.casillas,
+    required this.sal,
+    required this.bits,
+  });
+
+  final String id;
+  final List<List<Offset>> objetivo;
+  final List<List<List<Offset>>> casillas;
+  final String sal;
+  final int bits;
+
+  static List<List<Offset>> _trazos(Object? v) => <List<Offset>>[
+        if (v is List)
+          for (final Object? t in v)
+            if (t is List)
+              <Offset>[
+                for (final Object? p in t)
+                  if (p is List && p.length == 2 && p[0] is num && p[1] is num)
+                    Offset((p[0] as num).toDouble(), (p[1] as num).toDouble()),
+              ],
+      ];
+
+  factory RetoTemploDatos.desde(Map<String, dynamic> m) {
+    final Object? pow = m['pow'];
+    final Object? cs = m['casillas'];
+    return RetoTemploDatos(
+      id: m['id'].toString(),
+      objetivo: _trazos(m['objetivo']),
+      casillas: <List<List<Offset>>>[
+        if (cs is List)
+          for (final Object? c in cs) _trazos(c),
+      ],
+      sal: pow is Map ? (pow['sal'] ?? '').toString() : '',
+      bits: pow is Map && pow['bits'] is num ? (pow['bits'] as num).toInt() : 16,
+    );
+  }
+}
+
+/// Prueba de trabajo: el primer número que, pegado a la sal, da un SHA-256
+/// que empieza con `bits` ceros. Corre fuera del hilo de la pantalla.
+int resolverPruebaTemplo(List<Object> datos) {
+  final String sal = datos[0] as String;
+  final int bits = datos[1] as int;
+  final int completos = bits ~/ 8;
+  final int resto = bits % 8;
+  for (int n = 0; n < 60000000; n++) {
+    final List<int> h = sha256.convert(convert.utf8.encode('$sal$n')).bytes;
+    bool ok = true;
+    for (int i = 0; i < completos; i++) {
+      if (h[i] != 0) {
+        ok = false;
+        break;
+      }
+    }
+    if (ok && resto > 0 && (h[completos] >> (8 - resto)) != 0) ok = false;
+    if (ok) return n;
+  }
+  return -1;
+}
+
+/// Abre el reto. Devuelve lo que hay que mandar al servidor al registrarse,
+/// o null si la persona lo cerró.
+Future<Map<String, dynamic>?> resolverRetoTemplo(BuildContext context) {
+  return Navigator.of(context).push<Map<String, dynamic>>(MaterialPageRoute<Map<String, dynamic>>(
+    fullscreenDialog: true,
+    builder: (_) => const _RetoTemploScreen(),
+  ));
+}
+
+class _RetoTemploScreen extends StatefulWidget {
+  const _RetoTemploScreen();
+
+  @override
+  State<_RetoTemploScreen> createState() => _RetoTemploScreenState();
+}
+
+class _RetoTemploScreenState extends State<_RetoTemploScreen> {
+  RetoTemploDatos? _reto;
+  Future<int>? _prueba;
+  final Set<int> _elegidas = <int>{};
+  bool _cargando = true;
+  bool _comprobando = false;
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    _cargar();
+  }
+
+  Future<void> _cargar() async {
+    setState(() {
+      _cargando = true;
+      _error = null;
+      _elegidas.clear();
+    });
+    try {
+      final FunctionResponse r =
+          await supa.functions.invoke('cuenta', body: <String, dynamic>{'accion': 'reto'});
+      final Object? d = r.data;
+      if (d is! Map) throw const AuthFailure('No pudimos traer el reto. Intenta de nuevo.');
+      final RetoTemploDatos reto = RetoTemploDatos.desde(Map<String, dynamic>.from(d));
+      if (!mounted) return;
+      setState(() {
+        _reto = reto;
+        _prueba = compute(resolverPruebaTemplo, <Object>[reto.sal, reto.bits]);
+        _cargando = false;
+      });
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _cargando = false;
+          _error = SesionTemplo.mensajeDe(e);
+        });
+      }
+    }
+  }
+
+  Future<void> _comprobar() async {
+    final RetoTemploDatos? reto = _reto;
+    final Future<int>? prueba = _prueba;
+    if (reto == null || prueba == null || _elegidas.isEmpty || _comprobando) return;
+    setState(() => _comprobando = true);
+    final int n = await prueba;
+    if (!mounted) return;
+    if (n < 0) {
+      setState(() => _comprobando = false);
+      await _cargar();
+      return;
+    }
+    HapticFeedback.mediumImpact();
+    Navigator.of(context).pop(<String, dynamic>{
+      'id': reto.id,
+      'elegidas': (_elegidas.toList()..sort()),
+      'pow': '$n',
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final RetoTemploDatos? reto = _reto;
+    return Scaffold(
+      backgroundColor: TempleColors.negro,
+      body: FondoTemplo(
+        child: SafeArea(
+          child: Column(
+            children: <Widget>[
+              Padding(
+                padding: const EdgeInsets.fromLTRB(4, 4, 8, 0),
+                child: Row(
+                  children: <Widget>[
+                    IconButton(
+                      tooltip: 'Cerrar',
+                      onPressed: () => Navigator.of(context).maybePop(),
+                      icon: const Icon(Icons.close_rounded, color: TempleColors.textoSuave),
+                    ),
+                    const Expanded(
+                      child: Text('El reto del templo',
+                          style: TextStyle(fontSize: 17, fontWeight: FontWeight.w600, color: TempleColors.blancoLuna)),
+                    ),
+                    TextButton.icon(
+                      onPressed: _cargando || _comprobando ? null : _cargar,
+                      icon: const Icon(Icons.refresh_rounded, size: 18, color: TempleColors.violetaClaro),
+                      label: const Text('Otro', style: TextStyle(color: TempleColors.violetaClaro)),
+                    ),
+                  ],
+                ),
+              ),
+              Expanded(
+                child: _cargando
+                    ? const Center(
+                        child: SizedBox(
+                          width: 26,
+                          height: 26,
+                          child: CircularProgressIndicator(strokeWidth: 2, color: TempleColors.violeta),
+                        ),
+                      )
+                    : reto == null
+                        ? VacioClan(
+                            glifo: TempleGlyph.montana,
+                            titulo: 'No pudimos traer el reto',
+                            texto: _error ?? 'Revisa tu internet.',
+                            accion: 'Reintentar',
+                            onAccion: _cargar,
+                          )
+                        : ListView(
+                            padding: const EdgeInsets.fromLTRB(TempleSpace.borde, 8, TempleSpace.borde, 24),
+                            children: <Widget>[
+                              const Text(
+                                'Toca todas las casillas que tengan esta figura. Puede estar girada, más pequeña o '
+                                'al revés.',
+                                style: TextStyle(fontSize: 13.5, height: 1.45, color: TempleColors.texto),
+                              ),
+                              const SizedBox(height: 14),
+                              Center(
+                                child: Container(
+                                  width: 104,
+                                  height: 104,
+                                  decoration: BoxDecoration(
+                                    color: TempleColors.violeta.withValues(alpha: 0.1),
+                                    borderRadius: BorderRadius.circular(TempleRadius.tarjeta),
+                                    border: Border.all(color: TempleColors.violeta.withValues(alpha: 0.55), width: 1.4),
+                                  ),
+                                  child: CustomPaint(
+                                    painter: _TrazosPainter(reto.objetivo, TempleColors.blancoLuna),
+                                  ),
+                                ),
+                              ),
+                              const SizedBox(height: 18),
+                              GridView.count(
+                                crossAxisCount: 4,
+                                shrinkWrap: true,
+                                physics: const NeverScrollableScrollPhysics(),
+                                mainAxisSpacing: 8,
+                                crossAxisSpacing: 8,
+                                children: <Widget>[
+                                  for (int i = 0; i < reto.casillas.length; i++)
+                                    Semantics(
+                                      button: true,
+                                      selected: _elegidas.contains(i),
+                                      label: 'Casilla ${i + 1}',
+                                      child: GestureDetector(
+                                        onTap: _comprobando
+                                            ? null
+                                            : () {
+                                                HapticFeedback.selectionClick();
+                                                setState(() =>
+                                                    _elegidas.contains(i) ? _elegidas.remove(i) : _elegidas.add(i));
+                                              },
+                                        child: AnimatedContainer(
+                                          duration: TempleMotion.rapido,
+                                          decoration: BoxDecoration(
+                                            color: _elegidas.contains(i)
+                                                ? TempleColors.violeta.withValues(alpha: 0.22)
+                                                : TempleColors.superficie,
+                                            borderRadius: BorderRadius.circular(TempleRadius.campo),
+                                            border: Border.all(
+                                              color: _elegidas.contains(i) ? TempleColors.violeta : TempleColors.borde,
+                                              width: _elegidas.contains(i) ? 1.6 : 1,
+                                            ),
+                                          ),
+                                          child: Stack(
+                                            children: <Widget>[
+                                              Positioned.fill(
+                                                child: CustomPaint(
+                                                  painter: _TrazosPainter(
+                                                    reto.casillas[i],
+                                                    _elegidas.contains(i)
+                                                        ? TempleColors.blancoLuna
+                                                        : TempleColors.violetaClaro,
+                                                  ),
+                                                ),
+                                              ),
+                                              if (_elegidas.contains(i))
+                                                const Positioned(
+                                                  right: 5,
+                                                  top: 5,
+                                                  child: Icon(Icons.check_circle_rounded,
+                                                      size: 16, color: TempleColors.violeta),
+                                                ),
+                                            ],
+                                          ),
+                                        ),
+                                      ),
+                                    ),
+                                ],
+                              ),
+                              const SizedBox(height: 20),
+                              DojoPrimaryButton(
+                                texto: _elegidas.isEmpty ? 'Elige las casillas' : 'Comprobar',
+                                cargando: _comprobando,
+                                onPressed: () {
+                                  if (_elegidas.isEmpty) {
+                                    HapticFeedback.lightImpact();
+                                    return;
+                                  }
+                                  _comprobar();
+                                },
+                              ),
+                              const SizedBox(height: 12),
+                              const Text(
+                                'El reto frena las cuentas falsas y los bots. Si no puedes verlo bien, toca «Otro» o '
+                                'escríbenos a ${ConfigSupabase.correoSoporte}.',
+                                textAlign: TextAlign.center,
+                                style: TextStyle(fontSize: 11.5, height: 1.45, color: TempleColors.textoTenue),
+                              ),
+                            ],
+                          ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _TrazosPainter extends CustomPainter {
+  _TrazosPainter(this.trazos, this.color);
+
+  final List<List<Offset>> trazos;
+  final Color color;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final double lado = math.min(size.width, size.height);
+    final double margen = lado * 0.06;
+    final double util = lado - margen * 2;
+    final Offset origen = Offset((size.width - lado) / 2 + margen, (size.height - lado) / 2 + margen);
+    final Paint p = Paint()
+      ..color = color
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = math.max(1.6, lado * 0.034)
+      ..strokeCap = StrokeCap.round
+      ..strokeJoin = StrokeJoin.round;
+    for (final List<Offset> t in trazos) {
+      if (t.length < 2) continue;
+      final Path path = Path()..moveTo(origen.dx + t.first.dx * util, origen.dy + t.first.dy * util);
+      for (int i = 1; i < t.length; i++) {
+        path.lineTo(origen.dx + t[i].dx * util, origen.dy + t[i].dy * util);
+      }
+      canvas.drawPath(path, p);
+    }
+  }
+
+  @override
+  bool shouldRepaint(_TrazosPainter old) => old.trazos != trazos || old.color != color;
+}
+
+// ===========================================================================
+// 53. CLANES — grupos con emblema, muro y tabla semanal
+//
+// Un clan tiene hasta 50 guerreros. Quien lo funda lo lidera, puede nombrar
+// oficiales, aceptar solicitudes y expulsar. Como todo el Clan, viven
+// separados por edad. Las reglas están en la base de datos (funciones
+// clan_*); aquí solo se piden cosas.
+//
+//   53.1  Modelos
+//   53.2  Repositorio
+//   53.3  Emblema
+//   53.4  Pestaña «Mi clan»
+//   53.5  Vista de un clan (cabecera + muro)
+//   53.6  Miembros
+//   53.7  Fundar o editar un clan
+// ===========================================================================
+
+const List<String> kKanjisClan = <String>['武', '力', '炎', '月', '龍', '虎', '風', '雷', '鋼', '山', '波', '心'];
+const List<String> kSentidoKanjiClan = <String>[
+  'Marcial', 'Fuerza', 'Llama', 'Luna', 'Dragón', 'Tigre', 'Viento', 'Trueno', 'Acero', 'Montaña', 'Ola', 'Corazón',
+];
+const List<Color> kColoresClan = <Color>[
+  Color(0xFF8B5CF6),
+  Color(0xFFE05C6E),
+  Color(0xFFD9A441),
+  Color(0xFF5BD6A0),
+  Color(0xFF5AA9E6),
+  Color(0xFFE39BCB),
+  Color(0xFFF08A4B),
+  Color(0xFFB8C0CC),
+];
+
+String hoyIsoTemplo() {
+  final DateTime n = DateTime.now();
+  return '${n.year.toString().padLeft(4, '0')}-${n.month.toString().padLeft(2, '0')}-${n.day.toString().padLeft(2, '0')}';
+}
+
+String milesTemplo(num v) {
+  final String s = v.round().abs().toString();
+  final StringBuffer b = StringBuffer();
+  for (int i = 0; i < s.length; i++) {
+    if (i > 0 && (s.length - i) % 3 == 0) b.write('.');
+    b.write(s[i]);
+  }
+  return v < 0 ? '-$b' : b.toString();
+}
+
+double _numClan(Object? v) => v is num ? v.toDouble() : double.tryParse(v?.toString() ?? '') ?? 0;
+int _entClan(Object? v) => _numClan(v).round();
+
+// ---------------------------------------------------------------------------
+// 53.1 MODELOS
+// ---------------------------------------------------------------------------
+
+class MiClanInfo {
+  const MiClanInfo({
+    required this.id,
+    required this.nombre,
+    required this.kanji,
+    required this.color,
+    required this.rol,
+    required this.estado,
+  });
+
+  final String id;
+  final String nombre;
+  final String kanji;
+  final int color;
+  final String rol;
+  final String estado;
+
+  bool get activo => estado == 'activo';
+  bool get manda => activo && (rol == 'lider' || rol == 'oficial');
+
+  factory MiClanInfo.desde(Map<String, dynamic> m) => MiClanInfo(
+        id: m['id'].toString(),
+        nombre: (m['nombre'] ?? '').toString(),
+        kanji: (m['kanji'] ?? '武').toString(),
+        color: _entClan(m['color']),
+        rol: (m['rol'] ?? 'miembro').toString(),
+        estado: (m['estado'] ?? 'activo').toString(),
+      );
+}
+
+class ClanBreve {
+  const ClanBreve({
+    required this.id,
+    required this.nombre,
+    required this.lema,
+    required this.kanji,
+    required this.color,
+    required this.ingreso,
+    required this.nMiembros,
+    required this.puntos,
+    required this.posicion,
+  });
+
+  final String id;
+  final String nombre;
+  final String lema;
+  final String kanji;
+  final int color;
+  final String ingreso;
+  final int nMiembros;
+  final int puntos;
+  final int posicion;
+
+  factory ClanBreve.desde(Map<String, dynamic> m) => ClanBreve(
+        id: m['id'].toString(),
+        nombre: (m['nombre'] ?? '').toString(),
+        lema: (m['lema'] ?? '').toString(),
+        kanji: (m['kanji'] ?? '武').toString(),
+        color: _entClan(m['color']),
+        ingreso: (m['ingreso'] ?? 'abierto').toString(),
+        nMiembros: _entClan(m['n_miembros']),
+        puntos: _entClan(m['puntos']),
+        posicion: _entClan(m['posicion']),
+      );
+}
+
+class MiembroClan {
+  const MiembroClan({
+    required this.persona,
+    required this.rol,
+    required this.estado,
+    required this.sesiones,
+    required this.minutos,
+    required this.xp,
+  });
+
+  final ClanPersona persona;
+  final String rol;
+  final String estado;
+  final int sesiones;
+  final int minutos;
+  final int xp;
+
+  bool get pendiente => estado == 'pendiente';
+  bool get esYo => persona.id == SesionTemplo.instancia.uid;
+
+  String get rango => switch (rol) {
+        'lider' => 'Líder',
+        'oficial' => 'Oficial',
+        _ => 'Guerrero',
+      };
+
+  factory MiembroClan.desde(Map<String, dynamic> m) => MiembroClan(
+        persona: ClanPersona.desdeMapa(m),
+        rol: (m['rol'] ?? 'miembro').toString(),
+        estado: (m['estado'] ?? 'activo').toString(),
+        sesiones: _entClan(m['sesiones']),
+        minutos: _entClan(m['minutos']),
+        xp: _entClan(m['xp']),
+      );
+}
+
+class DetalleClan {
+  const DetalleClan({
+    required this.id,
+    required this.nombre,
+    required this.lema,
+    required this.descripcion,
+    required this.kanji,
+    required this.color,
+    required this.ingreso,
+    required this.nMiembros,
+    required this.lider,
+    required this.puntos,
+    required this.posicion,
+    required this.miembros,
+    required this.reto,
+    required this.miRol,
+    required this.miEstado,
+    required this.enOtroClan,
+  });
+
+  final String id;
+  final String nombre;
+  final String lema;
+  final String descripcion;
+  final String kanji;
+  final int color;
+  final String ingreso;
+  final int nMiembros;
+  final String? lider;
+  final int puntos;
+  final int posicion;
+  final List<MiembroClan> miembros;
+  final RetoSemana? reto;
+  final String? miRol;
+  final String? miEstado;
+  final bool enOtroClan;
+
+  bool get soyMiembro => miEstado == 'activo';
+  bool get pendiente => miEstado == 'pendiente';
+  bool get soyLider => soyMiembro && miRol == 'lider';
+  bool get mando => soyMiembro && (miRol == 'lider' || miRol == 'oficial');
+  List<MiembroClan> get activos => miembros.where((MiembroClan m) => !m.pendiente).toList();
+  List<MiembroClan> get solicitudes => miembros.where((MiembroClan m) => m.pendiente).toList();
+
+  ClanPersona get personaLider {
+    for (final MiembroClan m in miembros) {
+      if (m.rol == 'lider') return m.persona;
+    }
+    return ClanPersona(id: lider ?? '', usuario: nombre);
+  }
+
+  factory DetalleClan.desde(Map<String, dynamic> m) {
+    final Object? ms = m['miembros'];
+    final Object? r = m['reto'];
+    return DetalleClan(
+      id: m['id'].toString(),
+      nombre: (m['nombre'] ?? '').toString(),
+      lema: (m['lema'] ?? '').toString(),
+      descripcion: (m['descripcion'] ?? '').toString(),
+      kanji: (m['kanji'] ?? '武').toString(),
+      color: _entClan(m['color']),
+      ingreso: (m['ingreso'] ?? 'abierto').toString(),
+      nMiembros: _entClan(m['n_miembros']),
+      lider: m['lider']?.toString(),
+      puntos: _entClan(m['puntos']),
+      posicion: _entClan(m['posicion']),
+      miembros: <MiembroClan>[
+        if (ms is List)
+          for (final Object? x in ms)
+            if (x is Map) MiembroClan.desde(Map<String, dynamic>.from(x)),
+      ],
+      reto: r is Map ? RetoSemana.desde(Map<String, dynamic>.from(r), esClan: true) : null,
+      miRol: m['mi_rol']?.toString(),
+      miEstado: m['mi_estado']?.toString(),
+      enOtroClan: m['en_otro_clan'] == true,
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// 53.2 REPOSITORIO
+// ---------------------------------------------------------------------------
+
+class ClanesRepo extends ChangeNotifier {
+  ClanesRepo._();
+  static final ClanesRepo instancia = ClanesRepo._();
+
+  MiClanInfo? mio;
+  bool cargado = false;
+
+  /// Sube cuando cambia el muro del clan propio (para recargarlo).
+  final ValueNotifier<int> muro = ValueNotifier<int>(0);
+
+  Future<MiClanInfo?> cargarMio() async {
+    try {
+      final Object? r = await supa.rpc('mi_clan');
+      mio = r is Map ? MiClanInfo.desde(Map<String, dynamic>.from(r)) : null;
+    } catch (e) {
+      debugPrint('Clanes: $e');
+    }
+    cargado = true;
+    notifyListeners();
+    return mio;
+  }
+
+  Future<List<ClanBreve>> lista([String q = '']) async {
+    final Object? r = await supa.rpc('clanes_lista', params: <String, dynamic>{'q': q, 'p_hoy': hoyIsoTemplo()});
+    return <ClanBreve>[
+      if (r is List)
+        for (final Object? x in r)
+          if (x is Map) ClanBreve.desde(Map<String, dynamic>.from(x)),
+    ];
+  }
+
+  Future<DetalleClan?> detalle(String id) async {
+    final Object? r = await supa.rpc('clan_detalle', params: <String, dynamic>{'c': id, 'p_hoy': hoyIsoTemplo()});
+    return r is Map ? DetalleClan.desde(Map<String, dynamic>.from(r)) : null;
+  }
+
+  Future<String> crear({
+    required String nombre,
+    required String lema,
+    required String descripcion,
+    required String kanji,
+    required int color,
+    required String ingreso,
+  }) async {
+    final Object? r = await supa.rpc('clan_crear', params: <String, dynamic>{
+      'p_nombre': nombre.trim(),
+      'p_lema': lema.trim(),
+      'p_descripcion': descripcion.trim(),
+      'p_kanji': kanji,
+      'p_color': color,
+      'p_ingreso': ingreso,
+    });
+    await cargarMio();
+    return r.toString();
+  }
+
+  Future<void> editar({
+    required String lema,
+    required String descripcion,
+    required String kanji,
+    required int color,
+    required String ingreso,
+  }) async {
+    await supa.rpc('clan_editar', params: <String, dynamic>{
+      'p_lema': lema.trim(),
+      'p_descripcion': descripcion.trim(),
+      'p_kanji': kanji,
+      'p_color': color,
+      'p_ingreso': ingreso,
+    });
+    await cargarMio();
+  }
+
+  Future<String> unirse(String id) async {
+    final Object? r = await supa.rpc('clan_unirse', params: <String, dynamic>{'c': id});
+    await cargarMio();
+    return r.toString();
+  }
+
+  Future<void> salir() async {
+    await supa.rpc('clan_salir');
+    await cargarMio();
+  }
+
+  Future<void> responder(String u, bool aceptar) async {
+    await supa.rpc('clan_responder', params: <String, dynamic>{'u': u, 'aceptar': aceptar});
+  }
+
+  Future<void> expulsar(String u) async {
+    await supa.rpc('clan_expulsar', params: <String, dynamic>{'u': u});
+  }
+
+  Future<void> cambiarRol(String u, String rol) async {
+    await supa.rpc('clan_rol', params: <String, dynamic>{'u': u, 'p_rol': rol});
+    await cargarMio();
+  }
+}
+
+// ---------------------------------------------------------------------------
+// 53.3 EMBLEMA
+// ---------------------------------------------------------------------------
+
+class EmblemaClan extends StatelessWidget {
+  const EmblemaClan({super.key, required this.kanji, required this.color, this.size = 48});
+
+  final String kanji;
+  final int color;
+  final double size;
+
+  @override
+  Widget build(BuildContext context) {
+    final Color c = kColoresClan[color.clamp(0, kColoresClan.length - 1)];
+    return Container(
+      width: size,
+      height: size,
+      alignment: Alignment.center,
+      decoration: BoxDecoration(
+        shape: BoxShape.circle,
+        gradient: RadialGradient(
+          colors: <Color>[c.withValues(alpha: 0.38), c.withValues(alpha: 0.08)],
+        ),
+        border: Border.all(color: c.withValues(alpha: 0.85), width: size > 50 ? 2 : 1.4),
+        boxShadow: <BoxShadow>[
+          BoxShadow(color: c.withValues(alpha: 0.28), blurRadius: size * 0.35, spreadRadius: -size * 0.08),
+        ],
+      ),
+      child: Text(
+        kanji,
+        style: TextStyle(fontSize: size * 0.48, height: 1, color: TempleColors.blancoLuna, fontWeight: FontWeight.w600),
+      ),
+    );
+  }
+}
+
+Widget _pastillaClan(String texto, {IconData? icono, Color? color}) {
+  final Color c = color ?? TempleColors.textoSuave;
+  return Container(
+    padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
+    decoration: BoxDecoration(
+      color: TempleColors.superficie,
+      borderRadius: BorderRadius.circular(TempleRadius.pastilla),
+      border: Border.all(color: TempleColors.borde),
+    ),
+    child: Row(
+      mainAxisSize: MainAxisSize.min,
+      children: <Widget>[
+        if (icono != null) ...<Widget>[
+          Icon(icono, size: 13, color: c),
+          const SizedBox(width: 4),
+        ],
+        Text(texto, style: TextStyle(fontSize: 11.5, color: c, fontWeight: FontWeight.w500)),
+      ],
+    ),
+  );
+}
+
+ButtonStyle _botonClanPrincipal() => FilledButton.styleFrom(
+      backgroundColor: TempleColors.violeta,
+      foregroundColor: Colors.white,
+      padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 11),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(TempleRadius.pastilla)),
+    );
+
+ButtonStyle _botonClanSecundario() => OutlinedButton.styleFrom(
+      foregroundColor: TempleColors.violetaClaro,
+      side: const BorderSide(color: TempleColors.bordeVivo),
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(TempleRadius.pastilla)),
+    );
+
+// ---------------------------------------------------------------------------
+// 53.4 PESTAÑA «MI CLAN»
+// ---------------------------------------------------------------------------
+
+class PestanaMiClan extends StatefulWidget {
+  const PestanaMiClan({super.key});
+
+  @override
+  State<PestanaMiClan> createState() => _PestanaMiClanState();
+}
+
+class _PestanaMiClanState extends State<PestanaMiClan> {
+  @override
+  void initState() {
+    super.initState();
+    if (!ClanesRepo.instancia.cargado) ClanesRepo.instancia.cargarMio();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return ListenableBuilder(
+      listenable: ClanesRepo.instancia,
+      builder: (BuildContext context, _) {
+        final ClanesRepo r = ClanesRepo.instancia;
+        if (!r.cargado) {
+          return const Center(
+            child: SizedBox(
+                width: 22, height: 22, child: CircularProgressIndicator(strokeWidth: 1.8, color: TempleColors.violeta)),
+          );
+        }
+        final MiClanInfo? m = r.mio;
+        if (m != null && m.activo) {
+          return VistaClan(key: ValueKey<String>('mio-${m.id}'), id: m.id, incrustada: true);
+        }
+        return SinClanVista(pendiente: m);
+      },
+    );
+  }
+}
+
+/// Sin clan (o con una solicitud esperando): fundar uno o buscar dónde entrar.
+class SinClanVista extends StatefulWidget {
+  const SinClanVista({super.key, this.pendiente});
+  final MiClanInfo? pendiente;
+
+  @override
+  State<SinClanVista> createState() => _SinClanVistaState();
+}
+
+class _SinClanVistaState extends State<SinClanVista> {
+  final TextEditingController _buscar = TextEditingController();
+  Timer? _espera;
+  List<ClanBreve>? _lista;
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    _cargar();
+  }
+
+  @override
+  void dispose() {
+    _espera?.cancel();
+    _buscar.dispose();
+    super.dispose();
+  }
+
+  Future<void> _cargar() async {
+    try {
+      final List<ClanBreve> l = await ClanesRepo.instancia.lista(_buscar.text);
+      if (mounted) {
+        setState(() {
+          _lista = l;
+          _error = null;
+        });
+      }
+    } catch (e) {
+      if (mounted) setState(() => _error = SesionTemplo.mensajeDe(e));
+    }
+  }
+
+  Future<void> _fundar() async {
+    final bool? ok = await Navigator.of(context).push<bool>(
+      MaterialPageRoute<bool>(builder: (_) => const CrearClanScreen()),
+    );
+    if (ok == true && mounted) avisoClan(context, 'Tu clan está fundado. Invita a tu gente a buscarlo.');
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final MiClanInfo? p = widget.pendiente;
+    final double abajo = kAlturaNavBar + MediaQuery.paddingOf(context).bottom + 30;
+    final List<ClanBreve>? l = _lista;
+    return RefreshIndicator(
+      color: TempleColors.violeta,
+      backgroundColor: TempleColors.superficieAlta,
+      onRefresh: () async {
+        await ClanesRepo.instancia.cargarMio();
+        await _cargar();
+      },
+      child: ListView(
+        physics: const AlwaysScrollableScrollPhysics(),
+        padding: EdgeInsets.fromLTRB(TempleSpace.borde, 10, TempleSpace.borde, abajo),
+        children: <Widget>[
+          if (p != null) ...<Widget>[
+            TempleCard(
+              destacada: true,
+              child: Row(
+                children: <Widget>[
+                  EmblemaClan(kanji: p.kanji, color: p.color, size: 44),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: <Widget>[
+                        Text('Tu solicitud a «${p.nombre}»',
+                            style: const TextStyle(
+                                fontSize: 14, fontWeight: FontWeight.w600, color: TempleColors.blancoLuna)),
+                        const SizedBox(height: 2),
+                        const Text('Quien lidera el clan debe aceptarla.',
+                            style: TextStyle(fontSize: 12, color: TempleColors.textoSuave)),
+                      ],
+                    ),
+                  ),
+                  TextButton(
+                    onPressed: () async {
+                      try {
+                        await ClanesRepo.instancia.salir();
+                      } catch (e) {
+                        if (context.mounted) avisoClan(context, SesionTemplo.mensajeDe(e), error: true);
+                      }
+                    },
+                    child: const Text('Cancelar', style: TextStyle(color: TempleColors.textoSuave)),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 14),
+          ],
+          TempleCard(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: <Widget>[
+                const Row(
+                  children: <Widget>[
+                    EmblemaClan(kanji: '武', color: 0, size: 46),
+                    SizedBox(width: 14),
+                    Expanded(
+                      child: Text('Entrena en equipo',
+                          style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600, color: TempleColors.blancoLuna)),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 12),
+                const Text(
+                  'Un clan es un grupo de hasta 50 guerreros con emblema, muro propio, retos en equipo y una tabla '
+                  'que se reinicia cada lunes. Solo puedes pertenecer a uno.',
+                  style: TextStyle(fontSize: 13, height: 1.5, color: TempleColors.textoSuave),
+                ),
+                const SizedBox(height: 14),
+                FilledButton.icon(
+                  onPressed: _fundar,
+                  style: _botonClanPrincipal(),
+                  icon: const Icon(Icons.flag_outlined, size: 18),
+                  label: const Text('Fundar un clan', style: TextStyle(fontWeight: FontWeight.w600)),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 18),
+          TextField(
+            controller: _buscar,
+            style: const TextStyle(color: TempleColors.texto, fontSize: 14),
+            textInputAction: TextInputAction.search,
+            onChanged: (_) {
+              _espera?.cancel();
+              _espera = Timer(const Duration(milliseconds: 350), _cargar);
+            },
+            decoration: InputDecoration(
+              hintText: 'Buscar un clan por su nombre',
+              hintStyle: const TextStyle(color: TempleColors.textoTenue),
+              prefixIcon: const Icon(Icons.search_rounded, color: TempleColors.textoSuave),
+              filled: true,
+              fillColor: TempleColors.superficie,
+              contentPadding: const EdgeInsets.symmetric(vertical: 12),
+              border: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(TempleRadius.pastilla),
+                borderSide: const BorderSide(color: TempleColors.borde),
+              ),
+              enabledBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(TempleRadius.pastilla),
+                borderSide: const BorderSide(color: TempleColors.borde),
+              ),
+              focusedBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(TempleRadius.pastilla),
+                borderSide: const BorderSide(color: TempleColors.violeta),
+              ),
+            ),
+          ),
+          const SizedBox(height: 6),
+          EtiquetaSeccion(_buscar.text.trim().isEmpty ? 'Tabla de clanes de la semana' : 'Resultados'),
+          if (_error != null)
+            VacioClan(
+              glifo: TempleGlyph.montana,
+              titulo: 'No pudimos cargar los clanes',
+              texto: _error!,
+              accion: 'Reintentar',
+              onAccion: _cargar,
+            )
+          else if (l == null)
+            const Padding(
+              padding: EdgeInsets.all(28),
+              child: Center(
+                child: SizedBox(
+                    width: 22, height: 22, child: CircularProgressIndicator(strokeWidth: 1.8, color: TempleColors.violeta)),
+              ),
+            )
+          else if (l.isEmpty)
+            VacioClan(
+              glifo: TempleGlyph.bandera,
+              titulo: _buscar.text.trim().isEmpty ? 'Aún no hay clanes' : 'Ningún clan con ese nombre',
+              texto: 'Funda el primero: tu nombre quedará como su líder.',
+              accion: 'Fundar un clan',
+              onAccion: _fundar,
+            )
+          else
+            for (final ClanBreve c in l)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 10),
+                child: _FilaClan(
+                  clan: c,
+                  onTap: () async {
+                    await Navigator.of(context).push(MaterialPageRoute<void>(
+                      builder: (_) => ClanPerfilScreen(id: c.id),
+                    ));
+                    _cargar();
+                  },
+                ),
+              ),
+        ],
+      ),
+    );
+  }
+}
+
+class _FilaClan extends StatelessWidget {
+  const _FilaClan({required this.clan, required this.onTap});
+  final ClanBreve clan;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final bool podio = clan.posicion >= 1 && clan.posicion <= 3 && clan.puntos > 0;
+    return TempleCard(
+      onTap: onTap,
+      padding: const EdgeInsets.fromLTRB(12, 12, 14, 12),
+      child: Row(
+        children: <Widget>[
+          SizedBox(
+            width: 28,
+            child: Text(
+              '${clan.posicion}',
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                fontSize: 15,
+                fontWeight: FontWeight.w700,
+                color: podio ? TempleColors.dorado : TempleColors.textoTenue,
+              ),
+            ),
+          ),
+          const SizedBox(width: 6),
+          EmblemaClan(kanji: clan.kanji, color: clan.color, size: 42),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: <Widget>[
+                Text(clan.nombre,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(fontSize: 14.5, fontWeight: FontWeight.w600, color: TempleColors.blancoLuna)),
+                if (clan.lema.isNotEmpty)
+                  Text(clan.lema,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(fontSize: 12, fontStyle: FontStyle.italic, color: TempleColors.textoSuave)),
+                const SizedBox(height: 4),
+                Text(
+                  '${clan.nMiembros}/50 guerreros · ${clan.ingreso == 'abierto' ? 'Abierto' : 'Con solicitud'}',
+                  style: const TextStyle(fontSize: 11.5, color: TempleColors.textoTenue),
+                ),
+              ],
+            ),
+          ),
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.end,
+            children: <Widget>[
+              Text(milesTemplo(clan.puntos),
+                  style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: TempleColors.violetaClaro)),
+              const Text('XP semana', style: TextStyle(fontSize: 10.5, color: TempleColors.textoTenue)),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// 53.5 VISTA DE UN CLAN (cabecera + muro)
+// ---------------------------------------------------------------------------
+
+/// Pantalla de un clan ajeno (o del propio, abierto desde otro sitio).
+class ClanPerfilScreen extends StatelessWidget {
+  const ClanPerfilScreen({super.key, required this.id});
+  final String id;
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: TempleColors.negro,
+      appBar: const BarraClan(titulo: 'Clan'),
+      body: FondoTemplo(child: VistaClan(id: id)),
+    );
+  }
+}
+
+class VistaClan extends StatefulWidget {
+  const VistaClan({super.key, required this.id, this.incrustada = false});
+
+  final String id;
+
+  /// Dentro de la pestaña «Mi clan»: el botón de publicar es el del Clan.
+  final bool incrustada;
+
+  @override
+  State<VistaClan> createState() => _VistaClanState();
+}
+
+class _VistaClanState extends State<VistaClan> {
+  final GlobalKey<_FeedClanState> _feed = GlobalKey<_FeedClanState>();
+  DetalleClan? _d;
+  String? _error;
+  bool _ocupado = false;
+
+  @override
+  void initState() {
+    super.initState();
+    ClanesRepo.instancia.muro.addListener(_alPublicar);
+    _cargar();
+  }
+
+  @override
+  void dispose() {
+    ClanesRepo.instancia.muro.removeListener(_alPublicar);
+    super.dispose();
+  }
+
+  void _alPublicar() => _feed.currentState?.recargar();
+
+  Future<void> _cargar() async {
+    try {
+      final DetalleClan? d = await ClanesRepo.instancia.detalle(widget.id);
+      if (!mounted) return;
+      setState(() {
+        _d = d;
+        _error = d == null ? 'Este clan ya no existe o no está disponible para ti.' : null;
+      });
+    } catch (e) {
+      if (mounted) setState(() => _error = SesionTemplo.mensajeDe(e));
+    }
+  }
+
+  Future<void> _hacer(Future<void> Function() accion, {String? listo}) async {
+    if (_ocupado) return;
+    setState(() => _ocupado = true);
+    try {
+      await accion();
+      if (listo != null && mounted) avisoClan(context, listo);
+      await _cargar();
+    } catch (e) {
+      if (mounted) avisoClan(context, SesionTemplo.mensajeDe(e), error: true);
+    } finally {
+      if (mounted) setState(() => _ocupado = false);
+    }
+  }
+
+  Future<void> _unirse(DetalleClan d) => _hacer(() async {
+        final String est = await ClanesRepo.instancia.unirse(d.id);
+        if (!mounted) return;
+        HapticFeedback.heavyImpact();
+        avisoClan(
+            context, est == 'activo' ? 'Ya eres parte de «${d.nombre}».' : 'Solicitud enviada a «${d.nombre}».');
+      });
+
+  Future<void> _salir(DetalleClan d) async {
+    final bool solo = d.activos.length <= 1;
+    final bool ok = await confirmarClan(
+      context,
+      titulo: solo ? 'Disolver el clan' : 'Salir del clan',
+      texto: solo
+          ? 'Eres el único miembro: si sales, «${d.nombre}» desaparece con su muro.'
+          : d.soyLider
+              ? 'El liderazgo pasará a un oficial o al miembro más antiguo.'
+              : 'Podrás volver a entrar cuando quieras, si hay sitio.',
+      accion: solo ? 'Disolver' : 'Salir',
+      peligro: true,
+    );
+    if (!ok) return;
+    await _hacer(() => ClanesRepo.instancia.salir(), listo: solo ? 'El clan se disolvió.' : 'Saliste del clan.');
+    if (mounted && !widget.incrustada) Navigator.of(context).maybePop();
+  }
+
+  void _opciones(DetalleClan d) {
+    mostrarOpcionesClan(context, <OpcionHoja>[
+      if (d.soyLider)
+        OpcionHoja(Icons.edit_outlined, 'Editar el clan', () async {
+          final bool? ok = await Navigator.of(context).push<bool>(
+            MaterialPageRoute<bool>(builder: (_) => CrearClanScreen(editar: d)),
+          );
+          if (ok == true) _cargar();
+        }),
+      if (d.soyMiembro)
+        OpcionHoja(Icons.group_outlined, 'Miembros', () => _miembros(d)),
+      if (d.soyMiembro)
+        OpcionHoja(Icons.logout_rounded, d.activos.length <= 1 ? 'Disolver el clan' : 'Salir del clan',
+            () => _salir(d),
+            peligro: true),
+      if (!d.soyLider)
+        OpcionHoja(Icons.flag_outlined, 'Reportar este clan', () {
+          mostrarReporte(context, tipo: 'clan', objetivo: d.id, persona: d.personaLider);
+        }, peligro: true),
+    ]);
+  }
+
+  Future<void> _miembros(DetalleClan d) async {
+    await Navigator.of(context).push(MaterialPageRoute<void>(
+      builder: (_) => MiembrosClanScreen(clanId: d.id),
+    ));
+    _cargar();
+  }
+
+  Future<void> _publicar(DetalleClan d) async {
+    final bool? hecho = await Navigator.of(context).push<bool>(MaterialPageRoute<bool>(
+      builder: (_) => PublicarScreen(clanId: d.id, clanNombre: d.nombre),
+    ));
+    if (hecho == true) _feed.currentState?.recargar();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final DetalleClan? d = _d;
+    if (d == null) {
+      return _error != null
+          ? Center(
+              child: VacioClan(
+                glifo: TempleGlyph.bandera,
+                titulo: 'No pudimos abrir el clan',
+                texto: _error!,
+                accion: 'Reintentar',
+                onAccion: _cargar,
+              ),
+            )
+          : const Center(
+              child: SizedBox(
+                  width: 22, height: 22, child: CircularProgressIndicator(strokeWidth: 1.8, color: TempleColors.violeta)),
+            );
+    }
+    final Widget muro = FeedClan(
+      key: _feed,
+      clanId: d.id,
+      alRecargar: _cargar,
+      cabecera: _CabeceraClan(
+        d: d,
+        ocupado: _ocupado,
+        onUnirse: () => _unirse(d),
+        onCancelar: () => _hacer(() => ClanesRepo.instancia.salir(), listo: 'Solicitud cancelada.'),
+        onOpciones: () => _opciones(d),
+        onMiembros: () => _miembros(d),
+        onRetoCreado: _cargar,
+      ),
+      vacio: VacioClan(
+        glifo: TempleGlyph.clan,
+        titulo: 'El muro está en silencio',
+        texto: d.soyMiembro
+            ? 'Publica el primer avance del clan: lo verán todos sus guerreros.'
+            : 'Aquí aparece lo que comparten sus guerreros.',
+        accion: d.soyMiembro && !widget.incrustada ? 'Publicar' : null,
+        onAccion: d.soyMiembro && !widget.incrustada ? () => _publicar(d) : null,
+      ),
+    );
+    if (widget.incrustada || !d.soyMiembro) return muro;
+    return Stack(
+      children: <Widget>[
+        muro,
+        Positioned(
+          right: TempleSpace.borde,
+          bottom: MediaQuery.paddingOf(context).bottom + 18,
+          child: FloatingActionButton(
+            onPressed: () => _publicar(d),
+            backgroundColor: TempleColors.violeta,
+            foregroundColor: Colors.white,
+            tooltip: 'Publicar en el muro',
+            child: const Icon(Icons.add_rounded),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _CabeceraClan extends StatelessWidget {
+  const _CabeceraClan({
+    required this.d,
+    required this.ocupado,
+    required this.onUnirse,
+    required this.onCancelar,
+    required this.onOpciones,
+    required this.onMiembros,
+    required this.onRetoCreado,
+  });
+
+  final DetalleClan d;
+  final bool ocupado;
+  final VoidCallback onUnirse;
+  final VoidCallback onCancelar;
+  final VoidCallback onOpciones;
+  final VoidCallback onMiembros;
+  final VoidCallback onRetoCreado;
+
+  @override
+  Widget build(BuildContext context) {
+    final List<MiembroClan> activos = d.activos;
+    final int solicitudes = d.mando ? d.solicitudes.length : 0;
+    final RetoSemana? reto = d.reto;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: <Widget>[
+        const SizedBox(height: 6),
+        Row(
+          children: <Widget>[
+            EmblemaClan(kanji: d.kanji, color: d.color, size: 66),
+            const SizedBox(width: 14),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: <Widget>[
+                  Text(d.nombre,
+                      style: const TextStyle(fontSize: 21, fontWeight: FontWeight.w600, color: TempleColors.blancoLuna)),
+                  if (d.lema.isNotEmpty) ...<Widget>[
+                    const SizedBox(height: 2),
+                    Text('«${d.lema}»',
+                        style: const TextStyle(
+                            fontSize: 12.5, fontStyle: FontStyle.italic, color: TempleColors.textoSuave)),
+                  ],
+                ],
+              ),
+            ),
+            if (d.soyMiembro || !d.soyLider)
+              IconButton(
+                tooltip: 'Opciones del clan',
+                onPressed: onOpciones,
+                icon: const Icon(Icons.more_horiz_rounded, color: TempleColors.textoSuave),
+              ),
+          ],
+        ),
+        const SizedBox(height: 12),
+        Wrap(
+          spacing: 6,
+          runSpacing: 6,
+          children: <Widget>[
+            _pastillaClan('${d.nMiembros}/50 guerreros', icono: Icons.group_outlined),
+            _pastillaClan(d.posicion > 0 ? 'Puesto ${d.posicion} esta semana' : 'Sin puesto aún',
+                icono: Icons.emoji_events_outlined, color: d.posicion == 1 ? TempleColors.dorado : null),
+            _pastillaClan('${milesTemplo(d.puntos)} XP', icono: Icons.bolt_rounded, color: TempleColors.violetaClaro),
+            _pastillaClan(d.ingreso == 'abierto' ? 'Abierto' : 'Con solicitud',
+                icono: d.ingreso == 'abierto' ? Icons.lock_open_rounded : Icons.lock_outline_rounded),
+          ],
+        ),
+        if (d.descripcion.isNotEmpty) ...<Widget>[
+          const SizedBox(height: 12),
+          Text(d.descripcion, style: const TextStyle(fontSize: 13.5, height: 1.5, color: TempleColors.texto)),
+        ],
+        const SizedBox(height: 14),
+
+        // -- Acciones ------------------------------------------------------
+        if (!d.soyMiembro && !d.pendiente)
+          Row(
+            children: <Widget>[
+              Expanded(
+                child: FilledButton(
+                  onPressed: ocupado || d.enOtroClan || d.nMiembros >= 50 ? null : onUnirse,
+                  style: _botonClanPrincipal(),
+                  child: Text(
+                    d.enOtroClan
+                        ? 'Ya perteneces a otro clan'
+                        : d.nMiembros >= 50
+                            ? 'Clan completo'
+                            : d.ingreso == 'abierto'
+                                ? 'Unirme al clan'
+                                : 'Pedir entrar',
+                    style: const TextStyle(fontWeight: FontWeight.w600),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        if (d.pendiente)
+          Row(
+            children: <Widget>[
+              const Expanded(
+                child: Text('Tu solicitud espera respuesta.',
+                    style: TextStyle(fontSize: 13, color: TempleColors.textoSuave)),
+              ),
+              TextButton(
+                onPressed: ocupado ? null : onCancelar,
+                child: const Text('Cancelar solicitud', style: TextStyle(color: TempleColors.textoSuave)),
+              ),
+            ],
+          ),
+        if (d.soyMiembro)
+          Row(
+            children: <Widget>[
+              Expanded(
+                child: OutlinedButton.icon(
+                  onPressed: onMiembros,
+                  style: _botonClanSecundario(),
+                  icon: Badge(
+                    isLabelVisible: solicitudes > 0,
+                    label: Text('$solicitudes'),
+                    backgroundColor: TempleColors.violeta,
+                    child: const Icon(Icons.group_outlined, size: 18),
+                  ),
+                  label: Text(solicitudes > 0 ? 'Miembros y solicitudes' : 'Miembros'),
+                ),
+              ),
+            ],
+          ),
+
+        // -- Reto del clan -------------------------------------------------
+        if (d.soyMiembro) ...<Widget>[
+          const SizedBox(height: 16),
+          if (reto != null)
+            TarjetaRetoSemana(reto: reto, onCambio: onRetoCreado)
+          else if (d.mando)
+            TempleCard(
+              child: Row(
+                children: <Widget>[
+                  const TempleIcon(TempleGlyph.espadas, size: 22, color: TempleColors.violetaClaro),
+                  const SizedBox(width: 12),
+                  const Expanded(
+                    child: Text('Tu clan aún no tiene reto esta semana.',
+                        style: TextStyle(fontSize: 13, color: TempleColors.texto)),
+                  ),
+                  TextButton(
+                    onPressed: () async {
+                      final bool ok = await proponerRetoClan(context);
+                      if (ok) onRetoCreado();
+                    },
+                    child: const Text('Proponer', style: TextStyle(color: TempleColors.violetaClaro)),
+                  ),
+                ],
+              ),
+            )
+          else
+            const Text('Quien lidera el clan aún no propone el reto de esta semana.',
+                style: TextStyle(fontSize: 12.5, color: TempleColors.textoTenue)),
+        ],
+
+        // -- Tabla de la semana -------------------------------------------
+        const SizedBox(height: 6),
+        EtiquetaSeccion(
+          'Esta semana',
+          accion: activos.length > 5
+              ? TextButton(
+                  onPressed: onMiembros,
+                  child: const Text('Ver todos', style: TextStyle(color: TempleColors.violetaClaro, fontSize: 12.5)),
+                )
+              : null,
+        ),
+        TempleCard(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+          child: Column(
+            children: <Widget>[
+              for (int i = 0; i < activos.length && i < 5; i++)
+                _FilaMiembroSemana(puesto: i + 1, m: activos[i]),
+            ],
+          ),
+        ),
+        const SizedBox(height: 6),
+        const EtiquetaSeccion('Muro del clan'),
+        if (!d.soyMiembro)
+          const Padding(
+            padding: EdgeInsets.only(bottom: 8),
+            child: Text('El muro lo ve quien visita el clan. Solo sus guerreros pueden publicar.',
+                style: TextStyle(fontSize: 12, color: TempleColors.textoTenue)),
+          ),
+      ],
+    );
+  }
+}
+
+class _FilaMiembroSemana extends StatelessWidget {
+  const _FilaMiembroSemana({required this.puesto, required this.m});
+  final int puesto;
+  final MiembroClan m;
+
+  @override
+  Widget build(BuildContext context) {
+    return InkWell(
+      borderRadius: BorderRadius.circular(TempleRadius.chip),
+      onTap: () => Navigator.of(context).push(MaterialPageRoute<void>(
+        builder: (_) => PerfilClanScreen(id: m.persona.id),
+      )),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 7),
+        child: Row(
+          children: <Widget>[
+            SizedBox(
+              width: 22,
+              child: Text('$puesto',
+                  style: TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w700,
+                      color: puesto == 1 && m.xp > 0 ? TempleColors.dorado : TempleColors.textoTenue)),
+            ),
+            ClanAvatar(persona: m.persona, size: 32),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: <Widget>[
+                  Text(m.persona.nombre,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                          fontSize: 13.5,
+                          fontWeight: m.esYo ? FontWeight.w700 : FontWeight.w500,
+                          color: TempleColors.blancoLuna)),
+                  Text('${m.rango} · ${m.sesiones} ${m.sesiones == 1 ? 'sesión' : 'sesiones'} · ${m.minutos} min',
+                      style: const TextStyle(fontSize: 11, color: TempleColors.textoTenue)),
+                ],
+              ),
+            ),
+            Text('${milesTemplo(m.xp)} XP',
+                style: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w600, color: TempleColors.violetaClaro)),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// 53.6 MIEMBROS
+// ---------------------------------------------------------------------------
+
+class MiembrosClanScreen extends StatefulWidget {
+  const MiembrosClanScreen({super.key, required this.clanId});
+  final String clanId;
+
+  @override
+  State<MiembrosClanScreen> createState() => _MiembrosClanScreenState();
+}
+
+class _MiembrosClanScreenState extends State<MiembrosClanScreen> {
+  DetalleClan? _d;
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    _cargar();
+  }
+
+  Future<void> _cargar() async {
+    try {
+      final DetalleClan? d = await ClanesRepo.instancia.detalle(widget.clanId);
+      if (mounted) {
+        setState(() {
+          _d = d;
+          _error = d == null ? 'Este clan ya no existe.' : null;
+        });
+      }
+    } catch (e) {
+      if (mounted) setState(() => _error = SesionTemplo.mensajeDe(e));
+    }
+  }
+
+  Future<void> _hacer(Future<void> Function() a, String listo) async {
+    try {
+      await a();
+      if (mounted) avisoClan(context, listo);
+    } catch (e) {
+      if (mounted) avisoClan(context, SesionTemplo.mensajeDe(e), error: true);
+    }
+    await _cargar();
+  }
+
+  void _opciones(DetalleClan d, MiembroClan m) {
+    final bool puedeExpulsar = !m.esYo && (d.soyLider || (d.miRol == 'oficial' && m.rol == 'miembro'));
+    mostrarOpcionesClan(context, <OpcionHoja>[
+      OpcionHoja(Icons.person_outline_rounded, 'Ver perfil', () {
+        Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => PerfilClanScreen(id: m.persona.id)));
+      }),
+      if (d.soyLider && !m.esYo && m.rol == 'miembro')
+        OpcionHoja(Icons.shield_outlined, 'Nombrar oficial',
+            () => _hacer(() => ClanesRepo.instancia.cambiarRol(m.persona.id, 'oficial'), '${m.persona.nombre} ahora es oficial.')),
+      if (d.soyLider && !m.esYo && m.rol == 'oficial')
+        OpcionHoja(Icons.remove_moderator_outlined, 'Quitar de oficial',
+            () => _hacer(() => ClanesRepo.instancia.cambiarRol(m.persona.id, 'miembro'), 'Listo.')),
+      if (d.soyLider && !m.esYo)
+        OpcionHoja(Icons.workspace_premium_outlined, 'Pasarle el liderazgo', () async {
+          final bool ok = await confirmarClan(
+            context,
+            titulo: 'Pasar el liderazgo',
+            texto: '${m.persona.nombre} liderará «${d.nombre}» y tú quedarás como oficial.',
+            accion: 'Pasar',
+          );
+          if (ok) await _hacer(() => ClanesRepo.instancia.cambiarRol(m.persona.id, 'lider'), 'Nuevo líder: ${m.persona.nombre}.');
+        }),
+      if (puedeExpulsar)
+        OpcionHoja(Icons.person_remove_outlined, 'Expulsar del clan', () async {
+          final bool ok = await confirmarClan(
+            context,
+            titulo: 'Expulsar a ${m.persona.nombre}',
+            texto: 'Dejará de ser parte del clan. Podrá pedir entrar de nuevo.',
+            accion: 'Expulsar',
+            peligro: true,
+          );
+          if (ok) await _hacer(() => ClanesRepo.instancia.expulsar(m.persona.id), 'Expulsado del clan.');
+        }, peligro: true),
+    ]);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final DetalleClan? d = _d;
+    return Scaffold(
+      backgroundColor: TempleColors.negro,
+      appBar: BarraClan(titulo: 'Miembros', subtitulo: d?.nombre),
+      body: FondoTemplo(
+        child: d == null
+            ? Center(
+                child: _error != null
+                    ? VacioClan(
+                        glifo: TempleGlyph.bandera,
+                        titulo: 'No pudimos cargar el clan',
+                        texto: _error!,
+                        accion: 'Reintentar',
+                        onAccion: _cargar)
+                    : const SizedBox(
+                        width: 22,
+                        height: 22,
+                        child: CircularProgressIndicator(strokeWidth: 1.8, color: TempleColors.violeta)),
+              )
+            : RefreshIndicator(
+                color: TempleColors.violeta,
+                backgroundColor: TempleColors.superficieAlta,
+                onRefresh: _cargar,
+                child: ListView(
+                  physics: const AlwaysScrollableScrollPhysics(),
+                  padding: const EdgeInsets.fromLTRB(TempleSpace.borde, 8, TempleSpace.borde, 40),
+                  children: <Widget>[
+                    if (d.mando && d.solicitudes.isNotEmpty) ...<Widget>[
+                      EtiquetaSeccion('Solicitudes (${d.solicitudes.length})'),
+                      for (final MiembroClan m in d.solicitudes)
+                        Padding(
+                          padding: const EdgeInsets.only(bottom: 8),
+                          child: TempleCard(
+                            padding: const EdgeInsets.fromLTRB(12, 10, 8, 10),
+                            child: Row(
+                              children: <Widget>[
+                                ClanAvatar(
+                                  persona: m.persona,
+                                  size: 38,
+                                  onTap: () => Navigator.of(context).push(MaterialPageRoute<void>(
+                                      builder: (_) => PerfilClanScreen(id: m.persona.id))),
+                                ),
+                                const SizedBox(width: 10),
+                                Expanded(
+                                  child: Column(
+                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                    children: <Widget>[
+                                      Text(m.persona.nombre,
+                                          maxLines: 1,
+                                          overflow: TextOverflow.ellipsis,
+                                          style: const TextStyle(
+                                              fontSize: 14, fontWeight: FontWeight.w600, color: TempleColors.blancoLuna)),
+                                      Text('@${m.persona.usuario} · nivel ${m.persona.nivel}',
+                                          style: const TextStyle(fontSize: 11.5, color: TempleColors.textoTenue)),
+                                    ],
+                                  ),
+                                ),
+                                IconButton(
+                                  tooltip: 'Rechazar',
+                                  onPressed: () => _hacer(
+                                      () => ClanesRepo.instancia.responder(m.persona.id, false), 'Solicitud rechazada.'),
+                                  icon: const Icon(Icons.close_rounded, color: TempleColors.textoSuave),
+                                ),
+                                FilledButton(
+                                  onPressed: () => _hacer(() => ClanesRepo.instancia.responder(m.persona.id, true),
+                                      '${m.persona.nombre} entró al clan.'),
+                                  style: _botonClanPrincipal(),
+                                  child: const Text('Aceptar'),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                    ],
+                    EtiquetaSeccion('Guerreros (${d.activos.length}/50)'),
+                    TempleCard(
+                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                      child: Column(
+                        children: <Widget>[
+                          for (int i = 0; i < d.activos.length; i++)
+                            InkWell(
+                              borderRadius: BorderRadius.circular(TempleRadius.chip),
+                              onTap: () => _opciones(d, d.activos[i]),
+                              child: _FilaMiembroSemanaContenido(puesto: i + 1, m: d.activos[i]),
+                            ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 10),
+                    const Text(
+                      'La tabla se ordena por la experiencia ganada esta semana y se reinicia cada lunes.',
+                      style: TextStyle(fontSize: 11.5, color: TempleColors.textoTenue),
+                    ),
+                  ],
+                ),
+              ),
+      ),
+    );
+  }
+}
+
+class _FilaMiembroSemanaContenido extends StatelessWidget {
+  const _FilaMiembroSemanaContenido({required this.puesto, required this.m});
+  final int puesto;
+  final MiembroClan m;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 8),
+      child: Row(
+        children: <Widget>[
+          SizedBox(
+            width: 22,
+            child: Text('$puesto',
+                style: TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w700,
+                    color: puesto == 1 && m.xp > 0 ? TempleColors.dorado : TempleColors.textoTenue)),
+          ),
+          ClanAvatar(persona: m.persona, size: 34),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: <Widget>[
+                Row(
+                  children: <Widget>[
+                    Flexible(
+                      child: Text(m.persona.nombre,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                              fontSize: 13.5,
+                              fontWeight: m.esYo ? FontWeight.w700 : FontWeight.w500,
+                              color: TempleColors.blancoLuna)),
+                    ),
+                    if (m.rol != 'miembro') ...<Widget>[
+                      const SizedBox(width: 6),
+                      _pastillaClan(m.rango, color: m.rol == 'lider' ? TempleColors.dorado : TempleColors.violetaClaro),
+                    ],
+                  ],
+                ),
+                Text('${m.sesiones} ${m.sesiones == 1 ? 'sesión' : 'sesiones'} · ${m.minutos} min esta semana',
+                    style: const TextStyle(fontSize: 11, color: TempleColors.textoTenue)),
+              ],
+            ),
+          ),
+          Text('${milesTemplo(m.xp)} XP',
+              style: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w600, color: TempleColors.violetaClaro)),
+          const SizedBox(width: 2),
+          const Icon(Icons.more_vert_rounded, size: 18, color: TempleColors.textoTenue),
+        ],
+      ),
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// 53.7 FUNDAR O EDITAR UN CLAN
+// ---------------------------------------------------------------------------
+
+class CrearClanScreen extends StatefulWidget {
+  const CrearClanScreen({super.key, this.editar});
+  final DetalleClan? editar;
+
+  @override
+  State<CrearClanScreen> createState() => _CrearClanScreenState();
+}
+
+class _CrearClanScreenState extends State<CrearClanScreen> {
+  late final TextEditingController _nombre = TextEditingController(text: widget.editar?.nombre ?? '');
+  late final TextEditingController _lema = TextEditingController(text: widget.editar?.lema ?? '');
+  late final TextEditingController _descripcion = TextEditingController(text: widget.editar?.descripcion ?? '');
+  late String _kanji = widget.editar?.kanji ?? kKanjisClan.first;
+  late int _color = widget.editar?.color ?? 0;
+  late String _ingreso = widget.editar?.ingreso ?? 'abierto';
+  bool _guardando = false;
+  String? _error;
+
+  bool get _editando => widget.editar != null;
+
+  @override
+  void initState() {
+    super.initState();
+    _nombre.addListener(() => setState(() {}));
+  }
+
+  @override
+  void dispose() {
+    _nombre.dispose();
+    _lema.dispose();
+    _descripcion.dispose();
+    super.dispose();
+  }
+
+  Future<void> _guardar() async {
+    final String n = _nombre.text.trim();
+    if (!_editando && (n.length < 3 || n.length > 24)) {
+      setState(() => _error = 'El nombre debe tener entre 3 y 24 caracteres.');
+      return;
+    }
+    FocusScope.of(context).unfocus();
+    setState(() {
+      _guardando = true;
+      _error = null;
+    });
+    try {
+      if (_editando) {
+        await ClanesRepo.instancia.editar(
+          lema: _lema.text,
+          descripcion: _descripcion.text,
+          kanji: _kanji,
+          color: _color,
+          ingreso: _ingreso,
+        );
+      } else {
+        await ClanesRepo.instancia.crear(
+          nombre: n,
+          lema: _lema.text,
+          descripcion: _descripcion.text,
+          kanji: _kanji,
+          color: _color,
+          ingreso: _ingreso,
+        );
+      }
+      if (!mounted) return;
+      HapticFeedback.heavyImpact();
+      sonar(SonidoTemplo.desbloqueo);
+      Navigator.of(context).pop(true);
+    } catch (e) {
+      if (mounted) {
+        HapticFeedback.vibrate();
+        setState(() {
+          _guardando = false;
+          _error = SesionTemplo.mensajeDe(e);
+        });
+      }
+    }
+  }
+
+  InputDecoration _decoracion(String etiqueta, String pista) => InputDecoration(
+        labelText: etiqueta,
+        hintText: pista,
+        labelStyle: const TextStyle(color: TempleColors.textoSuave),
+        hintStyle: const TextStyle(color: TempleColors.textoTenue),
+        filled: true,
+        fillColor: TempleColors.superficie,
+        counterStyle: const TextStyle(color: TempleColors.textoTenue, fontSize: 11),
+        border: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(TempleRadius.campo),
+          borderSide: const BorderSide(color: TempleColors.borde),
+        ),
+        enabledBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(TempleRadius.campo),
+          borderSide: const BorderSide(color: TempleColors.borde),
+        ),
+        focusedBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(TempleRadius.campo),
+          borderSide: const BorderSide(color: TempleColors.violeta),
+        ),
+      );
+
+  Widget _opcionIngreso(String valor, String titulo, String texto, IconData icono) {
+    final bool sel = _ingreso == valor;
+    return GestureDetector(
+      onTap: () => setState(() => _ingreso = valor),
+      child: AnimatedContainer(
+        duration: TempleMotion.rapido,
+        padding: const EdgeInsets.all(12),
+        decoration: BoxDecoration(
+          color: sel ? TempleColors.violeta.withValues(alpha: 0.14) : TempleColors.superficie,
+          borderRadius: BorderRadius.circular(TempleRadius.campo),
+          border: Border.all(color: sel ? TempleColors.violeta : TempleColors.borde),
+        ),
+        child: Row(
+          children: <Widget>[
+            Icon(icono, size: 20, color: sel ? TempleColors.violetaClaro : TempleColors.textoTenue),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: <Widget>[
+                  Text(titulo,
+                      style: const TextStyle(fontSize: 13.5, fontWeight: FontWeight.w600, color: TempleColors.texto)),
+                  Text(texto, style: const TextStyle(fontSize: 11.5, color: TempleColors.textoSuave)),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final String vista = _nombre.text.trim().isEmpty ? 'Tu clan' : _nombre.text.trim();
+    return PopScope(
+      canPop: !_guardando,
+      child: Scaffold(
+        backgroundColor: TempleColors.negro,
+        appBar: BarraClan(titulo: _editando ? 'Editar el clan' : 'Fundar un clan', pase: false),
+        body: FondoTemplo(
+          child: ListView(
+            padding: const EdgeInsets.fromLTRB(TempleSpace.borde, 10, TempleSpace.borde, 40),
+            children: <Widget>[
+              Center(child: EmblemaClan(kanji: _kanji, color: _color, size: 88)),
+              const SizedBox(height: 10),
+              Center(
+                child: Text(vista,
+                    style: const TextStyle(fontSize: 19, fontWeight: FontWeight.w600, color: TempleColors.blancoLuna)),
+              ),
+              const SizedBox(height: 22),
+              TextField(
+                controller: _nombre,
+                enabled: !_editando && !_guardando,
+                maxLength: 24,
+                textCapitalization: TextCapitalization.words,
+                style: const TextStyle(color: TempleColors.texto),
+                decoration: _decoracion('Nombre', 'Los Lobos del Alba'),
+              ),
+              if (_editando)
+                const Padding(
+                  padding: EdgeInsets.only(bottom: 8),
+                  child: Text('El nombre no se puede cambiar.',
+                      style: TextStyle(fontSize: 11.5, color: TempleColors.textoTenue)),
+                ),
+              const SizedBox(height: 4),
+              TextField(
+                controller: _lema,
+                enabled: !_guardando,
+                maxLength: 60,
+                textCapitalization: TextCapitalization.sentences,
+                style: const TextStyle(color: TempleColors.texto),
+                decoration: _decoracion('Lema (opcional)', 'Nadie se queda atrás'),
+              ),
+              const SizedBox(height: 4),
+              TextField(
+                controller: _descripcion,
+                enabled: !_guardando,
+                maxLength: 300,
+                minLines: 2,
+                maxLines: 5,
+                textCapitalization: TextCapitalization.sentences,
+                style: const TextStyle(color: TempleColors.texto),
+                decoration: _decoracion('Descripción (opcional)', 'Qué entrenan, cuándo, qué buscan…'),
+              ),
+              const SizedBox(height: 8),
+              const EtiquetaSeccion('Emblema'),
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: <Widget>[
+                  for (int i = 0; i < kKanjisClan.length; i++)
+                    Tooltip(
+                      message: kSentidoKanjiClan[i],
+                      child: GestureDetector(
+                        onTap: () {
+                          HapticFeedback.selectionClick();
+                          setState(() => _kanji = kKanjisClan[i]);
+                        },
+                        child: AnimatedContainer(
+                          duration: TempleMotion.rapido,
+                          width: 46,
+                          height: 46,
+                          alignment: Alignment.center,
+                          decoration: BoxDecoration(
+                            color: _kanji == kKanjisClan[i]
+                                ? TempleColors.violeta.withValues(alpha: 0.22)
+                                : TempleColors.superficie,
+                            borderRadius: BorderRadius.circular(TempleRadius.chip),
+                            border: Border.all(
+                              color: _kanji == kKanjisClan[i] ? TempleColors.violeta : TempleColors.borde,
+                            ),
+                          ),
+                          child: Text(kKanjisClan[i],
+                              style: const TextStyle(fontSize: 21, color: TempleColors.blancoLuna, height: 1)),
+                        ),
+                      ),
+                    ),
+                ],
+              ),
+              const SizedBox(height: 14),
+              Wrap(
+                spacing: 10,
+                runSpacing: 10,
+                children: <Widget>[
+                  for (int i = 0; i < kColoresClan.length; i++)
+                    GestureDetector(
+                      onTap: () {
+                        HapticFeedback.selectionClick();
+                        setState(() => _color = i);
+                      },
+                      child: AnimatedContainer(
+                        duration: TempleMotion.rapido,
+                        width: 34,
+                        height: 34,
+                        decoration: BoxDecoration(
+                          shape: BoxShape.circle,
+                          color: kColoresClan[i],
+                          border: Border.all(
+                            color: _color == i ? TempleColors.blancoLuna : Colors.transparent,
+                            width: 2.4,
+                          ),
+                        ),
+                      ),
+                    ),
+                ],
+              ),
+              const SizedBox(height: 8),
+              const EtiquetaSeccion('Quién puede entrar'),
+              _opcionIngreso('abierto', 'Abierto', 'Cualquier guerrero entra al instante.', Icons.lock_open_rounded),
+              const SizedBox(height: 8),
+              _opcionIngreso('solicitud', 'Con solicitud', 'Tú o tus oficiales aprueban a cada uno.',
+                  Icons.lock_outline_rounded),
+              const SizedBox(height: 16),
+              const Text(
+                'El nombre, el lema y la descripción siguen el reglamento del Clan. Un clan que lo incumpla se elimina.',
+                style: TextStyle(fontSize: 11.5, height: 1.45, color: TempleColors.textoTenue),
+              ),
+              if (_error != null) ...<Widget>[
+                const SizedBox(height: 12),
+                Text(_error!, style: const TextStyle(fontSize: 13, color: TempleColors.error)),
+              ],
+              const SizedBox(height: 18),
+              DojoPrimaryButton(
+                texto: _editando ? 'Guardar cambios' : 'Fundar el clan',
+                cargando: _guardando,
+                onPressed: () {
+                  if (!_guardando) _guardar();
+                },
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+// ===========================================================================
+// 54. RETOS SEMANALES — del templo y del clan
+//
+// Cada lunes hay tres retos del templo (rotan entre seis) y, si tu clan lo
+// propone, uno del clan que se cumple entre todos. El progreso sale de las
+// cifras de tus sesiones (sesiones, días, minutos, series y kilos) que el
+// teléfono sube al cerrar cada una. El premio es mon.
+// ===========================================================================
+
+class RetoSemana {
+  const RetoSemana({
+    required this.id,
+    required this.titulo,
+    required this.clase,
+    required this.meta,
+    required this.premio,
+    required this.progreso,
+    required this.unido,
+    required this.cobrado,
+    required this.participantes,
+    required this.mio,
+    required this.esClan,
+  });
+
+  final String id;
+  final String titulo;
+  final String clase;
+  final double meta;
+  final int premio;
+  final double progreso;
+  final bool unido;
+  final bool cobrado;
+  final int participantes;
+
+  /// En los retos del clan: lo que aportaste tú.
+  final double mio;
+  final bool esClan;
+
+  double get fraccion => meta <= 0 ? 0 : (progreso / meta).clamp(0.0, 1.0);
+  bool get cumplido => progreso >= meta;
+  bool get puedoCobrar => !cobrado && cumplido && (esClan ? mio > 0 : unido);
+
+  String get unidad => unidadReto(clase);
+
+  factory RetoSemana.desde(Map<String, dynamic> m, {bool esClan = false}) => RetoSemana(
+        id: m['id'].toString(),
+        titulo: (m['titulo'] ?? '').toString(),
+        clase: (m['clase'] ?? 'sesiones').toString(),
+        meta: _numClan(m['meta']),
+        premio: _entClan(m['premio']),
+        progreso: _numClan(m['progreso']),
+        unido: esClan || m['unido'] == true,
+        cobrado: m['cobrado'] == true,
+        participantes: _entClan(m['participantes']),
+        mio: _numClan(m['mio']),
+        esClan: esClan,
+      );
+}
+
+String unidadReto(String clase) => switch (clase) {
+      'sesiones' => 'sesiones',
+      'dias' => 'días',
+      'minutos' => 'min',
+      'series' => 'series',
+      'volumen' => 'kg',
+      _ => '',
+    };
+
+TempleGlyph glifoReto(String clase) => switch (clase) {
+      'sesiones' => TempleGlyph.torii,
+      'dias' => TempleGlyph.luna,
+      'minutos' => TempleGlyph.reloj,
+      'series' => TempleGlyph.lista,
+      'volumen' => TempleGlyph.mancuerna,
+      _ => TempleGlyph.espadas,
+    };
+
+class EstadoRetos {
+  const EstadoRetos({
+    required this.semana,
+    required this.templo,
+    required this.clan,
+    required this.clanId,
+    required this.clanNombre,
+    required this.puedoCrear,
+  });
+
+  final DateTime semana;
+  final List<RetoSemana> templo;
+  final RetoSemana? clan;
+  final String? clanId;
+  final String? clanNombre;
+  final bool puedoCrear;
+
+  factory EstadoRetos.desde(Map<String, dynamic> m) {
+    final Object? t = m['templo'];
+    final Object? c = m['clan'];
+    return EstadoRetos(
+      semana: DateTime.tryParse(m['semana']?.toString() ?? '') ?? lunesDe(DateTime.now()),
+      templo: <RetoSemana>[
+        if (t is List)
+          for (final Object? x in t)
+            if (x is Map) RetoSemana.desde(Map<String, dynamic>.from(x)),
+      ],
+      clan: c is Map ? RetoSemana.desde(Map<String, dynamic>.from(c), esClan: true) : null,
+      clanId: m['clan_id']?.toString(),
+      clanNombre: m['clan_nombre']?.toString(),
+      puedoCrear: m['puedo_crear'] == true,
+    );
+  }
+}
+
+class FilaTablaReto {
+  const FilaTablaReto({required this.persona, required this.progreso, required this.esYo});
+  final ClanPersona persona;
+  final double progreso;
+  final bool esYo;
+}
+
+class RetosRepo {
+  RetosRepo._();
+  static final RetosRepo instancia = RetosRepo._();
+
+  DateTime? _ultimoAporte;
+
+  Future<EstadoRetos> estado() async {
+    final Object? r = await supa.rpc('retos_semana', params: <String, dynamic>{'p_hoy': hoyIsoTemplo()});
+    if (r is! Map) throw const AuthFailure('No pudimos cargar los retos.');
+    return EstadoRetos.desde(Map<String, dynamic>.from(r));
+  }
+
+  Future<void> unirse(String id) async {
+    await supa.rpc('reto_unirse', params: <String, dynamic>{'r': id, 'p_hoy': hoyIsoTemplo()});
+  }
+
+  Future<List<FilaTablaReto>> tabla(String id) async {
+    final Object? r = await supa.rpc('reto_tabla', params: <String, dynamic>{'r': id});
+    return <FilaTablaReto>[
+      if (r is List)
+        for (final Object? x in r)
+          if (x is Map)
+            FilaTablaReto(
+              persona: ClanPersona.desdeMapa(Map<String, dynamic>.from(x)),
+              progreso: _numClan(x['progreso']),
+              esYo: x['es_yo'] == true,
+            ),
+    ];
+  }
+
+  Future<int> cobrar(String id) async {
+    final Object? r = await supa.rpc('reto_cobrar', params: <String, dynamic>{'r': id, 'p_hoy': hoyIsoTemplo()});
+    return r is num ? r.toInt() : 0;
+  }
+
+  Future<void> crearRetoClan(String clase, int meta) async {
+    await supa.rpc('clan_crear_reto',
+        params: <String, dynamic>{'p_clase': clase, 'p_meta': meta, 'p_hoy': hoyIsoTemplo()});
+  }
+
+  /// Sube las cifras de las sesiones de los últimos siete días. Es idempotente
+  /// (el servidor ignora las que ya tiene) y no hace nada sin sesión.
+  Future<void> aportar(String usuario, {bool forzar = false}) async {
+    if (SesionTemplo.instancia.uid == null) return;
+    final DateTime ahora = DateTime.now();
+    if (!forzar && _ultimoAporte != null && ahora.difference(_ultimoAporte!).inMinutes < 3) return;
+    _ultimoAporte = ahora;
+    final DateTime desde = ahora.subtract(const Duration(days: 7));
+    final List<Sesion> ss = AlmacenTemplo.instancia
+        .de(usuario)
+        .completadas
+        .where((Sesion s) => (s.fin ?? s.inicio).isAfter(desde))
+        .toList()
+      ..sort((Sesion a, Sesion b) => (b.fin ?? b.inicio).compareTo(a.fin ?? a.inicio));
+    if (ss.isEmpty) return;
+    String dia(DateTime t) =>
+        '${t.year.toString().padLeft(4, '0')}-${t.month.toString().padLeft(2, '0')}-${t.day.toString().padLeft(2, '0')}';
+    final List<Map<String, dynamic>> lista = <Map<String, dynamic>>[
+      for (final Sesion s in ss.take(20))
+        <String, dynamic>{
+          'id': s.id,
+          'dia': dia(s.fin ?? s.inicio),
+          'volumen': s.volumenTotal.round(),
+          'series': s.seriesEfectivas,
+          'minutos': s.minutos.clamp(0, 240),
+          'xp': ReglasXp.deSesion(s).values.fold<double>(0, (double a, double b) => a + b).round(),
+        },
+    ];
+    try {
+      await supa.rpc('aportar_sesiones', params: <String, dynamic>{'lista': lista});
+    } catch (e) {
+      _ultimoAporte = null;
+      debugPrint('Retos: no se subieron las sesiones: $e');
+    }
+  }
+}
+
+/// Cobra un reto cumplido: el servidor confirma y la app suma el mon.
+Future<void> cobrarRetoTemplo(BuildContext context, RetoSemana r) async {
+  final String? usuario = SesionTemplo.instancia.actual?.usuario;
+  if (usuario == null) return;
+  try {
+    final int mon = await RetosRepo.instancia.cobrar(r.id);
+    if (!context.mounted) return;
+    if (mon <= 0) {
+      avisoClan(context, 'Este reto aún no está cumplido o ya lo cobraste.');
+      return;
+    }
+    MonedaTemplo.instancia.ganar(usuario, mon, 'Reto: ${r.titulo}');
+    NubeTemplo.instancia.marcarCambio();
+    await mostrarCelebracion(
+      context,
+      titulo: 'Reto cumplido',
+      nombre: r.titulo,
+      detalle: '+$mon mon para tu Taller',
+      color: TempleColors.dorado,
+      vista: TempleIcon(glifoReto(r.clase), size: 64, color: TempleColors.dorado),
+      sonido: SonidoTemplo.mon,
+    );
+  } catch (e) {
+    if (context.mounted) avisoClan(context, SesionTemplo.mensajeDe(e), error: true);
+  }
+}
+
+class TarjetaRetoSemana extends StatefulWidget {
+  const TarjetaRetoSemana({super.key, required this.reto, required this.onCambio});
+  final RetoSemana reto;
+  final VoidCallback onCambio;
+
+  @override
+  State<TarjetaRetoSemana> createState() => _TarjetaRetoSemanaState();
+}
+
+class _TarjetaRetoSemanaState extends State<TarjetaRetoSemana> {
+  bool _ocupado = false;
+
+  RetoSemana get _r => widget.reto;
+
+  Future<void> _unirse() async {
+    setState(() => _ocupado = true);
+    try {
+      await RetosRepo.instancia.unirse(_r.id);
+      HapticFeedback.mediumImpact();
+      widget.onCambio();
+    } catch (e) {
+      if (mounted) avisoClan(context, SesionTemplo.mensajeDe(e), error: true);
+    } finally {
+      if (mounted) setState(() => _ocupado = false);
+    }
+  }
+
+  Future<void> _cobrar() async {
+    setState(() => _ocupado = true);
+    await cobrarRetoTemplo(context, _r);
+    if (mounted) setState(() => _ocupado = false);
+    widget.onCambio();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final RetoSemana r = _r;
+    final Color acento = r.cobrado || r.cumplido ? TempleColors.dorado : TempleColors.violetaClaro;
+    Widget accion;
+    if (r.cobrado) {
+      accion = _pastillaClan('Cumplido', icono: Icons.check_rounded, color: TempleColors.dorado);
+    } else if (r.puedoCobrar) {
+      accion = FilledButton(
+        onPressed: _ocupado ? null : _cobrar,
+        style: FilledButton.styleFrom(
+          backgroundColor: TempleColors.dorado,
+          foregroundColor: TempleColors.negro,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(999)),
+        ),
+        child: Text('Cobrar ${r.premio} mon', style: const TextStyle(fontWeight: FontWeight.w700)),
+      );
+    } else if (!r.unido) {
+      accion = FilledButton(
+        onPressed: _ocupado ? null : _unirse,
+        style: _botonClanPrincipal(),
+        child: const Text('Aceptar el reto'),
+      );
+    } else if (!r.esClan) {
+      accion = TextButton(
+        onPressed: () => Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => TablaRetoScreen(reto: r))),
+        child: const Text('Ver tabla', style: TextStyle(color: TempleColors.violetaClaro)),
+      );
+    } else {
+      accion = const SizedBox.shrink();
+    }
+    return TempleCard(
+      destacada: r.cumplido && !r.cobrado,
+      onTap: r.esClan || !r.unido
+          ? null
+          : () => Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => TablaRetoScreen(reto: r))),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: <Widget>[
+          Row(
+            children: <Widget>[
+              TempleIcon(glifoReto(r.clase), size: 22, color: acento),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Text(r.titulo,
+                    style: const TextStyle(fontSize: 14.5, fontWeight: FontWeight.w600, color: TempleColors.blancoLuna)),
+              ),
+              Text('+${r.premio} mon',
+                  style: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w600, color: TempleColors.dorado)),
+            ],
+          ),
+          const SizedBox(height: 12),
+          ClipRRect(
+            borderRadius: BorderRadius.circular(999),
+            child: LinearProgressIndicator(
+              value: r.fraccion,
+              minHeight: 7,
+              backgroundColor: TempleColors.borde,
+              valueColor: AlwaysStoppedAnimation<Color>(acento),
+            ),
+          ),
+          const SizedBox(height: 8),
+          Row(
+            children: <Widget>[
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: <Widget>[
+                    Text('${milesTemplo(r.progreso)} de ${milesTemplo(r.meta)} ${r.unidad}',
+                        style: const TextStyle(fontSize: 12.5, color: TempleColors.texto)),
+                    Text(
+                      r.esClan
+                          ? 'Tu aporte: ${milesTemplo(r.mio)} ${r.unidad}'
+                          : r.participantes == 1
+                              ? '1 guerrero lo aceptó'
+                              : '${r.participantes} guerreros lo aceptaron',
+                      style: const TextStyle(fontSize: 11, color: TempleColors.textoTenue),
+                    ),
+                  ],
+                ),
+              ),
+              accion,
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class PestanaRetos extends StatefulWidget {
+  const PestanaRetos({super.key, required this.onIrAClan});
+  final VoidCallback onIrAClan;
+
+  @override
+  State<PestanaRetos> createState() => _PestanaRetosState();
+}
+
+class _PestanaRetosState extends State<PestanaRetos> {
+  EstadoRetos? _e;
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    _cargar(subir: true);
+  }
+
+  Future<void> _cargar({bool subir = false}) async {
+    try {
+      final String? u = SesionTemplo.instancia.actual?.usuario;
+      if (subir && u != null) await RetosRepo.instancia.aportar(u);
+      final EstadoRetos e = await RetosRepo.instancia.estado();
+      if (mounted) {
+        setState(() {
+          _e = e;
+          _error = null;
+        });
+      }
+    } catch (e) {
+      if (mounted) setState(() => _error = SesionTemplo.mensajeDe(e));
+    }
+  }
+
+  String _rango(DateTime lunes) {
+    final DateTime dom = lunes.add(const Duration(days: 6));
+    final String m1 = kMesesTemplo[lunes.month - 1];
+    final String m2 = kMesesTemplo[dom.month - 1];
+    return lunes.month == dom.month
+        ? 'Semana del ${lunes.day} al ${dom.day} de $m2'
+        : 'Semana del ${lunes.day} de $m1 al ${dom.day} de $m2';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final EstadoRetos? e = _e;
+    final double abajo = kAlturaNavBar + MediaQuery.paddingOf(context).bottom + 30;
+    if (e == null) {
+      return Center(
+        child: _error != null
+            ? VacioClan(
+                glifo: TempleGlyph.espadas,
+                titulo: 'No pudimos cargar los retos',
+                texto: _error!,
+                accion: 'Reintentar',
+                onAccion: () => _cargar(subir: true))
+            : const SizedBox(
+                width: 22, height: 22, child: CircularProgressIndicator(strokeWidth: 1.8, color: TempleColors.violeta)),
+      );
+    }
+    final int quedan = (8 - DateTime.now().weekday).clamp(1, 7);
+    return RefreshIndicator(
+      color: TempleColors.violeta,
+      backgroundColor: TempleColors.superficieAlta,
+      onRefresh: () => _cargar(subir: true),
+      child: ListView(
+        physics: const AlwaysScrollableScrollPhysics(),
+        padding: EdgeInsets.fromLTRB(TempleSpace.borde, 10, TempleSpace.borde, abajo),
+        children: <Widget>[
+          Text(_rango(e.semana),
+              style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600, color: TempleColors.blancoLuna)),
+          const SizedBox(height: 2),
+          Text(quedan == 1 ? 'Termina hoy a medianoche' : 'Quedan $quedan días',
+              style: const TextStyle(fontSize: 12.5, color: TempleColors.textoSuave)),
+          const SizedBox(height: 6),
+          const EtiquetaSeccion('Retos del templo'),
+          for (final RetoSemana r in e.templo)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 10),
+              child: TarjetaRetoSemana(reto: r, onCambio: _cargar),
+            ),
+          const SizedBox(height: 4),
+          EtiquetaSeccion(e.clanNombre != null ? 'Reto de ${e.clanNombre}' : 'Reto del clan'),
+          if (e.clan != null)
+            TarjetaRetoSemana(reto: e.clan!, onCambio: _cargar)
+          else if (e.puedoCrear)
+            TempleCard(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: <Widget>[
+                  const Text('Propón el reto de esta semana',
+                      style: TextStyle(fontSize: 14.5, fontWeight: FontWeight.w600, color: TempleColors.blancoLuna)),
+                  const SizedBox(height: 4),
+                  const Text('Se cumple entre todos los guerreros del clan. Quien aporte cobra 25 mon.',
+                      style: TextStyle(fontSize: 12.5, height: 1.45, color: TempleColors.textoSuave)),
+                  const SizedBox(height: 12),
+                  FilledButton(
+                    onPressed: () async {
+                      if (await proponerRetoClan(context)) _cargar();
+                    },
+                    style: _botonClanPrincipal(),
+                    child: const Text('Proponer reto'),
+                  ),
+                ],
+              ),
+            )
+          else if (e.clanId != null)
+            const Text('Quien lidera tu clan aún no propone el reto de esta semana.',
+                style: TextStyle(fontSize: 12.5, color: TempleColors.textoTenue))
+          else
+            TempleCard(
+              onTap: widget.onIrAClan,
+              child: const Row(
+                children: <Widget>[
+                  TempleIcon(TempleGlyph.bandera, size: 22, color: TempleColors.violetaClaro),
+                  SizedBox(width: 12),
+                  Expanded(
+                    child: Text('Únete a un clan o funda el tuyo para los retos en equipo.',
+                        style: TextStyle(fontSize: 13, color: TempleColors.texto)),
+                  ),
+                  Icon(Icons.chevron_right_rounded, color: TempleColors.textoSuave),
+                ],
+              ),
+            ),
+          const SizedBox(height: 18),
+          const Text(
+            'Los retos cuentan las sesiones que terminas en la app y se reinician cada lunes. Hacer trampa en las '
+            'cifras incumple los términos.',
+            style: TextStyle(fontSize: 11.5, height: 1.45, color: TempleColors.textoTenue),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class TablaRetoScreen extends StatefulWidget {
+  const TablaRetoScreen({super.key, required this.reto});
+  final RetoSemana reto;
+
+  @override
+  State<TablaRetoScreen> createState() => _TablaRetoScreenState();
+}
+
+class _TablaRetoScreenState extends State<TablaRetoScreen> {
+  List<FilaTablaReto>? _filas;
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    _cargar();
+  }
+
+  Future<void> _cargar() async {
+    try {
+      final List<FilaTablaReto> f = await RetosRepo.instancia.tabla(widget.reto.id);
+      if (mounted) setState(() => _filas = f);
+    } catch (e) {
+      if (mounted) setState(() => _error = SesionTemplo.mensajeDe(e));
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final RetoSemana r = widget.reto;
+    final List<FilaTablaReto>? f = _filas;
+    return Scaffold(
+      backgroundColor: TempleColors.negro,
+      appBar: BarraClan(titulo: r.titulo, subtitulo: 'Meta: ${milesTemplo(r.meta)} ${r.unidad}'),
+      body: FondoTemplo(
+        child: f == null
+            ? Center(
+                child: _error != null
+                    ? VacioClan(
+                        glifo: TempleGlyph.espadas,
+                        titulo: 'No pudimos cargar la tabla',
+                        texto: _error!,
+                        accion: 'Reintentar',
+                        onAccion: _cargar)
+                    : const SizedBox(
+                        width: 22,
+                        height: 22,
+                        child: CircularProgressIndicator(strokeWidth: 1.8, color: TempleColors.violeta)),
+              )
+            : RefreshIndicator(
+                color: TempleColors.violeta,
+                backgroundColor: TempleColors.superficieAlta,
+                onRefresh: _cargar,
+                child: ListView.builder(
+                  physics: const AlwaysScrollableScrollPhysics(),
+                  padding: const EdgeInsets.fromLTRB(TempleSpace.borde, 8, TempleSpace.borde, 40),
+                  itemCount: f.length,
+                  itemBuilder: (BuildContext context, int i) {
+                    final FilaTablaReto x = f[i];
+                    final bool cumple = x.progreso >= r.meta;
+                    return Padding(
+                      padding: const EdgeInsets.only(bottom: 8),
+                      child: TempleCard(
+                        destacada: x.esYo,
+                        padding: const EdgeInsets.fromLTRB(12, 10, 14, 10),
+                        onTap: () => Navigator.of(context).push(MaterialPageRoute<void>(
+                          builder: (_) => PerfilClanScreen(id: x.persona.id),
+                        )),
+                        child: Row(
+                          children: <Widget>[
+                            SizedBox(
+                              width: 26,
+                              child: Text('${i + 1}',
+                                  style: TextStyle(
+                                      fontSize: 14,
+                                      fontWeight: FontWeight.w700,
+                                      color: i < 3 ? TempleColors.dorado : TempleColors.textoTenue)),
+                            ),
+                            ClanAvatar(persona: x.persona, size: 36),
+                            const SizedBox(width: 10),
+                            Expanded(
+                              child: Text(x.persona.nombre,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: TextStyle(
+                                      fontSize: 14,
+                                      fontWeight: x.esYo ? FontWeight.w700 : FontWeight.w500,
+                                      color: TempleColors.blancoLuna)),
+                            ),
+                            if (cumple) ...<Widget>[
+                              const Icon(Icons.emoji_events_outlined, size: 16, color: TempleColors.dorado),
+                              const SizedBox(width: 4),
+                            ],
+                            Text('${milesTemplo(x.progreso)} ${r.unidad}',
+                                style: TextStyle(
+                                    fontSize: 13,
+                                    fontWeight: FontWeight.w600,
+                                    color: cumple ? TempleColors.dorado : TempleColors.violetaClaro)),
+                          ],
+                        ),
+                      ),
+                    );
+                  },
+                ),
+              ),
+      ),
+    );
+  }
+}
+
+/// Hoja para que quien lidera proponga el reto del clan de la semana.
+Future<bool> proponerRetoClan(BuildContext context) async {
+  final bool? r = await showModalBottomSheet<bool>(
+    context: context,
+    isScrollControlled: true,
+    backgroundColor: TempleColors.grafito,
+    shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(24))),
+    builder: (_) => const _HojaRetoClan(),
+  );
+  return r == true;
+}
+
+class _HojaRetoClan extends StatefulWidget {
+  const _HojaRetoClan();
+
+  @override
+  State<_HojaRetoClan> createState() => _HojaRetoClanState();
+}
+
+class _HojaRetoClanState extends State<_HojaRetoClan> {
+  static const Map<String, (double, double, double, double)> _rangos = <String, (double, double, double, double)>{
+    // mínimo, máximo, paso, sugerido
+    'sesiones': (3, 200, 1, 15),
+    'dias': (3, 150, 1, 10),
+    'minutos': (60, 12000, 30, 600),
+    'series': (30, 3000, 10, 200),
+    'volumen': (1000, 500000, 1000, 50000),
+  };
+  static const Map<String, String> _nombres = <String, String>{
+    'sesiones': 'Sesiones',
+    'dias': 'Días',
+    'minutos': 'Minutos',
+    'series': 'Series',
+    'volumen': 'Kilos',
+  };
+
+  String _clase = 'sesiones';
+  double _meta = 15;
+  bool _enviando = false;
+  String? _error;
+
+  String get _titulo {
+    final String n = milesTemplo(_meta);
+    return switch (_clase) {
+      'sesiones' => 'El clan suma $n sesiones',
+      'dias' => 'El clan suma $n días de entrenamiento',
+      'minutos' => 'El clan suma $n minutos',
+      'series' => 'El clan suma $n series',
+      _ => 'El clan mueve $n kg',
+    };
+  }
+
+  Future<void> _crear() async {
+    setState(() {
+      _enviando = true;
+      _error = null;
+    });
+    try {
+      await RetosRepo.instancia.crearRetoClan(_clase, _meta.round());
+      if (!mounted) return;
+      HapticFeedback.heavyImpact();
+      Navigator.of(context).pop(true);
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _enviando = false;
+          _error = SesionTemplo.mensajeDe(e);
+        });
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final (double, double, double, double) rango = _rangos[_clase]!;
+    final int divisiones = ((rango.$2 - rango.$1) / rango.$3).round().clamp(1, 1000);
+    return SafeArea(
+      top: false,
+      child: Padding(
+        padding: EdgeInsets.fromLTRB(22, 20, 22, 18 + MediaQuery.viewInsetsOf(context).bottom),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: <Widget>[
+            const Text('Reto del clan',
+                style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600, color: TempleColors.blancoLuna)),
+            const SizedBox(height: 4),
+            const Text('Dura hasta el domingo. Se suma lo de todos; cada guerrero que aporte cobra 25 mon.',
+                style: TextStyle(fontSize: 12.5, height: 1.45, color: TempleColors.textoSuave)),
+            const SizedBox(height: 14),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: <Widget>[
+                for (final MapEntry<String, String> c in _nombres.entries)
+                  ChoiceChip(
+                    label: Text(c.value),
+                    selected: _clase == c.key,
+                    showCheckmark: false,
+                    onSelected: (_) => setState(() {
+                      _clase = c.key;
+                      _meta = _rangos[c.key]!.$4;
+                    }),
+                    selectedColor: TempleColors.violeta.withValues(alpha: 0.28),
+                    backgroundColor: TempleColors.superficie,
+                    side: BorderSide(color: _clase == c.key ? TempleColors.violeta : TempleColors.borde),
+                    labelStyle:
+                        TextStyle(color: _clase == c.key ? TempleColors.blancoLuna : TempleColors.textoSuave),
+                  ),
+              ],
+            ),
+            const SizedBox(height: 16),
+            Text(_titulo,
+                textAlign: TextAlign.center,
+                style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600, color: TempleColors.violetaClaro)),
+            Slider(
+              value: _meta.clamp(rango.$1, rango.$2),
+              min: rango.$1,
+              max: rango.$2,
+              divisions: divisiones,
+              onChanged: (double v) => setState(() => _meta = v),
+              activeColor: TempleColors.violetaClaro,
+              inactiveColor: TempleColors.borde,
+            ),
+            if (_error != null) ...<Widget>[
+              Text(_error!, style: const TextStyle(fontSize: 12.5, color: TempleColors.error)),
+              const SizedBox(height: 8),
+            ],
+            const SizedBox(height: 6),
+            DojoPrimaryButton(
+              texto: 'Proponer el reto',
+              cargando: _enviando,
+              onPressed: () {
+                if (!_enviando) _crear();
+              },
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// ===========================================================================
+// 55. COMPARTIR RÉCORDS, SESIONES Y RUTINAS · ACTIVIDAD
+//
+// Una publicación puede llevar un «adjunto»: una tarjeta con las cifras de un
+// récord, de una sesión o de una rutina que otros pueden entrenar con un
+// toque. La Actividad junta el Respeto, los comentarios, los seguidores y los
+// movimientos del clan que te tocan.
+// ===========================================================================
+
+// ---------------------------------------------------------------------------
+// 55.1 ADJUNTOS
+// ---------------------------------------------------------------------------
+
+double _xpDeSesion(Sesion s) =>
+    ReglasXp.deSesion(s).values.fold<double>(0, (double a, double b) => a + b);
+
+Map<String, dynamic> adjuntoDeSesion(Sesion s) => <String, dynamic>{
+      'clase': 'sesion',
+      'nombre': s.nombre ?? 'Sesión libre',
+      'volumen': s.volumenTotal.round(),
+      'minutos': s.minutos,
+      'series': s.seriesEfectivas,
+      'xp': _xpDeSesion(s).round(),
+      'ejercicios': <String>[
+        for (final EjercicioSesion e in s.ejercicios.take(10))
+          if (e.seriesEfectivas.isNotEmpty) e.nombre,
+      ],
+    };
+
+Map<String, dynamic> adjuntoDeRecord(RecordRoto r) => <String, dynamic>{
+      'clase': 'record',
+      'ejercicio_id': r.ejercicioId,
+      'ejercicio': ejercicioPorId(r.ejercicioId)?.nombre ?? r.ejercicioId,
+      'tipo': r.tipo,
+      'valor': (r.nuevo * 10).round() / 10,
+      'anterior': (r.anterior * 10).round() / 10,
+    };
+
+Map<String, dynamic>? adjuntoDeRutina(Sesion s) {
+  final List<Map<String, dynamic>> ej = <Map<String, dynamic>>[];
+  for (final EjercicioSesion e in s.ejercicios) {
+    final List<SerieRegistrada> ef = e.seriesEfectivas;
+    if (ef.isEmpty || ejercicioPorId(e.ejercicioId) == null) continue;
+    final List<int> reps = ef.map((SerieRegistrada x) => x.repeticiones).toList()..sort();
+    ej.add(<String, dynamic>{
+      'id': e.ejercicioId,
+      'nombre': e.nombre,
+      'series': ef.length.clamp(1, 10),
+      'reps': reps[reps.length ~/ 2].clamp(1, 50),
+    });
+    if (ej.length >= 12) break;
+  }
+  if (ej.isEmpty) return null;
+  return <String, dynamic>{
+    'clase': 'rutina',
+    'nombre': s.nombre ?? 'Mi rutina',
+    'minutos': s.minutos,
+    'grupos': <String>[for (final GrupoMuscular g in s.gruposTrabajados.take(5)) g.name],
+    'ejercicios': ej,
+  };
+}
+
+String _cifraKg(Object? v) {
+  final double d = _numClan(v);
+  return d == d.roundToDouble() ? milesTemplo(d) : d.toStringAsFixed(1).replaceAll('.', ',');
+}
+
+/// La tarjeta del adjunto dentro de una publicación (o en la vista previa).
+class TarjetaAdjunto extends StatelessWidget {
+  const TarjetaAdjunto({super.key, required this.adjunto});
+  final Map<String, dynamic> adjunto;
+
+  @override
+  Widget build(BuildContext context) {
+    switch (adjunto['clase']) {
+      case 'record':
+        return _record();
+      case 'sesion':
+        return _sesion();
+      case 'rutina':
+        return _rutina(context);
+      default:
+        return _logro();
+    }
+  }
+
+  Widget _marco({required Color color, required Widget child}) => Container(
+        padding: const EdgeInsets.fromLTRB(14, 12, 14, 14),
+        decoration: BoxDecoration(
+          gradient: LinearGradient(
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+            colors: <Color>[color.withValues(alpha: 0.14), TempleColors.superficie.withValues(alpha: 0.9)],
+          ),
+          borderRadius: BorderRadius.circular(TempleRadius.campo),
+          border: Border.all(color: color.withValues(alpha: 0.45)),
+        ),
+        child: child,
+      );
+
+  Widget _encabezado(TempleGlyph g, String texto, Color color) => Row(
+        children: <Widget>[
+          TempleIcon(g, size: 16, color: color),
+          const SizedBox(width: 6),
+          Text(texto.toUpperCase(),
+              style: TextStyle(fontSize: 10.5, letterSpacing: 2, fontWeight: FontWeight.w700, color: color)),
+        ],
+      );
+
+  Widget _record() {
+    final String tipo = (adjunto['tipo'] ?? 'peso').toString();
+    final double valor = _numClan(adjunto['valor']);
+    final double antes = _numClan(adjunto['anterior']);
+    final String que = switch (tipo) {
+      '1rm' => 'Una repetición máxima estimada',
+      'volumen' => 'Kilos en una sola sesión',
+      _ => 'Peso máximo',
+    };
+    final int mejora = antes > 0 ? (((valor - antes) / antes) * 100).round() : 0;
+    return _marco(
+      color: TempleColors.dorado,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: <Widget>[
+          _encabezado(TempleGlyph.medalla, 'Nuevo récord', TempleColors.dorado),
+          const SizedBox(height: 10),
+          Text((adjunto['ejercicio'] ?? '').toString(),
+              style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600, color: TempleColors.blancoLuna)),
+          const SizedBox(height: 2),
+          Text(que, style: const TextStyle(fontSize: 12, color: TempleColors.textoSuave)),
+          const SizedBox(height: 8),
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.end,
+            children: <Widget>[
+              Text(_cifraKg(valor),
+                  style: const TextStyle(
+                      fontSize: 34, height: 1, fontWeight: FontWeight.w700, color: TempleColors.dorado)),
+              const Padding(
+                padding: EdgeInsets.only(left: 4, bottom: 3),
+                child: Text('kg', style: TextStyle(fontSize: 14, color: TempleColors.dorado)),
+              ),
+              const Spacer(),
+              if (mejora > 0)
+                _pastillaClan('+$mejora % sobre su marca', icono: Icons.trending_up_rounded, color: TempleColors.exito),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _cifra(String valor, String etiqueta) => Expanded(
+        child: Column(
+          children: <Widget>[
+            Text(valor,
+                style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w700, color: TempleColors.blancoLuna)),
+            const SizedBox(height: 2),
+            Text(etiqueta, style: const TextStyle(fontSize: 10.5, color: TempleColors.textoTenue)),
+          ],
+        ),
+      );
+
+  Widget _sesion() {
+    final Object? ej = adjunto['ejercicios'];
+    final List<String> nombres = <String>[
+      if (ej is List)
+        for (final Object? e in ej.take(8)) e.toString(),
+    ];
+    return _marco(
+      color: TempleColors.violeta,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: <Widget>[
+          _encabezado(TempleGlyph.torii, 'Sesión completada', TempleColors.violetaClaro),
+          const SizedBox(height: 8),
+          Text((adjunto['nombre'] ?? 'Sesión').toString(),
+              style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600, color: TempleColors.blancoLuna)),
+          const SizedBox(height: 12),
+          Row(
+            children: <Widget>[
+              _cifra(milesTemplo(_numClan(adjunto['volumen'])), 'kg'),
+              _cifra('${_entClan(adjunto['minutos'])}', 'min'),
+              _cifra('${_entClan(adjunto['series'])}', 'series'),
+              _cifra('+${_entClan(adjunto['xp'])}', 'XP'),
+            ],
+          ),
+          if (nombres.isNotEmpty) ...<Widget>[
+            const SizedBox(height: 12),
+            Wrap(
+              spacing: 6,
+              runSpacing: 6,
+              children: <Widget>[for (final String n in nombres) _pastillaClan(n)],
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _rutina(BuildContext context) {
+    final Object? ej = adjunto['ejercicios'];
+    final List<Map<String, dynamic>> lista = <Map<String, dynamic>>[
+      if (ej is List)
+        for (final Object? e in ej)
+          if (e is Map) Map<String, dynamic>.from(e),
+    ];
+    return _marco(
+      color: TempleColors.exito,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: <Widget>[
+          _encabezado(TempleGlyph.lista, 'Rutina', TempleColors.exito),
+          const SizedBox(height: 8),
+          Text((adjunto['nombre'] ?? 'Rutina').toString(),
+              style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600, color: TempleColors.blancoLuna)),
+          if (_entClan(adjunto['minutos']) > 0)
+            Text('Unos ${_entClan(adjunto['minutos'])} minutos · ${lista.length} ejercicios',
+                style: const TextStyle(fontSize: 12, color: TempleColors.textoSuave)),
+          const SizedBox(height: 10),
+          for (final Map<String, dynamic> e in lista.take(8))
+            Padding(
+              padding: const EdgeInsets.only(bottom: 5),
+              child: Row(
+                children: <Widget>[
+                  const Text('·  ', style: TextStyle(color: TempleColors.exito)),
+                  Expanded(
+                    child: Text((e['nombre'] ?? ejercicioPorId('${e['id']}')?.nombre ?? '').toString(),
+                        style: const TextStyle(fontSize: 13, color: TempleColors.texto)),
+                  ),
+                  Text('${_entClan(e['series'])} × ${_entClan(e['reps'])}',
+                      style: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w600, color: TempleColors.textoSuave)),
+                ],
+              ),
+            ),
+          if (lista.length > 8)
+            Text('y ${lista.length - 8} más', style: const TextStyle(fontSize: 12, color: TempleColors.textoTenue)),
+          const SizedBox(height: 10),
+          OutlinedButton.icon(
+            onPressed: () => entrenarRutinaCompartida(context, adjunto),
+            style: OutlinedButton.styleFrom(
+              foregroundColor: TempleColors.exito,
+              side: BorderSide(color: TempleColors.exito.withValues(alpha: 0.6)),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(999)),
+            ),
+            icon: const Icon(Icons.play_arrow_rounded, size: 18),
+            label: const Text('Entrenar esta rutina'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _logro() {
+    return _marco(
+      color: TempleColors.violeta,
+      child: Row(
+        children: <Widget>[
+          const TempleIcon(TempleGlyph.chispa, size: 26, color: TempleColors.violetaClaro),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: <Widget>[
+                Text((adjunto['titulo'] ?? 'Logro').toString(),
+                    style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w600, color: TempleColors.blancoLuna)),
+                if ((adjunto['texto'] ?? '').toString().isNotEmpty)
+                  Text(adjunto['texto'].toString(),
+                      style: const TextStyle(fontSize: 12.5, color: TempleColors.textoSuave)),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Empieza una sesión con la rutina que alguien compartió.
+Future<void> entrenarRutinaCompartida(BuildContext context, Map<String, dynamic> adjunto) async {
+  final String? usuario = SesionTemplo.instancia.actual?.usuario;
+  if (usuario == null) return;
+  final Object? ej = adjunto['ejercicios'];
+  final List<EjercicioPlan> plan = <EjercicioPlan>[
+    if (ej is List)
+      for (final Object? e in ej)
+        if (e is Map && ejercicioPorId('${e['id']}') != null)
+          EjercicioPlan(
+            ejercicioId: '${e['id']}',
+            series: _entClan(e['series']).clamp(1, 10),
+            repsObjetivo: _entClan(e['reps']).clamp(1, 50),
+          ),
+  ];
+  if (plan.isEmpty) {
+    avisoClan(context, 'Esta rutina no tiene ejercicios que tu versión conozca. Actualiza la app.');
+    return;
+  }
+  final Object? gs = adjunto['grupos'];
+  final List<GrupoMuscular> grupos = <GrupoMuscular>[
+    if (gs is List)
+      for (final Object? g in gs)
+        for (final GrupoMuscular x in GrupoMuscular.values)
+          if (x.name == g) x,
+  ];
+  if (grupos.isEmpty) {
+    for (final EjercicioPlan p in plan) {
+      final GrupoMuscular? g = ejercicioPorId(p.ejercicioId)?.grupoPrincipal;
+      if (g != null && !grupos.contains(g)) grupos.add(g);
+    }
+  }
+  final String nombre = (adjunto['nombre'] ?? 'Rutina del Clan').toString();
+  final bool ok = await confirmarClan(
+    context,
+    titulo: 'Entrenar «$nombre»',
+    texto: '${plan.length} ejercicios. Ajusta los pesos a tu nivel: la rutina es de otra persona.',
+    accion: 'Empezar',
+  );
+  if (!ok || !context.mounted) return;
+  await entrenarPlanCasa(
+    context,
+    usuario,
+    PlanSesion(
+      nombre: nombre,
+      grupos: grupos,
+      ejercicios: plan,
+      minutos: _entClan(adjunto['minutos']).clamp(10, 180),
+      razon: 'Una rutina compartida en el Clan.',
+    ),
+  );
+}
+
+// ---------------------------------------------------------------------------
+// 55.2 COMPARTIR DESDE EL RESUMEN DE LA SESIÓN
+// ---------------------------------------------------------------------------
+
+class TarjetaCompartirSesion extends StatelessWidget {
+  const TarjetaCompartirSesion({super.key, required this.resumen});
+  final ResumenCierre resumen;
+
+  RecordRoto? get _mejorRecord {
+    RecordRoto? mejor;
+    for (final RecordRoto r in resumen.records) {
+      if (mejor == null ||
+          (r.tipo == 'peso' && mejor.tipo != 'peso') ||
+          (r.tipo == mejor.tipo && r.mejora > mejor.mejora)) {
+        mejor = r;
+      }
+    }
+    return mejor;
+  }
+
+  Future<void> _publicar(BuildContext context, Map<String, dynamic> adjunto, String texto) async {
+    final bool? ok = await Navigator.of(context).push<bool>(MaterialPageRoute<bool>(
+      builder: (_) => PublicarScreen(adjunto: adjunto, textoInicial: texto),
+    ));
+    if (ok == true && context.mounted) avisoClan(context, 'Compartido en el Clan.');
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (SesionTemplo.instancia.uid == null) return const SizedBox.shrink();
+    final Sesion s = resumen.sesion;
+    final RecordRoto? rec = _mejorRecord;
+    final Map<String, dynamic>? rutina = adjuntoDeRutina(s);
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 22),
+      child: TempleCard(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: <Widget>[
+            const Row(
+              children: <Widget>[
+                TempleIcon(TempleGlyph.clan, size: 20, color: TempleColors.violetaClaro),
+                SizedBox(width: 10),
+                Text('Compártelo con el Clan',
+                    style: TextStyle(fontSize: 14.5, fontWeight: FontWeight.w600, color: TempleColors.blancoLuna)),
+              ],
+            ),
+            const SizedBox(height: 12),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: <Widget>[
+                if (rec != null)
+                  FilledButton.icon(
+                    onPressed: () => _publicar(context, adjuntoDeRecord(rec), '¡Nuevo récord! '),
+                    style: FilledButton.styleFrom(
+                      backgroundColor: TempleColors.dorado,
+                      foregroundColor: TempleColors.negro,
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(999)),
+                    ),
+                    icon: const Icon(Icons.emoji_events_outlined, size: 18),
+                    label: const Text('Mi récord'),
+                  ),
+                OutlinedButton.icon(
+                  onPressed: () => _publicar(context, adjuntoDeSesion(s), ''),
+                  style: _botonClanSecundario(),
+                  icon: const Icon(Icons.bolt_rounded, size: 18),
+                  label: const Text('La sesión'),
+                ),
+                if (rutina != null)
+                  OutlinedButton.icon(
+                    onPressed: () => _publicar(context, rutina, 'Mi rutina de hoy. Pruébala: '),
+                    style: _botonClanSecundario(),
+                    icon: const Icon(Icons.list_alt_rounded, size: 18),
+                    label: const Text('La rutina'),
+                  ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// 55.3 ACTIVIDAD
+// ---------------------------------------------------------------------------
+
+class ActividadClan {
+  const ActividadClan({
+    required this.tipo,
+    required this.cuando,
+    required this.persona,
+    this.publicacionId,
+    this.extracto,
+  });
+
+  final String tipo;
+  final DateTime cuando;
+  final ClanPersona persona;
+  final String? publicacionId;
+  final String? extracto;
+
+  factory ActividadClan.desde(Map<String, dynamic> m) => ActividadClan(
+        tipo: (m['tipo'] ?? '').toString(),
+        cuando: _fechaClan(m['cuando']),
+        persona: ClanPersona.desdeMapa(m),
+        publicacionId: m['publicacion_id']?.toString(),
+        extracto: m['extracto']?.toString(),
+      );
+}
+
+class ActividadRepo extends ChangeNotifier {
+  ActividadRepo._();
+  static final ActividadRepo instancia = ActividadRepo._();
+
+  int nuevas = 0;
+  DateTime? _vista;
+
+  /// Al entrar con otra cuenta.
+  void reiniciar() {
+    _vista = null;
+    nuevas = 0;
+  }
+
+  String? get _clave {
+    final String? u = SesionTemplo.instancia.uid;
+    return u == null ? null : 'actividad_vista_$u';
+  }
+
+  Future<DateTime?> _leerVista() async {
+    if (_vista != null) return _vista;
+    final String? k = _clave;
+    if (k == null) return null;
+    try {
+      final SharedPreferences p = await SharedPreferences.getInstance();
+      _vista = DateTime.tryParse(p.getString(k) ?? '');
+    } catch (_) {}
+    return _vista;
+  }
+
+  Future<void> contar() async {
+    if (SesionTemplo.instancia.uid == null) return;
+    try {
+      final DateTime? v = await _leerVista();
+      final Object? r = await supa.rpc('actividad_nueva',
+          params: <String, dynamic>{'desde': (v ?? DateTime.now().subtract(const Duration(days: 7))).toUtc().toIso8601String()});
+      nuevas = r is num ? r.toInt() : 0;
+      notifyListeners();
+    } catch (_) {}
+  }
+
+  Future<List<ActividadClan>> lista({DateTime? antes}) async {
+    final Object? r = await supa.rpc('mi_actividad', params: <String, dynamic>{
+      'antes': antes?.toUtc().toIso8601String(),
+      'limite': 40,
+    });
+    return <ActividadClan>[
+      if (r is List)
+        for (final Object? x in r)
+          if (x is Map) ActividadClan.desde(Map<String, dynamic>.from(x)),
+    ];
+  }
+
+  /// Devuelve cuándo la viste por última vez (para resaltar lo nuevo) y marca
+  /// todo como visto.
+  Future<DateTime?> marcarVista() async {
+    final DateTime? antes = await _leerVista();
+    _vista = DateTime.now();
+    nuevas = 0;
+    notifyListeners();
+    final String? k = _clave;
+    if (k != null) {
+      try {
+        final SharedPreferences p = await SharedPreferences.getInstance();
+        await p.setString(k, _vista!.toIso8601String());
+      } catch (_) {}
+    }
+    return antes;
+  }
+}
+
+class BotonActividad extends StatefulWidget {
+  const BotonActividad({super.key});
+
+  @override
+  State<BotonActividad> createState() => _BotonActividadState();
+}
+
+class _BotonActividadState extends State<BotonActividad> {
+  @override
+  void initState() {
+    super.initState();
+    ActividadRepo.instancia.contar();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return ListenableBuilder(
+      listenable: ActividadRepo.instancia,
+      builder: (BuildContext context, _) {
+        final int n = ActividadRepo.instancia.nuevas;
+        return IconButton(
+          tooltip: 'Actividad',
+          visualDensity: VisualDensity.compact,
+          onPressed: () async {
+            await Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => const ActividadScreen()));
+            ActividadRepo.instancia.contar();
+          },
+          icon: Badge(
+            isLabelVisible: n > 0,
+            label: Text(n > 98 ? '99+' : '$n'),
+            backgroundColor: TempleColors.violeta,
+            child: const Icon(Icons.notifications_none_rounded, color: TempleColors.texto),
+          ),
+        );
+      },
+    );
+  }
+}
+
+class ActividadScreen extends StatefulWidget {
+  const ActividadScreen({super.key});
+
+  @override
+  State<ActividadScreen> createState() => _ActividadScreenState();
+}
+
+class _ActividadScreenState extends State<ActividadScreen> {
+  final List<ActividadClan> _lista = <ActividadClan>[];
+  DateTime? _vistaAntes;
+  bool _cargando = true;
+  bool _fin = false;
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    _iniciar();
+  }
+
+  Future<void> _iniciar() async {
+    _vistaAntes = await ActividadRepo.instancia.marcarVista();
+    await _mas(desdeCero: true);
+  }
+
+  Future<void> _mas({bool desdeCero = false}) async {
+    setState(() {
+      _cargando = true;
+      if (desdeCero) {
+        _lista.clear();
+        _fin = false;
+      }
+    });
+    try {
+      final List<ActividadClan> l =
+          await ActividadRepo.instancia.lista(antes: _lista.isEmpty ? null : _lista.last.cuando);
+      if (!mounted) return;
+      setState(() {
+        _lista.addAll(l);
+        _fin = l.length < 40;
+        _error = null;
+      });
+    } catch (e) {
+      if (mounted) setState(() => _error = SesionTemplo.mensajeDe(e));
+    } finally {
+      if (mounted) setState(() => _cargando = false);
+    }
+  }
+
+  String _texto(ActividadClan a) => switch (a.tipo) {
+        'respeto' => 'te dio Respeto',
+        'comentario' => 'comentó tu publicación',
+        'seguidor' => 'empezó a seguirte',
+        'solicitud' => 'pidió entrar a tu clan',
+        'miembro' => 'se unió a ${a.extracto ?? 'tu clan'}',
+        _ => '',
+      };
+
+  IconData _icono(String tipo) => switch (tipo) {
+        'respeto' => Icons.local_fire_department_outlined,
+        'comentario' => Icons.mode_comment_outlined,
+        'seguidor' => Icons.person_add_alt_1_outlined,
+        'solicitud' => Icons.how_to_reg_outlined,
+        _ => Icons.flag_outlined,
+      };
+
+  Future<void> _abrir(ActividadClan a) async {
+    if ((a.tipo == 'respeto' || a.tipo == 'comentario') && a.publicacionId != null) {
+      try {
+        final ClanPublicacion? p = await ClanRepo.instancia.publicacion(a.publicacionId!);
+        if (!mounted) return;
+        if (p == null) {
+          avisoClan(context, 'Esa publicación ya no está.');
+          return;
+        }
+        await Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => DetallePublicacionScreen(publicacion: p)));
+      } catch (e) {
+        if (mounted) avisoClan(context, SesionTemplo.mensajeDe(e), error: true);
+      }
+      return;
+    }
+    if (a.tipo == 'solicitud') {
+      final String? c = ClanesRepo.instancia.mio?.id;
+      if (c != null) {
+        await Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => MiembrosClanScreen(clanId: c)));
+        return;
+      }
+    }
+    await Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => PerfilClanScreen(id: a.persona.id)));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: TempleColors.negro,
+      appBar: const BarraClan(titulo: 'Actividad', subtitulo: 'Respeto, comentarios, seguidores y tu clan'),
+      body: FondoTemplo(
+        child: RefreshIndicator(
+          color: TempleColors.violeta,
+          backgroundColor: TempleColors.superficieAlta,
+          onRefresh: () => _mas(desdeCero: true),
+          child: NotificationListener<ScrollNotification>(
+            onNotification: (ScrollNotification n) {
+              if (!_cargando && !_fin && n.metrics.pixels > n.metrics.maxScrollExtent - 400) _mas();
+              return false;
+            },
+            child: ListView.builder(
+              physics: const AlwaysScrollableScrollPhysics(),
+              padding: const EdgeInsets.fromLTRB(TempleSpace.borde, 8, TempleSpace.borde, 40),
+              itemCount: _lista.length + 1,
+              itemBuilder: (BuildContext context, int i) {
+                if (i == _lista.length) {
+                  if (_error != null) {
+                    return VacioClan(
+                      glifo: TempleGlyph.montana,
+                      titulo: 'No pudimos cargar tu actividad',
+                      texto: _error!,
+                      accion: 'Reintentar',
+                      onAccion: () => _mas(desdeCero: _lista.isEmpty),
+                    );
+                  }
+                  if (_cargando) {
+                    return const Padding(
+                      padding: EdgeInsets.all(28),
+                      child: Center(
+                        child: SizedBox(
+                            width: 22,
+                            height: 22,
+                            child: CircularProgressIndicator(strokeWidth: 1.8, color: TempleColors.violeta)),
+                      ),
+                    );
+                  }
+                  if (_lista.isEmpty) {
+                    return const VacioClan(
+                      glifo: TempleGlyph.campana,
+                      titulo: 'Todo en calma',
+                      texto: 'Aquí verás quién te da Respeto, comenta tus avances o empieza a seguirte.',
+                    );
+                  }
+                  return const SizedBox(height: 12);
+                }
+                final ActividadClan a = _lista[i];
+                final bool nueva = _vistaAntes == null || a.cuando.isAfter(_vistaAntes!);
+                return Padding(
+                  padding: const EdgeInsets.only(bottom: 8),
+                  child: TempleCard(
+                    destacada: nueva,
+                    padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
+                    onTap: () => _abrir(a),
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: <Widget>[
+                        Stack(
+                          clipBehavior: Clip.none,
+                          children: <Widget>[
+                            ClanAvatar(persona: a.persona, size: 40),
+                            Positioned(
+                              right: -4,
+                              bottom: -4,
+                              child: Container(
+                                padding: const EdgeInsets.all(3),
+                                decoration: BoxDecoration(
+                                  color: TempleColors.grafito,
+                                  shape: BoxShape.circle,
+                                  border: Border.all(color: TempleColors.borde),
+                                ),
+                                child: Icon(_icono(a.tipo), size: 12, color: TempleColors.violetaClaro),
+                              ),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: <Widget>[
+                              Text.rich(
+                                TextSpan(
+                                  children: <InlineSpan>[
+                                    TextSpan(
+                                        text: a.persona.nombre,
+                                        style: const TextStyle(
+                                            fontWeight: FontWeight.w600, color: TempleColors.blancoLuna)),
+                                    TextSpan(text: ' ${_texto(a)}'),
+                                  ],
+                                ),
+                                style: const TextStyle(fontSize: 13.5, height: 1.35, color: TempleColors.texto),
+                              ),
+                              if (a.tipo == 'comentario' && (a.extracto ?? '').isNotEmpty)
+                                Padding(
+                                  padding: const EdgeInsets.only(top: 3),
+                                  child: Text('«${a.extracto}»',
+                                      maxLines: 2,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: const TextStyle(
+                                          fontSize: 12.5, fontStyle: FontStyle.italic, color: TempleColors.textoSuave)),
+                                ),
+                              const SizedBox(height: 3),
+                              Text(tiempoClan(a.cuando),
+                                  style: const TextStyle(fontSize: 11, color: TempleColors.textoTenue)),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                );
+              },
+            ),
+          ),
+        ),
       ),
     );
   }

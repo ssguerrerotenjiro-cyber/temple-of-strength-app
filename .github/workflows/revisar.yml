@@ -1,0 +1,25 @@
+name: Revisar código
+
+# Revisión rápida (sin construir el APK) para la rama «revision».
+on:
+  push:
+    branches: [revision]
+  workflow_dispatch:
+
+jobs:
+  revisar:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+      - name: Paquetes
+        run: |
+          flutter --version
+          flutter pub get
+          flutter pub deps --style=compact | grep -E "flutter_local_notifications|timezone|crypto|supabase_flutter " || true
+      - name: Analizar
+        run: flutter analyze --no-fatal-infos --no-fatal-warnings lib/

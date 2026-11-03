@@ -4,8 +4,9 @@
 - Nombre visible, identificador y versión mínima de Android.
 - Código de AdMob y apertura de enlaces https.
 - Firma con la llave propia si existe android/key.properties.
+- Recordatorios: permisos, receptores, icono de notificación y desugaring.
 """
-import os, re, sys
+import os, re, sys, shutil
 
 ID = 'com.templeofstrength.app'
 NOMBRE = 'Temple of Strength'
@@ -27,6 +28,20 @@ s = leer(man)
 if 'android.permission.INTERNET' not in s:
     s = re.sub(r'(<manifest[^>]*>)', r'\1\n    <uses-permission android:name="android.permission.INTERNET"/>', s, count=1)
 s = re.sub(r'android:label="[^"]*"', f'android:label="{NOMBRE}"', s, count=1)
+for permiso in ('android.permission.POST_NOTIFICATIONS', 'android.permission.RECEIVE_BOOT_COMPLETED'):
+    if permiso not in s:
+        s = re.sub(r'(<manifest[^>]*>)', r'\1\n    <uses-permission android:name="%s"/>' % permiso, s, count=1)
+if 'ScheduledNotificationReceiver' not in s:
+    s = s.replace('</application>', '''    <receiver android:exported="false" android:name="com.dexterous.flutterlocalnotifications.ScheduledNotificationReceiver" />
+        <receiver android:exported="false" android:name="com.dexterous.flutterlocalnotifications.ScheduledNotificationBootReceiver">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED"/>
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED"/>
+                <action android:name="android.intent.action.QUICKBOOT_POWERON" />
+                <action android:name="com.htc.intent.action.QUICKBOOT_POWERON"/>
+            </intent-filter>
+        </receiver>
+    </application>''', 1)
 if 'com.google.android.gms.ads.APPLICATION_ID' not in s:
     s = s.replace('</application>', f'''    <meta-data
             android:name="com.google.android.gms.ads.APPLICATION_ID"
@@ -50,6 +65,10 @@ if os.path.exists(kts):
     g = leer(kts)
     g = re.sub(r'applicationId\s*=\s*"[^"]*"', f'applicationId = "{ID}"', g)
     g = re.sub(r'minSdk\s*=\s*flutter\.minSdkVersion', 'minSdk = maxOf(flutter.minSdkVersion, 23)', g)
+    # Las notificaciones programadas necesitan «desugaring» de Java.
+    if 'isCoreLibraryDesugaringEnabled' not in g:
+        g = g.replace('compileOptions {', 'compileOptions {\n        isCoreLibraryDesugaringEnabled = true', 1)
+        g += '\ndependencies {\n    coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.4")\n}\n'
     if 'keystorePropertiesFile' not in g:
         # Las importaciones van arriba del todo; el resto, después de plugins {}
         # (Gradle no permite otras instrucciones antes de ese bloque).
@@ -81,6 +100,9 @@ elif os.path.exists(groovy):
     g = leer(groovy)
     g = re.sub(r'applicationId\s*=?\s*"[^"]*"', f'applicationId = "{ID}"', g)
     g = re.sub(r'minSdk(Version)?\s*=?\s*flutter\.minSdkVersion', 'minSdkVersion Math.max(flutter.minSdkVersion, 23)', g)
+    if 'coreLibraryDesugaringEnabled' not in g:
+        g = g.replace('compileOptions {', 'compileOptions {\n        coreLibraryDesugaringEnabled true', 1)
+        g += "\ndependencies {\n    coreLibraryDesugaring 'com.android.tools:desugar_jdk_libs:2.1.4'\n}\n"
     if 'keystorePropertiesFile' not in g:
         g = g.replace('android {', '''def keystoreProperties = new Properties()
 def keystorePropertiesFile = rootProject.file('key.properties')
@@ -106,3 +128,12 @@ android {''', 1)
     escribir(groovy, g)
 else:
     sys.exit('No encontré build.gradle de Android')
+
+# -- Icono de las notificaciones (luna y torii en blanco) -------------------
+origen = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'res')
+destino = 'android/app/src/main/res'
+for carpeta in os.listdir(origen):
+    os.makedirs(os.path.join(destino, carpeta), exist_ok=True)
+    for archivo in os.listdir(os.path.join(origen, carpeta)):
+        shutil.copy(os.path.join(origen, carpeta, archivo), os.path.join(destino, carpeta, archivo))
+print('Copiado el icono de notificaciones')
