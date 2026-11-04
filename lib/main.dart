@@ -56,6 +56,7 @@ import 'package:google_mobile_ads/google_mobile_ads.dart'
         RequestConfiguration,
         MaxAdContentRating,
         TagForChildDirectedTreatment,
+        TagForUnderAgeOfConsent,
         ConsentInformation,
         ConsentRequestParameters,
         ConsentForm,
@@ -2059,7 +2060,7 @@ class _MainShellState extends State<MainShell> {
     // Si los términos cambiaron desde que los aceptó, primero eso.
     if (!await pedirTerminosSiCambiaron(context) || !mounted) return;
     // Una pieza lucida 24 h que ya venció vuelve a su lugar; y los anuncios
-    // (solo adultos) se preparan, con el aviso de privacidad si hace falta.
+    // se preparan, con el aviso de privacidad si hace falta.
     if (AlmacenAnuncios.instancia.revisarPrueba(u)) NubeTemplo.instancia.marcarCambio();
     unawaited(MotorAnuncios.instancia.iniciar());
     if (!GuiaTemplo.instancia.vista(u, 'recorrido')) {
@@ -3578,7 +3579,7 @@ class ConfigSupabase {
   static const String dominioInterno = 'templeofstrength.internal';
 
   /// Versión de los términos. Si cambian, se sube aquí y en la función.
-  static const String versionTerminos = '2027-01';
+  static const String versionTerminos = '2027-02';
 
   /// Quién responde por la app y por los datos (Ley 1581 de 2012). CAMBIA
   /// ESTO por el nombre o la razón social y el documento antes de publicar.
@@ -4339,6 +4340,9 @@ class _RegistroScreenState extends State<RegistroScreen> {
   bool _tutor = false;
   bool _terminos = false;
 
+  /// Si los términos se aceptaron con las reglas para menores incluidas.
+  bool _terminosComoMenor = false;
+
   bool _cargando = false;
   String? _error;
 
@@ -4391,6 +4395,8 @@ class _RegistroScreenState extends State<RegistroScreen> {
       setState(() {
         _nacimiento = f;
         if (!_esMenor) _tutor = false;
+        // Si ahora es menor y aceptó sin las reglas para menores, debe leerlas.
+        if (_esMenor && _terminos && !_terminosComoMenor) _terminos = false;
         _error = null;
       });
     }
@@ -4398,12 +4404,14 @@ class _RegistroScreenState extends State<RegistroScreen> {
 
   Future<void> _leerTerminos() async {
     FocusScope.of(context).unfocus();
+    final bool menor = _esMenor && _nacimiento != null;
     final bool? ok = await Navigator.of(context).push<bool>(
-      MaterialPageRoute<bool>(builder: (_) => const TerminosScreen(paraAceptar: true)),
+      MaterialPageRoute<bool>(builder: (_) => TerminosScreen(paraAceptar: true, menor: menor)),
     );
     if (ok == true && mounted) {
       setState(() {
         _terminos = true;
+        _terminosComoMenor = menor;
         _error = null;
       });
     }
@@ -4543,8 +4551,8 @@ class _RegistroScreenState extends State<RegistroScreen> {
             ),
             const SizedBox(height: 8),
             const Text(
-              'Solo se muestra tu edad, nunca la fecha. Las personas menores de 18 '
-              'años y los adultos usan espacios separados del Clan.',
+              'Solo se muestra tu edad, nunca la fecha. Si tienes menos de 18 años, los '
+              'adultos no ven tu edad y tendrás que leer unas reglas para menores.',
               style: TextStyle(fontSize: 11.5, height: 1.45, color: TempleColors.textoTenue),
             ),
             const SizedBox(height: 22),
@@ -5222,8 +5230,10 @@ const List<_ApartadoTerminos> _terminosTemplo = <_ApartadoTerminos>[
         'un código de recuperación: guárdalo, porque es la única forma de recuperar el acceso si olvidas la contraseña.',
     'Necesitas tener al menos 13 años. Si tienes entre 13 y 17, tu madre, padre o tutor debe conocer y autorizar '
         'que uses la app, que des tus datos y cualquier compra.',
-    'Las cuentas de menores de edad tienen protecciones propias: viven en un Clan separado del de los adultos, no '
-        'muestran enlaces a otras redes, no se les pide foto del cuerpo y no se les insiste con el Pase.',
+    'Las cuentas de menores de edad deben aceptar además las reglas para menores y tienen protecciones propias: '
+        'solo pueden escribir en privado a personas de su misma edad, los adultos no las encuentran en el buscador ni '
+        'ven su edad, no muestran enlaces a otras redes, no se les pide foto del cuerpo, sus anuncios no son '
+        'personalizados y no se les insiste con el Pase.',
     'Pedimos tu fecha de nacimiento y tu género. En tu perfil se ven tu edad y tu género; la fecha exacta nunca se '
         'muestra a nadie. Mentir sobre tu edad es motivo de cierre de la cuenta.',
     'Una persona, una cuenta. La cuenta es personal e intransferible: no la vendas, prestes ni compartas tu '
@@ -5292,8 +5302,10 @@ const List<_ApartadoTerminos> _terminosTemplo = <_ApartadoTerminos>[
   _ApartadoTerminos('El Clan', TempleGlyph.clan, <String>[
     'El Clan es la red social del templo: publicas fotos, videos y textos de tu progreso, usas hashtags, das '
         'Respeto, comentas, sigues a otras personas y conversas en privado.',
-    'Las personas menores de 18 años y los adultos usan espacios separados: no se ven entre sí, no pueden seguirse '
-        'ni escribirse.',
+    'El Clan es de todos: adultos y menores de 18 años ven las mismas publicaciones, pueden comentar, dar Respeto, '
+        'seguirse y estar en el mismo clan. Los mensajes privados solo son posibles entre personas de la misma franja '
+        'de edad (menores con menores, adultos con adultos), y los adultos no encuentran cuentas de menores en el '
+        'buscador.',
     'Para chatear libremente, dos personas deben seguirse mutuamente. Si no, el primer mensaje llega como '
         'solicitud y solo se pueden enviar tres mensajes hasta que la otra persona la acepte.',
     'Los mensajes privados solo los leen quienes participan en la conversación, salvo cuando se reportan. No '
@@ -5313,7 +5325,8 @@ const List<_ApartadoTerminos> _terminosTemplo = <_ApartadoTerminos>[
     '• Suplantar a otra persona o marca, o crear cuentas falsas.',
     '• Publicar datos personales de otros (dirección, teléfono, documentos, fotos sin su permiso).',
     '• Publicar contenido que no es tuyo sin derechos para hacerlo.',
-    '• Intentar contactar a menores de edad siendo adulto, o al revés, por cualquier vía.',
+    '• Siendo adulto, pedirle a un menor de edad datos, fotos, encuentros o contacto fuera de la app, o hablarle '
+        'de forma sexual o insistente. Se cierra la cuenta y, si corresponde, se avisa a las autoridades.',
     'Nuestras normas de seguridad infantil están publicadas en ssguerrerotenjiro-cyber.github.io/seguridad-infantil.html.',
   ]),
   _ApartadoTerminos('Moderación, sanciones y apelaciones', TempleGlyph.campana, <String>[
@@ -5330,8 +5343,8 @@ const List<_ApartadoTerminos> _terminosTemplo = <_ApartadoTerminos>[
   _ApartadoTerminos('Clanes, retos y recordatorios', TempleGlyph.bandera, <String>[
     'Un clan es un grupo de hasta 50 personas con nombre, emblema y muro propio. Quien lo funda lo lidera: puede '
         'nombrar oficiales, aceptar o rechazar solicitudes y expulsar miembros. Solo puedes estar en un clan a la vez.',
-    'Los clanes también están separados por edad: los de menores de 18 años y los de adultos no se ven entre sí. Al '
-        'cumplir 18 años sales del clan de menores.',
+    'Los clanes son mixtos: los puede formar cualquier persona del templo. Un clan no tiene chat propio; su muro '
+        'se rige por el reglamento y los mensajes privados siguen limitados por edad.',
     'El nombre, el lema, la descripción y el muro de un clan siguen el reglamento del Clan. Quien visite un clan '
         'puede ver su muro, sus miembros y sus cifras de la semana. Un clan se puede reportar y, si incumple, se elimina.',
     'Para las tablas de los clanes y los retos se comparten las cifras de cada sesión (volumen, series, minutos y '
@@ -5369,7 +5382,8 @@ const List<_ApartadoTerminos> _terminosTemplo = <_ApartadoTerminos>[
     'Solo hay recompensa si el anuncio se ve hasta el final. Si no hay anuncios disponibles, no hay recompensa; '
         'no se puede reclamar después.',
     'Nunca mostramos anuncios durante el entrenamiento, en la conversación con Tenshi ni en las líneas de ayuda. '
-        'Las cuentas de menores de edad no ven anuncios.',
+        'A las cuentas de menores de edad solo les pedimos a Google anuncios no personalizados y aptos para '
+        'adolescentes.',
     'Los anuncios no dan honor, experiencia ni rangos. Los límites y cantidades pueden cambiar; los verás siempre '
         'en la pantalla donde se ofrece el anuncio.',
     'Está prohibido usar programas, emuladores o trucos para ver anuncios de forma automática o cobrar sin verlos. '
@@ -5432,7 +5446,8 @@ const List<_ApartadoTerminos> _terminosTemplo = <_ApartadoTerminos>[
         'ser datos sensibles. Darlos es opcional y no estás obligado a responder preguntas sobre ellos. Al usarlos '
         'nos autorizas expresamente a tratarlos solo para las finalidades de arriba.',
     'Menores de edad: tratamos sus datos respetando su interés superior y sus derechos, con la autorización de su '
-        'representante, y con las protecciones descritas en «Tu cuenta».',
+        'representante, y con las protecciones descritas en «Tu cuenta» y en las reglas para menores. Sus anuncios se '
+        'piden a Google como no personalizados y marcados como de menores de la edad de consentimiento.',
     'Con quién: con proveedores que nos ayudan a prestar el servicio (alojamiento, base de datos y archivos; el '
         'proveedor de inteligencia artificial de Tenshi; Google Play y la App Store para los pagos; Google AdMob para '
         'los anuncios que eliges ver, que puede usar el identificador de publicidad de tu teléfono según el permiso '
@@ -5484,7 +5499,11 @@ const List<_ApartadoTerminos> _terminosTemplo = <_ApartadoTerminos>[
 ];
 
 class TerminosScreen extends StatefulWidget {
-  const TerminosScreen({super.key, this.paraAceptar = false, this.obligatorio = false});
+  const TerminosScreen({super.key, this.paraAceptar = false, this.obligatorio = false, this.menor});
+
+  /// La cuenta es de un menor: se muestran (y hay que aceptar) las reglas
+  /// para menores. Si es null, se toma de la sesión.
+  final bool? menor;
 
   /// Si es true, abajo aparece el botón de aceptar y la pantalla devuelve
   /// true al aceptarse.
@@ -5503,6 +5522,11 @@ class _TerminosScreenState extends State<TerminosScreen> {
 
   /// El botón de aceptar se activa al llegar al final: hay que leerlo.
   bool _alFinal = false;
+
+  /// Las personas menores de edad marcan además que leyeron sus reglas.
+  bool _reglasMenor = false;
+
+  bool get _menor => widget.menor ?? (SesionTemplo.instancia.actual?.esMenor ?? false);
 
   @override
   void initState() {
@@ -5573,14 +5597,19 @@ class _TerminosScreenState extends State<TerminosScreen> {
                     children: <Widget>[
                       Text(
                         widget.obligatorio
-                            ? 'El templo creció: hay Pase del Templo, dojo en casa, tu meta, redes en el perfil, '
-                                'anuncios con recompensa y más. Los términos cambiaron para explicarlo. Léelos y '
-                                'acéptalos para seguir.'
+                            ? 'El templo creció: clanes, retos semanales y recordatorios; el Clan ahora es de '
+                                'todas las edades (los mensajes privados siguen siendo solo entre la misma edad) y '
+                                'los anuncios con recompensa llegan a todas las cuentas. Léelos y acéptalos para '
+                                'seguir.'
                             : 'Léelo con calma: aquí está cómo funciona el templo, tus derechos, lo que no está '
                                 'permitido y lo que esperamos de quien entra.',
                         style: const TextStyle(fontSize: 13.5, height: 1.5, color: TempleColors.textoSuave),
                       ),
                       const SizedBox(height: 16),
+                      if (_menor) ...<Widget>[
+                        const TarjetaReglasMenores(),
+                        const SizedBox(height: 16),
+                      ],
                       const _ResumenTerminos(),
                       const SizedBox(height: 16),
                       for (int i = 0; i < _terminosTemplo.length; i++) ...<Widget>[
@@ -5616,16 +5645,44 @@ class _TerminosScreenState extends State<TerminosScreen> {
                           textAlign: TextAlign.center,
                           style: const TextStyle(fontSize: 11.5, height: 1.4, color: TempleColors.textoTenue),
                         ),
+                        if (_menor) ...<Widget>[
+                          const SizedBox(height: 8),
+                          InkWell(
+                            borderRadius: BorderRadius.circular(TempleRadius.chip),
+                            onTap: () => setState(() => _reglasMenor = !_reglasMenor),
+                            child: Row(
+                              children: <Widget>[
+                                Checkbox(
+                                  value: _reglasMenor,
+                                  onChanged: (bool? v) => setState(() => _reglasMenor = v ?? false),
+                                  activeColor: TempleColors.violeta,
+                                  side: const BorderSide(color: TempleColors.bordeVivo),
+                                ),
+                                const Expanded(
+                                  child: Text(
+                                    'Leí las reglas para menores y mi madre, padre o tutor está de acuerdo.',
+                                    style: TextStyle(fontSize: 12.5, height: 1.35, color: TempleColors.texto),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ],
                         const SizedBox(height: 10),
                         AnimatedOpacity(
                           duration: TempleMotion.medio,
-                          opacity: _alFinal ? 1 : 0.45,
+                          opacity: _alFinal && (!_menor || _reglasMenor) ? 1 : 0.45,
                           child: DojoPrimaryButton(
                             texto: 'Acepto y continúo',
                             onPressed: () {
                               if (!_alFinal) {
                                 _scroll.animateTo(_scroll.position.maxScrollExtent,
                                     duration: const Duration(milliseconds: 900), curve: Curves.easeInOut);
+                                return;
+                              }
+                              if (_menor && !_reglasMenor) {
+                                HapticFeedback.lightImpact();
+                                avisoClan(context, 'Marca que leíste las reglas para menores.');
                                 return;
                               }
                               HapticFeedback.mediumImpact();
@@ -35250,6 +35307,7 @@ class ClanPerfilPublico {
     required this.meSigue,
     required this.bloqueadoPorMi,
     required this.esYo,
+    this.puedeEscribir = true,
     this.vineta = const <CapaVineta, String>{},
     this.racha = 0,
     this.llama = 0,
@@ -35259,6 +35317,9 @@ class ClanPerfilPublico {
 
   /// Enlaces a sus redes sociales (ya recortados por el servidor).
   final Map<String, String> redes;
+
+  /// Los mensajes privados solo son posibles entre la misma franja de edad.
+  final bool puedeEscribir;
 
   final ClanPersona persona;
   final String biografia;
@@ -35340,6 +35401,7 @@ class ClanPerfilPublico {
         llama: (m['llama'] as num?)?.toInt() ?? 0,
         ranked: RankedPublico.desde(m['ranked']),
         redes: RedesSociales.desde(m['redes']),
+        puedeEscribir: m['puede_escribir'] != false,
       );
 }
 
@@ -38603,7 +38665,8 @@ class _CabeceraPerfil extends StatelessWidget {
                   insignia: p.persona.pase,
                   style: const TextStyle(
                       fontSize: 22, fontWeight: FontWeight.w600, color: TempleColors.blancoLuna)),
-              BurbujaEdadGenero(edad: p.edad, genero: p.genero),
+              // A los adultos no se les muestra la edad de un menor (llega vacía).
+              if (p.edad > 0) BurbujaEdadGenero(edad: p.edad, genero: p.genero),
             ],
           ),
           const SizedBox(height: 3),
@@ -38724,15 +38787,17 @@ class _CabeceraPerfil extends StatelessWidget {
                     onTap: onSeguir,
                   ),
                 ),
-                const SizedBox(width: 10),
-                Expanded(
-                  child: _BotonPerfil(
-                    texto: p.mutuo ? 'Mensaje' : 'Enviar solicitud',
-                    principal: false,
-                    icono: Icons.chat_bubble_outline_rounded,
-                    onTap: ocupado ? null : onMensaje,
+                if (p.puedeEscribir) ...<Widget>[
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: _BotonPerfil(
+                      texto: p.mutuo ? 'Mensaje' : 'Enviar solicitud',
+                      principal: false,
+                      icono: Icons.chat_bubble_outline_rounded,
+                      onTap: ocupado ? null : onMensaje,
+                    ),
                   ),
-                ),
+                ],
                 const SizedBox(width: 10),
                 SizedBox(
                   width: 46,
@@ -59559,7 +59624,11 @@ Future<bool> pedirTerminosSiCambiaron(BuildContext context) async {
   }
   final bool? ok = await Navigator.of(context).push<bool>(MaterialPageRoute<bool>(
     fullscreenDialog: true,
-    builder: (_) => const TerminosScreen(paraAceptar: true, obligatorio: true),
+    builder: (_) => TerminosScreen(
+      paraAceptar: true,
+      obligatorio: true,
+      menor: SesionTemplo.instancia.actual?.esMenor ?? false,
+    ),
   ));
   if (ok == true) {
     SesionTemplo.instancia.terminosAceptadosAhora = true;
@@ -59780,8 +59849,25 @@ class MotorAnuncios {
   /// publicada esto nunca ocurre.
   bool get simulado => !soportado && kDebugMode;
 
-  /// Solo cuentas de adultos (si aún no se sabe la edad, tampoco).
-  bool get permitido => (soportado || simulado) && SesionTemplo.instancia.actual?.esMenor == false;
+  /// Todas las cuentas con sesión. A las de menores (o si aún no se sabe la
+  /// edad) se les piden anuncios no personalizados y aptos para adolescentes.
+  bool get permitido => (soportado || simulado) && SesionTemplo.instancia.actual != null;
+
+  bool get _menor => SesionTemplo.instancia.actual?.esMenor ?? true;
+
+  /// Con qué edad se configuró Google por última vez (cambia si se entra con
+  /// otra cuenta).
+  bool? _configuradoComoMenor;
+
+  Future<void> _configurar() async {
+    final bool menor = _menor;
+    await MobileAds.instance.updateRequestConfiguration(RequestConfiguration(
+      maxAdContentRating: MaxAdContentRating.t,
+      tagForChildDirectedTreatment: TagForChildDirectedTreatment.no,
+      tagForUnderAgeOfConsent: menor ? TagForUnderAgeOfConsent.yes : TagForUnderAgeOfConsent.no,
+    ));
+    _configuradoComoMenor = menor;
+  }
 
   Future<void> iniciar() {
     if (!permitido || simulado) return Future<void>.value();
@@ -59793,7 +59879,7 @@ class MotorAnuncios {
       // Permiso de privacidad de Google: solo aparece donde la ley lo pide.
       final Completer<void> permiso = Completer<void>();
       ConsentInformation.instance.requestConsentInfoUpdate(
-        ConsentRequestParameters(),
+        ConsentRequestParameters(tagForUnderAgeOfConsent: _menor),
         () {
           ConsentForm.loadAndShowConsentFormIfRequired((FormError? e) {
             if (!permiso.isCompleted) permiso.complete();
@@ -59805,10 +59891,7 @@ class MotorAnuncios {
       );
       await permiso.future.timeout(const Duration(seconds: 15), onTimeout: () {});
       await MobileAds.instance.initialize();
-      await MobileAds.instance.updateRequestConfiguration(RequestConfiguration(
-        maxAdContentRating: MaxAdContentRating.t,
-        tagForChildDirectedTreatment: TagForChildDirectedTreatment.no,
-      ));
+      await _configurar();
       _iniciado = true;
       _precargar();
     } catch (e) {
@@ -59822,7 +59905,7 @@ class MotorAnuncios {
     try {
       RewardedAd.load(
         adUnitId: ConfigAnuncios.recompensa,
-        request: const AdRequest(),
+        request: AdRequest(nonPersonalizedAds: _menor),
         rewardedAdLoadCallback: RewardedAdLoadCallback(
           onAdLoaded: (RewardedAd ad) {
             if (c.isCompleted) {
@@ -59854,6 +59937,15 @@ class MotorAnuncios {
     if (!permitido) return ResultadoAnuncio.sinAnuncio;
     await iniciar();
     if (!_iniciado) return ResultadoAnuncio.sinAnuncio;
+    if (_configuradoComoMenor != _menor) {
+      // Se entró con otra cuenta: el anuncio precargado era para la otra edad.
+      try {
+        await _configurar();
+      } catch (_) {}
+      final Future<RewardedAd?>? viejo = _proximo;
+      _proximo = null;
+      if (viejo != null) unawaited(viejo.then((RewardedAd? a) => a?.dispose()));
+    }
     final RewardedAd? ad = await (_proximo ?? _cargar());
     _proximo = null;
     if (ad == null) {
@@ -63033,8 +63125,8 @@ class _TrazosPainter extends CustomPainter {
 // 53. CLANES — grupos con emblema, muro y tabla semanal
 //
 // Un clan tiene hasta 50 guerreros. Quien lo funda lo lidera, puede nombrar
-// oficiales, aceptar solicitudes y expulsar. Como todo el Clan, viven
-// separados por edad. Las reglas están en la base de datos (funciones
+// oficiales, aceptar solicitudes y expulsar. Son mixtos (todas las edades),
+// como el Clan. Las reglas están en la base de datos (funciones
 // clan_*); aquí solo se piden cosas.
 //
 //   53.1  Modelos
@@ -66216,6 +66308,97 @@ class _ActividadScreenState extends State<ActividadScreen> {
             ),
           ),
         ),
+      ),
+    );
+  }
+}
+
+
+// ===========================================================================
+// 56. REGLAS DEL TEMPLO PARA MENORES
+//
+// Las cuentas de 13 a 17 años las leen y aceptan (con su madre, padre o tutor)
+// al crear la cuenta y cada vez que cambian los términos. El Clan es de todas
+// las edades, pero los mensajes privados solo entre la misma franja y los
+// adultos no encuentran a menores en el buscador (lo decide el servidor).
+// ===========================================================================
+
+const List<String> kReglasMenores = <String>[
+  'Tienes entre 13 y 17 años, así que tu madre, padre o tutor debe conocer y autorizar que uses Temple of Strength. '
+      'Enséñale estas reglas.',
+  'El Clan es de todos: adultos y menores ven las mismas publicaciones, comentan y dan Respeto. Por tu seguridad, '
+      'los mensajes privados solo son posibles con personas de tu misma edad, y los adultos no pueden encontrarte en '
+      'el buscador.',
+  'Los adultos no ven tu edad y tu perfil no muestra enlaces a tus otras redes.',
+  'Nunca publiques tu nombre completo, colegio, dirección, teléfono ni dónde estás, ni fotos tuyas sin camiseta, en '
+      'ropa interior o en traje de baño. Ese contenido se elimina.',
+  'Si alguien te pide fotos, datos, verte en persona o hablar por otra app, no respondas: repórtalo, bloquéalo y '
+      'cuéntaselo a un adulto de confianza. Revisamos esos reportes primero.',
+  'Puedes ver anuncios con recompensa si quieres. En tu cuenta son anuncios no personalizados (Google no usa tus datos '
+      'para elegirlos) y aptos para adolescentes. Si alguno te parece inapropiado, ciérralo y avísanos.',
+  'No compres el Pase sin permiso de tu madre, padre o tutor.',
+  'Las rutinas y consejos son generales. Nada de dietas, ayunos ni cargas extremas: si algo duele, para y consulta a '
+      'un adulto o a un profesional.',
+  'Si te sientes mal o alguien te hace daño, pide ayuda. En Colombia, la Línea 141 del ICBF es gratis y atiende las 24 '
+      'horas.',
+];
+
+class TarjetaReglasMenores extends StatelessWidget {
+  const TarjetaReglasMenores({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.fromLTRB(16, 14, 16, 16),
+      decoration: BoxDecoration(
+        color: TempleColors.violeta.withValues(alpha: 0.08),
+        borderRadius: BorderRadius.circular(TempleRadius.tarjeta),
+        border: Border.all(color: TempleColors.violeta.withValues(alpha: 0.55), width: 1.2),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: <Widget>[
+          const Row(
+            children: <Widget>[
+              TempleIcon(TempleGlyph.loto, size: 22, color: TempleColors.violetaClaro),
+              SizedBox(width: 10),
+              Expanded(
+                child: Text('Reglas del templo para menores',
+                    style: TextStyle(fontSize: 16.5, fontWeight: FontWeight.w600, color: TempleColors.blancoLuna)),
+              ),
+            ],
+          ),
+          const SizedBox(height: 4),
+          const Text('Léelas con tu madre, padre o tutor. Son parte de los términos.',
+              style: TextStyle(fontSize: 12, color: TempleColors.textoSuave)),
+          const SizedBox(height: 12),
+          for (int i = 0; i < kReglasMenores.length; i++)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 9),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: <Widget>[
+                  Container(
+                    width: 22,
+                    height: 22,
+                    alignment: Alignment.center,
+                    margin: const EdgeInsets.only(right: 10, top: 1),
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      color: TempleColors.violeta.withValues(alpha: 0.22),
+                    ),
+                    child: Text('${i + 1}',
+                        style: const TextStyle(
+                            fontSize: 11, fontWeight: FontWeight.w700, color: TempleColors.blancoLuna)),
+                  ),
+                  Expanded(
+                    child: Text(kReglasMenores[i],
+                        style: const TextStyle(fontSize: 13, height: 1.45, color: TempleColors.texto)),
+                  ),
+                ],
+              ),
+            ),
+        ],
       ),
     );
   }
