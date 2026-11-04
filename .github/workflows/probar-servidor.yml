@@ -1,0 +1,39 @@
+name: Probar servidor
+
+# Prueba la función «cuenta» desde fuera: el reto del templo y que crear una
+# cuenta sin reto o con la respuesta equivocada se rechace.
+on:
+  push:
+    branches: [prueba-servidor]
+  workflow_dispatch:
+
+jobs:
+  probar:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Probar
+        run: |
+          URL=$(grep -oE "static const String url = '[^']+'" lib/main.dart | sed -E "s/.*'(.*)'/\1/")
+          KEY=$(grep -A2 "static const String anonKey" lib/main.dart | grep -oE "'[^']{40,}'" | head -1 | tr -d "'")
+          F="$URL/functions/v1/cuenta"
+          H=(-H "apikey: $KEY" -H "Authorization: Bearer $KEY" -H "Content-Type: application/json")
+          echo "== reto"
+          curl -sS -w '\nHTTP %{http_code}\n' "${H[@]}" -d '{"accion":"reto"}' "$F" > reto.txt
+          tail -1 reto.txt
+          python3 - <<'PY'
+          import json
+          t = open('reto.txt').read().rsplit('\nHTTP', 1)[0]
+          d = json.loads(t)
+          print('id', d['id'][:8], '| casillas', len(d['casillas']), '| trazos objetivo', len(d['objetivo']), '| bits', d['pow']['bits'], '| bytes', len(t))
+          json.dump({'accion': 'registrar', 'usuario': 'prueba_ci_x', 'password': 'clave12345', 'nacimiento': '2000-01-01',
+                     'genero': 'hombre', 'terminos_version': '2027-01',
+                     'captcha': {'id': d['id'], 'elegidas': [0], 'pow': '1'}}, open('mal.json', 'w'))
+          PY
+          echo "== registrar sin reto (app vieja)"
+          curl -sS -w '\nHTTP %{http_code}\n' "${H[@]}" -d '{"accion":"registrar","usuario":"prueba_ci_x","password":"clave12345","nacimiento":"2000-01-01","genero":"hombre","terminos_version":"2026-12"}' "$F"
+          echo "== registrar con respuesta equivocada"
+          curl -sS -w '\nHTTP %{http_code}\n' "${H[@]}" -d @mal.json "$F"
+          echo "== el mismo reto otra vez (ya usado)"
+          curl -sS -w '\nHTTP %{http_code}\n' "${H[@]}" -d @mal.json "$F"
