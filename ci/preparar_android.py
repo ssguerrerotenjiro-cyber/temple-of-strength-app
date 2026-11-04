@@ -5,6 +5,7 @@
 - Código de AdMob y apertura de enlaces https.
 - Firma con la llave propia si existe android/key.properties.
 - Recordatorios: permisos, receptores, icono de notificación y desugaring.
+- Reglas de R8 para que el APK de release no se cierre al abrir.
 """
 import os, re, sys, shutil
 
@@ -137,3 +138,35 @@ for carpeta in os.listdir(origen):
     for archivo in os.listdir(os.path.join(origen, carpeta)):
         shutil.copy(os.path.join(origen, carpeta, archivo), os.path.join(destino, carpeta, archivo))
 print('Copiado el icono de notificaciones')
+
+# -- Reglas de R8 ------------------------------------------------------------
+# WorkManager (lo trae AdMob) crea su base de datos de Room buscando la clase
+# «WorkDatabase_Impl» por su nombre. Si R8 le cambia el nombre, la app se cierra
+# nada más abrirse con «Failed to create an instance of WorkDatabase».
+# Flutter añade android/app/proguard-rules.pro a la compilación de release.
+REGLAS = """
+# --- Temple of Strength ---
+-keep class * extends androidx.room.RoomDatabase { <init>(); }
+-keepnames class * extends androidx.room.RoomDatabase
+-keep class androidx.work.** { *; }
+-keep class androidx.room.** { *; }
+-keep class androidx.startup.** { *; }
+# Recordatorios (flutter_local_notifications guarda los programados con Gson).
+-keep class com.dexterous.** { *; }
+-keepattributes Signature, *Annotation*, InnerClasses, EnclosingMethod
+-keep class com.google.gson.reflect.TypeToken { *; }
+-keep class * extends com.google.gson.reflect.TypeToken
+"""
+reglas = 'android/app/proguard-rules.pro'
+previo = leer(reglas) if os.path.exists(reglas) else ''
+if '--- Temple of Strength ---' not in previo:
+    escribir(reglas, previo + REGLAS)
+if os.path.exists(kts):
+    g = leer(kts)
+    if '"proguard-rules.pro"' not in g:
+        nuevo = re.sub(r'(buildTypes\s*\{\s*release\s*\{)',
+                       r'\1\n            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")', g, count=1)
+        if nuevo != g:
+            escribir(kts, nuevo)
+        else:
+            print('Aviso: no encontré buildTypes.release; Flutter añade proguard-rules.pro por su cuenta.')

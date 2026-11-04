@@ -1,7 +1,7 @@
 name: Construir APK
 
-# Cada cambio en el código construye un APK nuevo, firmado, y lo publica
-# como «Release» de este repositorio.
+# Cada cambio en el código construye un APK nuevo, firmado, lo prueba en
+# emuladores (Android 11 y 14) y, solo si abre bien, lo publica como «Release».
 on:
   push:
     branches: [main]
@@ -18,6 +18,8 @@ jobs:
   apk:
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    outputs:
+      version: ${{ steps.info.outputs.version }}
     steps:
       - uses: actions/checkout@v4
 
@@ -83,11 +85,64 @@ jobs:
           name: TempleOfStrength-${{ steps.info.outputs.version }}-${{ github.run_number }}
           path: salida/
 
+
+  probar:
+    needs: apk
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        api: [34, 30]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: TempleOfStrength-${{ needs.apk.outputs.version }}-${{ github.run_number }}
+          path: salida/
+      - name: Activar KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - name: Abrir la app en el emulador
+        uses: reactivecircus/android-emulator-runner@v2
+        env:
+          API: ${{ matrix.api }}
+        with:
+          api-level: ${{ matrix.api }}
+          target: google_apis
+          arch: x86_64
+          disable-animations: true
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -no-snapshot
+          script: ./ci/probar_emulador.sh salida/TempleOfStrength.apk
+      - name: Guardar capturas y registro
+        if: always()
+        run: |
+          [ -d resultado ] || exit 0
+          git config user.name "github-actions"
+          git config user.email "github-actions@users.noreply.github.com"
+          RAMA="pruebas/${{ github.run_number }}-api${{ matrix.api }}"
+          git checkout -q --orphan "$RAMA"
+          git rm -rq --cached . || true
+          git add -f resultado
+          git commit -qm "Prueba de la compilación ${{ github.run_number }} en API ${{ matrix.api }}"
+          git push -qf origin "HEAD:refs/heads/$RAMA"
+
+  publicar:
+    needs: [apk, probar]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: TempleOfStrength-${{ needs.apk.outputs.version }}-${{ github.run_number }}
+          path: salida/
       - name: Publicar Release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          TAG="v${{ steps.info.outputs.version }}-${{ github.run_number }}"
+          TAG="v${{ needs.apk.outputs.version }}-${{ github.run_number }}"
           gh release create "$TAG" salida/TempleOfStrength.apk salida/TempleOfStrength.aab salida/apk-info.json \
-            --title "Temple of Strength ${{ steps.info.outputs.version }} (compilación ${{ github.run_number }})" \
-            --notes "APK construido automáticamente desde ${{ github.sha }}." --latest
+            -R "${{ github.repository }}" \
+            --title "Temple of Strength ${{ needs.apk.outputs.version }} (compilación ${{ github.run_number }})" \
+            --notes "APK construido desde ${{ github.sha }} y probado en Android 11 y 14." --latest
