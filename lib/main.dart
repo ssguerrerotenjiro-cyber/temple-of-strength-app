@@ -4073,6 +4073,7 @@ class SesionTemplo {
       await NubeTemplo.instancia.cerrar().timeout(const Duration(seconds: 12));
     } catch (_) {}
     actual = null;
+    GymsRepo.instancia.limpiar();
     await supa.auth.signOut();
   }
 
@@ -4088,6 +4089,7 @@ class SesionTemplo {
     }
     if (id != null) await NubeTemplo.instancia.borrarTodo(id);
     actual = null;
+    GymsRepo.instancia.limpiar();
     try {
       await supa.auth.signOut();
     } catch (_) {}
@@ -10718,6 +10720,9 @@ class _DojoScreenState extends State<DojoScreen>
             ),
             const SizedBox(height: TempleSpace.l),
           ],
+
+          // Tu gym: cuántos hay ahora y registrar la llegada (sección 57).
+          const TarjetaGymDojo(),
 
           // La primera vez: ¿te recuerdo entrenar y tomar agua? (sección 51).
           if (TarjetaRecordatoriosDojo.tocaMostrar()) ...<Widget>[
@@ -36459,7 +36464,7 @@ class _ClanScreenState extends State<ClanScreen> {
                 padding: const EdgeInsets.symmetric(horizontal: TempleSpace.borde),
                 child: _PestanasClan(
                   indice: _pestana,
-                  opciones: const <String>['Para ti', 'Siguiendo', 'Mi clan', 'Retos'],
+                  opciones: const <String>['Para ti', 'Siguiendo', 'Mi clan', 'Retos', 'Gym'],
                   onCambio: (int i) {
                     HapticFeedback.selectionClick();
                     setState(() => _pestana = i);
@@ -36497,6 +36502,7 @@ class _ClanScreenState extends State<ClanScreen> {
                     ),
                     const PestanaMiClan(),
                     PestanaRetos(onIrAClan: () => setState(() => _pestana = 2)),
+                    const PestanaGym(),
                   ],
                 ),
               ),
@@ -36564,7 +36570,7 @@ class _PestanasClan extends StatelessWidget {
                     overflow: TextOverflow.fade,
                     softWrap: false,
                     style: TextStyle(
-                      fontSize: opciones.length > 3 ? 12 : 13,
+                      fontSize: opciones.length > 4 ? 11.5 : (opciones.length > 3 ? 12 : 13),
                       fontWeight: i == indice ? FontWeight.w600 : FontWeight.w400,
                       color: i == indice ? TempleColors.blancoLuna : TempleColors.textoSuave,
                     ),
@@ -61697,7 +61703,19 @@ class _ModeracionScreenState extends State<ModeracionScreen> {
       body: FondoTemplo(
         child: Column(
           children: <Widget>[
-            const BarraClan(titulo: 'Moderación', subtitulo: 'Reportes del Clan y de Tenshi', pase: false),
+            BarraClan(
+              titulo: 'Moderación',
+              subtitulo: 'Reportes del Clan y de Tenshi',
+              pase: false,
+              acciones: <Widget>[
+                IconButton(
+                  tooltip: 'Gimnasios',
+                  onPressed: () => Navigator.of(context)
+                      .push(MaterialPageRoute<void>(builder: (_) => const GymsAdminScreen())),
+                  icon: const Icon(Icons.fitness_center_rounded, color: TempleColors.dorado),
+                ),
+              ],
+            ),
             Padding(
               padding: EdgeInsets.fromLTRB(TempleSpace.borde, 4, TempleSpace.borde, 8),
               child: Column(
@@ -62353,6 +62371,9 @@ class Recordatorios extends ChangeNotifier {
         );
       }
     }
+
+    // La mensualidad del gym (sección 57).
+    await GymsRepo.instancia.programarAvisosPago(this);
   }
 
   /// Un recordatorio de prueba dentro de unos segundos.
@@ -66400,6 +66421,6658 @@ class TarjetaReglasMenores extends StatelessWidget {
             ),
         ],
       ),
+    );
+  }
+}
+
+// ===========================================================================
+// 57. GIMNASIOS — «Templos aliados»
+//
+// Gyms reales dentro de la app. Un moderador crea el gym y le entrega al dueño
+// un código que sirve una sola vez. Adentro, el dueño y los coaches ven el
+// código de coach (para su equipo) y el de socio (para el afiche de la
+// recepción). Dueños y coaches tienen el Pase mientras sigan en el equipo.
+//
+// Cada persona es socia de un solo gym y además puede tener un clan libre.
+// Las reglas viven en la base de datos (funciones gym_*).
+//
+//   57.1  Utilidades
+//   57.2  Modelos
+//   57.3  Repositorio
+//   57.4  Piezas visuales
+//   57.5  Pestaña «Gym» del Clan y directorio
+//   57.6  Vista de un gym (socio o visitante)
+//   57.7  Ranking, récords, retos y reseñas
+//   57.8  Panel del templo (dueño y coaches)
+//   57.9  Editar el gym, fotos y equipo
+//   57.10 Moderadores, solicitud y tarjeta del Dojo
+// ===========================================================================
+
+// ---------------------------------------------------------------------------
+// 57.1 UTILIDADES
+// ---------------------------------------------------------------------------
+
+const String kBucketGimnasios = 'gimnasios';
+
+const List<String> _mesesGym = <String>['ene', 'feb', 'mar', 'abr', 'may', 'jun', 'jul', 'ago', 'sep', 'oct', 'nov', 'dic'];
+const List<String> kDiasGym = <String>['Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado', 'Domingo'];
+const List<String> kDiasCortosGym = <String>['Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb', 'Dom'];
+
+double numGym(Object? v) => v is num ? v.toDouble() : double.tryParse(v?.toString() ?? '') ?? 0;
+int entGym(Object? v) => numGym(v).round();
+String textoGym(Object? v) => v == null ? '' : v.toString();
+DateTime? fechaDeGym(Object? v) => v == null ? null : DateTime.tryParse(v.toString())?.toLocal();
+List<Map<String, dynamic>> listaGym(Object? v) => <Map<String, dynamic>>[
+      if (v is List)
+        for (final Object? x in v)
+          if (x is Map) Map<String, dynamic>.from(x),
+    ];
+Map<String, dynamic> mapaGym(Object? v) => v is Map ? Map<String, dynamic>.from(v) : <String, dynamic>{};
+
+String fechaGym(DateTime d, {bool conAnio = false}) {
+  final bool otroAnio = d.year != DateTime.now().year;
+  return '${d.day} ${_mesesGym[d.month - 1]}${conAnio || otroAnio ? ' ${d.year}' : ''}';
+}
+
+String isoDiaGym(DateTime d) =>
+    '${d.year.toString().padLeft(4, '0')}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
+
+DateTime hoyGym() {
+  final DateTime n = DateTime.now();
+  return DateTime(n.year, n.month, n.day);
+}
+
+int diasHastaGym(DateTime d) => DateTime(d.year, d.month, d.day).difference(hoyGym()).inDays;
+
+String haceGym(DateTime d) {
+  final Duration x = DateTime.now().difference(d);
+  if (x.inMinutes < 1) return 'ahora';
+  if (x.inMinutes < 60) return 'hace ${x.inMinutes} min';
+  if (x.inHours < 24) return 'hace ${x.inHours} h';
+  if (x.inDays == 1) return 'ayer';
+  if (x.inDays < 7) return 'hace ${x.inDays} días';
+  return fechaGym(d);
+}
+
+String pesosGym(num v) => '\$ ${milesTemplo(v)}';
+
+/// D-ABCD-EFGH, C-ABC-DEF, S-ABCDE.
+String formatoCodigoGym(String c) {
+  final String s = c.toUpperCase().replaceAll(RegExp(r'[^A-Z0-9]'), '');
+  if (s.length < 2) return s;
+  final String p = s.substring(0, 1);
+  final String r = s.substring(1);
+  if (p == 'D' && r.length == 8) return '$p-${r.substring(0, 4)}-${r.substring(4)}';
+  if (p == 'C' && r.length == 6) return '$p-${r.substring(0, 3)}-${r.substring(3)}';
+  return '$p-$r';
+}
+
+String nombreRolGym(String? rol) => rol == 'dueno' ? 'Dueño' : (rol == 'coach' ? 'Coach' : 'Socio');
+
+const Map<String, (String, IconData)> kServiciosGym = <String, (String, IconData)>{
+  'duchas': ('Duchas', Icons.shower_outlined),
+  'casilleros': ('Casilleros', Icons.lock_outline_rounded),
+  'parqueadero': ('Parqueadero', Icons.local_parking_rounded),
+  'wifi': ('Wi-Fi', Icons.wifi_rounded),
+  'entrenador': ('Entrenador personal', Icons.sports_rounded),
+  'clases': ('Clases grupales', Icons.groups_outlined),
+  'nutricion': ('Nutrición', Icons.restaurant_outlined),
+  'fisio': ('Fisioterapia', Icons.healing_outlined),
+  'sauna': ('Sauna o turco', Icons.hot_tub_outlined),
+  'cafeteria': ('Cafetería', Icons.local_cafe_outlined),
+  '24h': ('Abierto 24 h', Icons.schedule_rounded),
+  'aire': ('Aire acondicionado', Icons.ac_unit_rounded),
+  'zona_ninos': ('Zona para niños', Icons.child_care_outlined),
+  'accesible': ('Acceso para silla de ruedas', Icons.accessible_rounded),
+};
+
+const Map<String, String> kCategoriasEquipoGym = <String, String>{
+  'cardio': 'Cardio',
+  'maquinas': 'Máquinas guiadas',
+  'libre': 'Peso libre',
+  'funcional': 'Funcional',
+  'otros': 'Otros',
+};
+
+const Map<String, String> kPeriodosGym = <String, String>{
+  'dia': 'día',
+  'semana': 'semana',
+  'mes': 'mes',
+  'trimestre': 'trimestre',
+  'semestre': 'semestre',
+  'anio': 'año',
+};
+
+const Map<String, String> kEjerciciosGym = <String, String>{
+  'banca': 'Press de banca',
+  'sentadilla': 'Sentadilla',
+  'muerto': 'Peso muerto',
+  'militar': 'Press militar',
+  'remo': 'Remo con barra',
+  'hip_thrust': 'Hip thrust',
+  'dominadas': 'Dominadas',
+  'fondos': 'Fondos',
+};
+
+bool ejercicioCorporalGym(String e) => e == 'dominadas' || e == 'fondos';
+
+const Map<String, (String, String)> kClasesRetoGym = <String, (String, String)>{
+  'asistencia': ('Días en el gym', 'días'),
+  'sesiones': ('Sesiones registradas', 'sesiones'),
+  'minutos': ('Minutos entrenados', 'min'),
+  'series': ('Series', 'series'),
+  'volumen': ('Volumen (kg)', 'kg'),
+};
+
+Future<void> abrirEnlaceGym(BuildContext context, String url) async {
+  bool ok = false;
+  try {
+    ok = await launchUrl(Uri.parse(url), mode: LaunchMode.externalApplication);
+  } catch (_) {}
+  if (!ok && context.mounted) avisoClan(context, 'No se pudo abrir el enlace.', error: true);
+}
+
+String whatsappDeGym(String numero) {
+  String d = numero.replaceAll(RegExp(r'[^0-9]'), '');
+  if (d.length == 10 && d.startsWith('3')) d = '57$d';
+  return d;
+}
+
+Future<void> compartirTextoGym(BuildContext context, String texto) async {
+  await Clipboard.setData(ClipboardData(text: texto));
+  if (!context.mounted) return;
+  await abrirEnlaceGym(context, 'https://wa.me/?text=${Uri.encodeComponent(texto)}');
+}
+
+String urlFotoGym(String ruta) => supa.storage.from(kBucketGimnasios).getPublicUrl(ruta);
+
+// ---------------------------------------------------------------------------
+// 57.2 MODELOS
+// ---------------------------------------------------------------------------
+
+class GymResumen {
+  const GymResumen({
+    required this.id,
+    required this.nombre,
+    this.lema = '',
+    this.kanji = '鋼',
+    this.color = 0,
+    this.ciudad = '',
+    this.barrio = '',
+    this.planTemplo = 'aliado',
+    this.activo = true,
+    this.foto,
+    this.estrellas,
+    this.nValoraciones = 0,
+    this.nSocios = 0,
+    this.ahora = 0,
+    this.aforo,
+    this.precioDesde,
+  });
+
+  final String id;
+  final String nombre;
+  final String lema;
+  final String kanji;
+  final int color;
+  final String ciudad;
+  final String barrio;
+  final String planTemplo;
+  final bool activo;
+  final String? foto;
+  final double? estrellas;
+  final int nValoraciones;
+  final int nSocios;
+  final int ahora;
+  final int? aforo;
+  final double? precioDesde;
+
+  bool get fundador => planTemplo == 'fundador';
+  String get lugar => <String>[barrio, ciudad].where((String s) => s.trim().isNotEmpty).join(', ');
+
+  factory GymResumen.desde(Map<String, dynamic> m) => GymResumen(
+        id: textoGym(m['id']),
+        nombre: textoGym(m['nombre']),
+        lema: textoGym(m['lema']),
+        kanji: textoGym(m['kanji']).isEmpty ? '鋼' : textoGym(m['kanji']),
+        color: entGym(m['color']),
+        ciudad: textoGym(m['ciudad']),
+        barrio: textoGym(m['barrio']),
+        planTemplo: textoGym(m['plan_templo']).isEmpty ? 'aliado' : textoGym(m['plan_templo']),
+        activo: m['activo'] != false,
+        foto: (m['foto'] as String?)?.trim().isEmpty ?? true ? null : m['foto'] as String,
+        estrellas: m['estrellas'] == null ? null : numGym(m['estrellas']),
+        nValoraciones: entGym(m['n_valoraciones']),
+        nSocios: entGym(m['n_socios']),
+        ahora: entGym(m['ahora']),
+        aforo: m['aforo'] == null ? null : entGym(m['aforo']),
+        precioDesde: m['precio_desde'] == null ? null : numGym(m['precio_desde']),
+      );
+}
+
+class PlanGym {
+  const PlanGym({required this.nombre, required this.precio, required this.periodo, this.detalle = ''});
+  final String nombre;
+  final double precio;
+  final String periodo;
+  final String detalle;
+
+  factory PlanGym.desde(Map<String, dynamic> m) => PlanGym(
+        nombre: textoGym(m['nombre']),
+        precio: numGym(m['precio']),
+        periodo: textoGym(m['periodo']).isEmpty ? 'mes' : textoGym(m['periodo']),
+        detalle: textoGym(m['detalle']),
+      );
+
+  Map<String, dynamic> aMapa() => <String, dynamic>{'nombre': nombre, 'precio': precio, 'periodo': periodo, 'detalle': detalle};
+
+  /// Cuántos días cubre este plan al registrar un pago.
+  int get dias {
+    switch (periodo) {
+      case 'dia':
+        return 1;
+      case 'semana':
+        return 7;
+      case 'trimestre':
+        return 91;
+      case 'semestre':
+        return 182;
+      case 'anio':
+        return 365;
+      default:
+        return 30;
+    }
+  }
+}
+
+class EquipoMaquinaGym {
+  const EquipoMaquinaGym({required this.nombre, required this.cantidad, required this.categoria});
+  final String nombre;
+  final int cantidad;
+  final String categoria;
+
+  factory EquipoMaquinaGym.desde(Map<String, dynamic> m) => EquipoMaquinaGym(
+        nombre: textoGym(m['nombre']),
+        cantidad: entGym(m['cantidad']).clamp(1, 500),
+        categoria: kCategoriasEquipoGym.containsKey(m['categoria']) ? m['categoria'] as String : 'otros',
+      );
+
+  Map<String, dynamic> aMapa() => <String, dynamic>{'nombre': nombre, 'cantidad': cantidad, 'categoria': categoria};
+}
+
+class HorarioGym {
+  const HorarioGym({required this.dias, required this.abre, required this.cierra});
+  final String dias;
+  final String abre;
+  final String cierra;
+
+  factory HorarioGym.desde(Map<String, dynamic> m) =>
+      HorarioGym(dias: textoGym(m['dias']), abre: textoGym(m['abre']), cierra: textoGym(m['cierra']));
+
+  Map<String, dynamic> aMapa() => <String, dynamic>{'dias': dias, 'abre': abre, 'cierra': cierra};
+}
+
+class ClaseGym {
+  const ClaseGym({required this.nombre, required this.dia, required this.hora, this.duracion = 60, this.coach = ''});
+  final String nombre;
+  final int dia;
+  final String hora;
+  final int duracion;
+  final String coach;
+
+  factory ClaseGym.desde(Map<String, dynamic> m) => ClaseGym(
+        nombre: textoGym(m['nombre']),
+        dia: entGym(m['dia']).clamp(1, 7),
+        hora: textoGym(m['hora']),
+        duracion: entGym(m['duracion']) <= 0 ? 60 : entGym(m['duracion']),
+        coach: textoGym(m['coach']),
+      );
+
+  Map<String, dynamic> aMapa() =>
+      <String, dynamic>{'nombre': nombre, 'dia': dia, 'hora': hora, 'duracion': duracion, 'coach': coach};
+}
+
+class ValoracionGym {
+  const ValoracionGym({
+    required this.persona,
+    required this.estrellas,
+    required this.comentario,
+    required this.respuesta,
+    required this.fecha,
+    required this.esYo,
+  });
+
+  final ClanPersona persona;
+  final int estrellas;
+  final String comentario;
+  final String respuesta;
+  final DateTime? fecha;
+  final bool esYo;
+
+  factory ValoracionGym.desde(Map<String, dynamic> m) => ValoracionGym(
+        persona: ClanPersona.desdeMapa(m),
+        estrellas: entGym(m['estrellas']).clamp(1, 5),
+        comentario: textoGym(m['comentario']),
+        respuesta: textoGym(m['respuesta']),
+        fecha: fechaDeGym(m['fecha']),
+        esYo: m['es_yo'] == true,
+      );
+}
+
+class DetalleGym {
+  const DetalleGym({
+    required this.r,
+    required this.descripcion,
+    required this.direccion,
+    required this.mapaUrl,
+    required this.telefono,
+    required this.whatsapp,
+    required this.instagram,
+    required this.horario,
+    required this.planes,
+    required this.equipos,
+    required this.servicios,
+    required this.clases,
+    required this.fotos,
+    required this.ingreso,
+    required this.equipo,
+    required this.picos,
+    required this.miRol,
+    required this.miEstado,
+    required this.miPagoHasta,
+    required this.miPlan,
+    required this.enRanking,
+    required this.dentro,
+    required this.miEstrellas,
+    required this.miComentario,
+    required this.valoraciones,
+    required this.codigoCoach,
+    required this.codigoSocio,
+    required this.otroGym,
+    required this.aliadoHasta,
+  });
+
+  final GymResumen r;
+  final String descripcion;
+  final String direccion;
+  final String mapaUrl;
+  final String telefono;
+  final String whatsapp;
+  final String instagram;
+  final List<HorarioGym> horario;
+  final List<PlanGym> planes;
+  final List<EquipoMaquinaGym> equipos;
+  final List<String> servicios;
+  final List<ClaseGym> clases;
+  final List<String> fotos;
+  final String ingreso;
+  final List<(ClanPersona, String)> equipo;
+  final List<int> picos;
+  final String? miRol;
+  final String? miEstado;
+  final DateTime? miPagoHasta;
+  final String miPlan;
+  final bool enRanking;
+  final bool dentro;
+  final int? miEstrellas;
+  final String miComentario;
+  final List<ValoracionGym> valoraciones;
+  final String? codigoCoach;
+  final String? codigoSocio;
+  final String? otroGym;
+  final DateTime? aliadoHasta;
+
+  String get id => r.id;
+  bool get soySocio => miEstado == 'activo';
+  bool get pendiente => miEstado == 'pendiente';
+  bool get soyEquipo => miRol != null;
+  bool get soyDueno => miRol == 'dueno';
+  bool get deAdentro => soySocio || soyEquipo;
+  int get maquinas => equipos.fold<int>(0, (int a, EquipoMaquinaGym e) => a + e.cantidad);
+
+  factory DetalleGym.desde(Map<String, dynamic> m) {
+    final Map<String, dynamic> soc = mapaGym(m['mi_socio']);
+    final Map<String, dynamic> mv = mapaGym(m['mi_valoracion']);
+    final Map<String, dynamic> cod = mapaGym(m['codigos']);
+    final Map<String, dynamic> otro = mapaGym(m['otro_gym']);
+    return DetalleGym(
+      r: GymResumen.desde(m),
+      descripcion: textoGym(m['descripcion']),
+      direccion: textoGym(m['direccion']),
+      mapaUrl: textoGym(m['mapa_url']),
+      telefono: textoGym(m['telefono']),
+      whatsapp: textoGym(m['whatsapp']),
+      instagram: textoGym(m['instagram']),
+      horario: listaGym(m['horario']).map(HorarioGym.desde).toList(),
+      planes: listaGym(m['planes']).map(PlanGym.desde).toList(),
+      equipos: listaGym(m['equipos']).map(EquipoMaquinaGym.desde).toList(),
+      servicios: <String>[
+        if (m['servicios'] is List)
+          for (final Object? s in m['servicios'] as List) s.toString(),
+      ],
+      clases: listaGym(m['clases']).map(ClaseGym.desde).toList(),
+      fotos: <String>[
+        if (m['fotos'] is List)
+          for (final Object? s in m['fotos'] as List) s.toString(),
+      ],
+      ingreso: textoGym(m['ingreso']).isEmpty ? 'solicitud' : textoGym(m['ingreso']),
+      equipo: <(ClanPersona, String)>[
+        for (final Map<String, dynamic> e in listaGym(m['equipo'])) (ClanPersona.desdeMapa(e), textoGym(e['rol'])),
+      ],
+      picos: <int>[
+        if (m['picos'] is List)
+          for (final Object? p in m['picos'] as List) entGym(p),
+      ],
+      miRol: m['mi_rol'] as String?,
+      miEstado: soc.isEmpty ? null : textoGym(soc['estado']),
+      miPagoHasta: fechaDeGym(soc['pago_hasta']),
+      miPlan: textoGym(soc['plan']),
+      enRanking: soc['ranking'] != false,
+      dentro: m['mi_ingreso'] == true,
+      miEstrellas: mv.isEmpty ? null : entGym(mv['estrellas']),
+      miComentario: textoGym(mv['comentario']),
+      valoraciones: listaGym(m['valoraciones']).map(ValoracionGym.desde).toList(),
+      codigoCoach: cod['coach'] as String?,
+      codigoSocio: cod['socio'] as String?,
+      otroGym: otro.isEmpty ? null : textoGym(otro['nombre']),
+      aliadoHasta: fechaDeGym(m['aliado_hasta']),
+    );
+  }
+}
+
+class MiGymInfo {
+  const MiGymInfo({
+    required this.gym,
+    required this.estado,
+    required this.pagoHasta,
+    required this.plan,
+    required this.rol,
+    required this.dentro,
+  });
+
+  final GymResumen gym;
+  final String estado;
+  final DateTime? pagoHasta;
+  final String plan;
+  final String? rol;
+  final bool dentro;
+
+  bool get activo => estado == 'activo';
+
+  factory MiGymInfo.desde(Map<String, dynamic> m) => MiGymInfo(
+        gym: GymResumen.desde(m),
+        estado: textoGym(m['estado']),
+        pagoHasta: fechaDeGym(m['pago_hasta']),
+        plan: textoGym(m['plan']),
+        rol: m['mi_rol'] as String?,
+        dentro: m['mi_ingreso'] == true,
+      );
+}
+
+class FilaRankingGym {
+  const FilaRankingGym({
+    required this.persona,
+    required this.valor,
+    required this.puesto,
+    required this.esYo,
+    this.rol,
+    this.r,
+  });
+
+  final ClanPersona persona;
+  final double valor;
+  final int puesto;
+  final bool esYo;
+  final String? rol;
+  final int? r;
+
+  factory FilaRankingGym.desde(Map<String, dynamic> m) => FilaRankingGym(
+        persona: ClanPersona.desdeMapa(m),
+        valor: numGym(m['valor']),
+        puesto: entGym(m['puesto']),
+        esYo: m['es_yo'] == true,
+        rol: m['rol'] as String?,
+        r: m['r'] == null ? null : entGym(m['r']),
+      );
+}
+
+class RankingGym {
+  const RankingGym({required this.lista, required this.miPuesto, required this.miValor, required this.total});
+  final List<FilaRankingGym> lista;
+  final int? miPuesto;
+  final double? miValor;
+  final int total;
+}
+
+class RecordGym {
+  const RecordGym({
+    required this.id,
+    required this.ejercicio,
+    required this.peso,
+    required this.reps,
+    required this.estado,
+    required this.nota,
+    required this.fecha,
+    this.persona,
+    this.puesto = 0,
+    this.esYo = false,
+    this.propio = false,
+  });
+
+  final String id;
+  final String ejercicio;
+  final double peso;
+  final int reps;
+  final String estado;
+  final String nota;
+  final DateTime? fecha;
+  final ClanPersona? persona;
+  final int puesto;
+  final bool esYo;
+  final bool propio;
+
+  String get marca {
+    final String kg = peso == peso.roundToDouble() ? peso.round().toString() : peso.toStringAsFixed(1);
+    if (ejercicioCorporalGym(ejercicio)) return peso > 0 ? '$reps reps · +$kg kg' : '$reps reps';
+    return '$kg kg × $reps';
+  }
+
+  /// 1RM estimado (Epley) para los ejercicios con barra.
+  double get unaRm => ejercicioCorporalGym(ejercicio) ? 0 : peso * (1 + reps / 30.0);
+
+  factory RecordGym.desde(Map<String, dynamic> m, {bool conPersona = false}) => RecordGym(
+        id: textoGym(m['record_id'] ?? m['id']),
+        ejercicio: textoGym(m['ejercicio']),
+        peso: numGym(m['peso']),
+        reps: entGym(m['reps']),
+        estado: textoGym(m['estado']).isEmpty ? 'validado' : textoGym(m['estado']),
+        nota: textoGym(m['nota']),
+        fecha: fechaDeGym(m['fecha']),
+        persona: conPersona ? ClanPersona.desdeMapa(m) : null,
+        puesto: entGym(m['puesto']),
+        esYo: m['es_yo'] == true,
+        propio: m['propio'] == true,
+      );
+}
+
+class RetoGym {
+  const RetoGym({
+    required this.id,
+    required this.titulo,
+    required this.descripcion,
+    required this.clase,
+    required this.meta,
+    required this.inicio,
+    required this.fin,
+    required this.premio,
+    required this.estado,
+    required this.mio,
+    required this.cumplen,
+    required this.socios,
+  });
+
+  final String id;
+  final String titulo;
+  final String descripcion;
+  final String clase;
+  final double meta;
+  final DateTime inicio;
+  final DateTime fin;
+  final String premio;
+  final String estado;
+  final double mio;
+  final int cumplen;
+  final int socios;
+
+  bool get activo => estado == 'activo';
+  bool get cumplido => mio >= meta;
+  String get unidad => kClasesRetoGym[clase]?.$2 ?? '';
+  double get avance => meta <= 0 ? 0 : (mio / meta).clamp(0, 1).toDouble();
+
+  factory RetoGym.desde(Map<String, dynamic> m) => RetoGym(
+        id: textoGym(m['id']),
+        titulo: textoGym(m['titulo']),
+        descripcion: textoGym(m['descripcion']),
+        clase: textoGym(m['clase']),
+        meta: numGym(m['meta']),
+        inicio: fechaDeGym(m['inicio']) ?? hoyGym(),
+        fin: fechaDeGym(m['fin']) ?? hoyGym(),
+        premio: textoGym(m['premio']),
+        estado: textoGym(m['estado']),
+        mio: numGym(m['mio']),
+        cumplen: entGym(m['cumplen']),
+        socios: entGym(m['socios']),
+      );
+}
+
+class AvisoGym {
+  const AvisoGym({required this.id, required this.texto, required this.fijado, required this.fecha, this.autor, this.rol});
+  final String id;
+  final String texto;
+  final bool fijado;
+  final DateTime? fecha;
+  final ClanPersona? autor;
+  final String? rol;
+
+  factory AvisoGym.desde(Map<String, dynamic> m) {
+    final Map<String, dynamic> a = mapaGym(m['autor']);
+    return AvisoGym(
+      id: textoGym(m['id']),
+      texto: textoGym(m['texto']),
+      fijado: m['fijado'] == true,
+      fecha: fechaDeGym(m['fecha']),
+      autor: a['id'] == null ? null : ClanPersona.desdeMapa(a),
+      rol: m['rol'] as String?,
+    );
+  }
+}
+
+class SocioGym {
+  const SocioGym({
+    required this.persona,
+    required this.estado,
+    required this.plan,
+    required this.pagoHasta,
+    required this.nota,
+    required this.unidoEn,
+    required this.rol,
+    required this.ultima,
+    required this.visitasMes,
+    required this.dentro,
+  });
+
+  final ClanPersona persona;
+  final String estado;
+  final String plan;
+  final DateTime? pagoHasta;
+  final String nota;
+  final DateTime? unidoEn;
+  final String? rol;
+  final DateTime? ultima;
+  final int visitasMes;
+  final bool dentro;
+
+  bool get pendiente => estado == 'pendiente';
+  int? get diasPago => pagoHasta == null ? null : diasHastaGym(pagoHasta!);
+  bool get vencido => (diasPago ?? 0) < 0;
+  bool get porVencer => diasPago != null && diasPago! >= 0 && diasPago! <= 6;
+
+  factory SocioGym.desde(Map<String, dynamic> m) => SocioGym(
+        persona: ClanPersona.desdeMapa(m),
+        estado: textoGym(m['estado']),
+        plan: textoGym(m['plan']),
+        pagoHasta: fechaDeGym(m['pago_hasta']),
+        nota: textoGym(m['nota']),
+        unidoEn: fechaDeGym(m['unido_en']),
+        rol: m['rol'] as String?,
+        ultima: fechaDeGym(m['ultima']),
+        visitasMes: entGym(m['visitas_mes']),
+        dentro: m['dentro'] == true,
+      );
+}
+
+class PanelGym {
+  const PanelGym(this.m);
+  final Map<String, dynamic> m;
+
+  String get rol => textoGym(m['rol']);
+  bool get dueno => rol == 'dueno';
+  String get codigoCoach => textoGym(mapaGym(m['codigos'])['coach']);
+  String get codigoSocio => textoGym(mapaGym(m['codigos'])['socio']);
+  int get socios => entGym(m['socios']);
+  int get pendientes => entGym(m['pendientes']);
+  int get nuevosMes => entGym(m['nuevos_mes']);
+  int get ahora => entGym(m['ahora']);
+  int get hoy => entGym(m['hoy']);
+  int get semana => entGym(m['semana']);
+  int get visitas30 => entGym(m['visitas_30']);
+  int get recordsPendientes => entGym(m['records_pendientes']);
+  int get equipo => entGym(m['equipo']);
+  int get pagosMes => entGym(m['pagos_mes']);
+  double? get ingresosMes => m['ingresos_mes'] == null ? null : numGym(m['ingresos_mes']);
+  double? get estrellas => m['estrellas'] == null ? null : numGym(m['estrellas']);
+  int get nValoraciones => entGym(m['n_valoraciones']);
+  String get planTemplo => textoGym(m['plan_templo']);
+  DateTime? get aliadoHasta => fechaDeGym(m['aliado_hasta']);
+  Map<String, dynamic> get pagos => mapaGym(m['pagos']);
+  List<int> get picos => <int>[
+        if (m['picos'] is List)
+          for (final Object? p in m['picos'] as List) entGym(p),
+      ];
+  List<(DateTime, int)> get dias => <(DateTime, int)>[
+        for (final Map<String, dynamic> d in listaGym(m['dias'])) (fechaDeGym(d['dia']) ?? hoyGym(), entGym(d['n'])),
+      ];
+}
+
+/// Las horas con más entradas, en texto: «6–8 p. m.».
+String? mejorFranjaGym(List<int> picos, {bool menos = false}) {
+  if (picos.length != 24 || picos.every((int p) => p == 0)) return null;
+  int mejor = -1;
+  int valor = menos ? 1 << 30 : -1;
+  for (int h = 5; h <= 21; h++) {
+    final int v = picos[h] + picos[h + 1];
+    if (menos ? v < valor : v > valor) {
+      valor = v;
+      mejor = h;
+    }
+  }
+  if (mejor < 0) return null;
+  String hora(int h) {
+    final int x = h % 12 == 0 ? 12 : h % 12;
+    return '$x';
+  }
+
+  final String sufijo = mejor + 2 < 12 ? 'a. m.' : 'p. m.';
+  return '${hora(mejor)}–${hora(mejor + 2)} $sufijo';
+}
+
+// ---------------------------------------------------------------------------
+// 57.3 REPOSITORIO
+// ---------------------------------------------------------------------------
+
+class GymsRepo extends ChangeNotifier {
+  GymsRepo._();
+  static final GymsRepo instancia = GymsRepo._();
+
+  MiGymInfo? socio;
+  List<(GymResumen, String)> equipo = <(GymResumen, String)>[];
+  bool cargado = false;
+  bool _cargando = false;
+
+  /// El gym que se muestra en la pestaña: donde soy socio, si no, donde trabajo.
+  String? get principal {
+    final MiGymInfo? s = socio;
+    if (s != null && s.activo) return s.gym.id;
+    if (equipo.isNotEmpty) return equipo.first.$1.id;
+    return null;
+  }
+
+  /// Todos mis gyms (socio y equipo), sin repetir.
+  List<(String, String, String)> get misGyms {
+    final List<(String, String, String)> l = <(String, String, String)>[];
+    final MiGymInfo? s = socio;
+    if (s != null && s.activo) l.add((s.gym.id, s.gym.nombre, s.rol ?? 'socio'));
+    for (final (GymResumen, String) e in equipo) {
+      if (!l.any(((String, String, String) x) => x.$1 == e.$1.id)) l.add((e.$1.id, e.$1.nombre, e.$2));
+    }
+    return l;
+  }
+
+  Future<void> cargarMio() async {
+    if (_cargando) return;
+    _cargando = true;
+    try {
+      final Object? r = await supa.rpc('gym_mio').timeout(const Duration(seconds: 12));
+      final Map<String, dynamic> m = mapaGym(r);
+      final Map<String, dynamic> s = mapaGym(m['socio']);
+      socio = s.isEmpty ? null : MiGymInfo.desde(s);
+      equipo = <(GymResumen, String)>[
+        for (final Map<String, dynamic> e in listaGym(m['equipo'])) (GymResumen.desde(e), textoGym(e['mi_rol'])),
+      ];
+      await _guardarPago();
+    } catch (e) {
+      debugPrint('Gyms: $e');
+    }
+    _cargando = false;
+    cargado = true;
+    notifyListeners();
+  }
+
+  void limpiar() {
+    socio = null;
+    equipo = <(GymResumen, String)>[];
+    cargado = false;
+    notifyListeners();
+  }
+
+  // --- Directorio y perfil ---
+
+  Future<List<GymResumen>> lista([String q = '']) async {
+    final Object? r = await supa.rpc('gyms_lista', params: <String, dynamic>{'q': q.trim(), 'p_ciudad': ''});
+    return listaGym(r).map(GymResumen.desde).toList();
+  }
+
+  Future<DetalleGym> detalle(String id) async {
+    final Object? r = await supa.rpc('gym_detalle', params: <String, dynamic>{'g': id});
+    return DetalleGym.desde(mapaGym(r));
+  }
+
+  /// Dueño, coach o socio: el servidor sabe qué código es.
+  Future<Map<String, dynamic>> usarCodigo(String codigo, {bool ranking = true}) async {
+    final Object? r = await supa.rpc('gym_codigo', params: <String, dynamic>{'p_codigo': codigo, 'p_ranking': ranking});
+    final Map<String, dynamic> m = mapaGym(r);
+    if (m['ok'] != true) throw AuthFailure(textoGym(m['error']).isEmpty ? 'No se pudo usar el código.' : textoGym(m['error']));
+    await cargarMio();
+    if (m['tipo'] == 'dueno' || m['tipo'] == 'coach') {
+      unawaited(PaseTemplo.instancia.cargar());
+    }
+    return m;
+  }
+
+  Future<Map<String, dynamic>> unirse(String id, {bool ranking = true}) async {
+    final Object? r = await supa.rpc('gym_unirse', params: <String, dynamic>{'g': id, 'p_ranking': ranking});
+    final Map<String, dynamic> m = mapaGym(r);
+    if (m['ok'] != true) throw AuthFailure(textoGym(m['error']).isEmpty ? 'No se pudo entrar al gym.' : textoGym(m['error']));
+    await cargarMio();
+    return m;
+  }
+
+  Future<void> salir(String id) async {
+    await supa.rpc('gym_salir', params: <String, dynamic>{'g': id});
+    await cargarMio();
+  }
+
+  Future<void> dejarEquipo(String id) async {
+    await supa.rpc('gym_dejar_equipo', params: <String, dynamic>{'g': id});
+    await cargarMio();
+    unawaited(PaseTemplo.instancia.cargar());
+  }
+
+  Future<void> preferencias(String id, bool ranking) =>
+      supa.rpc('gym_preferencias', params: <String, dynamic>{'g': id, 'p_ranking': ranking});
+
+  /// Entrar o salir. Devuelve si quedé adentro y cuántos hay.
+  Future<(bool, int)> ingreso(String id) async {
+    final Object? r = await supa.rpc('gym_ingreso', params: <String, dynamic>{'g': id, 'p_hoy': isoDiaGym(hoyGym())});
+    final Map<String, dynamic> m = mapaGym(r);
+    unawaited(cargarMio());
+    return (m['dentro'] == true, entGym(m['ahora']));
+  }
+
+  // --- Adentro ---
+
+  Future<RankingGym> ranking(String id, String tipo, {String musculo = ''}) async {
+    final Object? r = await supa.rpc('gym_ranking', params: <String, dynamic>{
+      'g': id,
+      'p_tipo': tipo,
+      'p_musculo': musculo,
+      'p_hoy': isoDiaGym(hoyGym()),
+    });
+    final Map<String, dynamic> m = mapaGym(r);
+    final Map<String, dynamic> yo = mapaGym(m['yo']);
+    return RankingGym(
+      lista: listaGym(m['lista']).map(FilaRankingGym.desde).toList(),
+      miPuesto: yo.isEmpty ? null : entGym(yo['puesto']),
+      miValor: yo.isEmpty ? null : numGym(yo['valor']),
+      total: entGym(m['total']),
+    );
+  }
+
+  Future<(List<RecordGym>, RecordGym?)> records(String id, String ejercicio) async {
+    final Object? r = await supa.rpc('gym_records', params: <String, dynamic>{'g': id, 'p_ejercicio': ejercicio});
+    final Map<String, dynamic> m = mapaGym(r);
+    final List<RecordGym> l = <RecordGym>[
+      for (final Map<String, dynamic> x in listaGym(m['lista'])) RecordGym.desde(<String, dynamic>{...x, 'ejercicio': ejercicio}, conPersona: true),
+    ];
+    final Map<String, dynamic> yo = mapaGym(m['yo']);
+    return (l, yo.isEmpty ? null : RecordGym.desde(<String, dynamic>{...yo, 'ejercicio': ejercicio}));
+  }
+
+  Future<List<RecordGym>> misRecords(String id) async {
+    final Object? r = await supa.rpc('gym_mis_records', params: <String, dynamic>{'g': id});
+    return listaGym(r).map((Map<String, dynamic> m) => RecordGym.desde(m)).toList();
+  }
+
+  Future<void> nuevoRecord(String id, String ejercicio, double peso, int reps) => supa.rpc('gym_record_nuevo',
+      params: <String, dynamic>{'g': id, 'p_ejercicio': ejercicio, 'p_peso': peso, 'p_reps': reps});
+
+  Future<void> borrarRecord(String recordId) => supa.rpc('gym_record_borrar', params: <String, dynamic>{'p_id': recordId});
+
+  Future<List<RetoGym>> retos(String id) async {
+    final Object? r = await supa.rpc('gym_retos', params: <String, dynamic>{'g': id, 'p_hoy': isoDiaGym(hoyGym())});
+    return listaGym(r).map(RetoGym.desde).toList();
+  }
+
+  Future<List<FilaRankingGym>> tablaReto(String retoId) async {
+    final Object? r = await supa.rpc('gym_reto_tabla', params: <String, dynamic>{'p_id': retoId, 'p_hoy': isoDiaGym(hoyGym())});
+    final List<Map<String, dynamic>> l = listaGym(r);
+    return <FilaRankingGym>[
+      for (int i = 0; i < l.length; i++) FilaRankingGym.desde(<String, dynamic>{...l[i], 'puesto': i + 1}),
+    ];
+  }
+
+  Future<List<AvisoGym>> avisos(String id) async {
+    final Object? r = await supa.rpc('gym_avisos', params: <String, dynamic>{'g': id});
+    return listaGym(r).map(AvisoGym.desde).toList();
+  }
+
+  Future<List<ValoracionGym>> valoraciones(String id, {int desde = 0}) async {
+    final Object? r =
+        await supa.rpc('gym_valoraciones', params: <String, dynamic>{'g': id, 'p_desde': desde, 'p_limite': 30});
+    return listaGym(r).map(ValoracionGym.desde).toList();
+  }
+
+  Future<void> valorar(String id, int estrellas, String comentario) => supa.rpc('gym_valorar',
+      params: <String, dynamic>{'g': id, 'p_estrellas': estrellas, 'p_comentario': comentario.trim()});
+
+  Future<void> borrarValoracion(String id) => supa.rpc('gym_valoracion_borrar', params: <String, dynamic>{'g': id});
+
+  // --- Equipo ---
+
+  Future<PanelGym> panel(String id) async {
+    final Object? r = await supa.rpc('gym_panel', params: <String, dynamic>{'g': id, 'p_hoy': isoDiaGym(hoyGym())});
+    return PanelGym(mapaGym(r));
+  }
+
+  Future<List<SocioGym>> socios(String id) async {
+    final Object? r = await supa.rpc('gym_socios_lista', params: <String, dynamic>{'g': id, 'p_hoy': isoDiaGym(hoyGym())});
+    return listaGym(r).map(SocioGym.desde).toList();
+  }
+
+  Future<void> accionSocio(String id, String usuario, String accion) => supa.rpc('gym_socio_accion',
+      params: <String, dynamic>{'g': id, 'u': usuario, 'p_accion': accion, 'p_hoy': isoDiaGym(hoyGym())});
+
+  Future<void> registrarPago(String id, String usuario, String plan, double monto, DateTime hasta) =>
+      supa.rpc('gym_pago_registrar', params: <String, dynamic>{
+        'g': id,
+        'u': usuario,
+        'p_plan': plan,
+        'p_monto': monto,
+        'p_hasta': isoDiaGym(hasta),
+      });
+
+  Future<List<Map<String, dynamic>>> pagosDe(String id, String usuario) async {
+    final Object? r = await supa.rpc('gym_pagos_de', params: <String, dynamic>{'g': id, 'u': usuario});
+    return listaGym(r);
+  }
+
+  Future<void> notaSocio(String id, String usuario, String nota) =>
+      supa.rpc('gym_socio_nota', params: <String, dynamic>{'g': id, 'u': usuario, 'p_nota': nota});
+
+  Future<List<RecordGym>> recordsPendientes(String id) async {
+    final Object? r = await supa.rpc('gym_records_pendientes', params: <String, dynamic>{'g': id});
+    return listaGym(r).map((Map<String, dynamic> m) => RecordGym.desde(m, conPersona: true)).toList();
+  }
+
+  Future<void> validarRecord(String recordId, bool aprobar, String nota) => supa.rpc('gym_record_validar',
+      params: <String, dynamic>{'p_id': recordId, 'p_aprobar': aprobar, 'p_nota': nota});
+
+  Future<void> nuevoAviso(String id, String texto, bool fijado) =>
+      supa.rpc('gym_aviso_nuevo', params: <String, dynamic>{'g': id, 'p_texto': texto.trim(), 'p_fijado': fijado});
+
+  Future<void> editarAviso(String avisoId, {bool fijado = false, bool borrar = false}) =>
+      supa.rpc('gym_aviso_editar', params: <String, dynamic>{'p_id': avisoId, 'p_fijado': fijado, 'p_borrar': borrar});
+
+  Future<void> nuevoReto({
+    required String id,
+    required String titulo,
+    required String descripcion,
+    required String clase,
+    required double meta,
+    required DateTime inicio,
+    required DateTime fin,
+    required String premio,
+  }) =>
+      supa.rpc('gym_reto_crear', params: <String, dynamic>{
+        'g': id,
+        'p_titulo': titulo.trim(),
+        'p_descripcion': descripcion.trim(),
+        'p_clase': clase,
+        'p_meta': meta,
+        'p_inicio': isoDiaGym(inicio),
+        'p_fin': isoDiaGym(fin),
+        'p_premio': premio.trim(),
+      });
+
+  Future<void> borrarReto(String retoId) => supa.rpc('gym_reto_borrar', params: <String, dynamic>{'p_id': retoId});
+
+  Future<String> regenerarCodigo(String id, String tipo) async {
+    final Object? r = await supa.rpc('gym_regenerar_codigo', params: <String, dynamic>{'g': id, 'p_tipo': tipo});
+    return textoGym(r);
+  }
+
+  Future<void> editar(String id, Map<String, dynamic> datos) =>
+      supa.rpc('gym_editar', params: <String, dynamic>{'g': id, 'p': datos});
+
+  Future<void> guardarFotos(String id, List<String> fotos) =>
+      supa.rpc('gym_fotos', params: <String, dynamic>{'g': id, 'p_fotos': fotos});
+
+  Future<String> subirFoto(String id, XFile archivo) async {
+    final Uint8List bytes = await archivo.readAsBytes();
+    if (bytes.length > 6 * 1024 * 1024) throw const AuthFailure('La foto pesa más de 6 MB. Elige otra.');
+    final String n = archivo.name.toLowerCase();
+    final String ext = n.endsWith('.png') ? 'png' : (n.endsWith('.webp') ? 'webp' : 'jpg');
+    final String ruta = '$id/${uuidClan()}.$ext';
+    await supa.storage.from(kBucketGimnasios).uploadBinary(
+          ruta,
+          bytes,
+          fileOptions: FileOptions(
+              contentType: ext == 'png' ? 'image/png' : (ext == 'webp' ? 'image/webp' : 'image/jpeg'), upsert: false),
+        );
+    return ruta;
+  }
+
+  Future<void> borrarArchivo(String ruta) async {
+    try {
+      await supa.storage.from(kBucketGimnasios).remove(<String>[ruta]);
+    } catch (_) {}
+  }
+
+  Future<void> quitarDelEquipo(String id, String usuario) =>
+      supa.rpc('gym_staff_quitar', params: <String, dynamic>{'g': id, 'u': usuario});
+
+  Future<void> responderValoracion(String id, String usuario, String texto) =>
+      supa.rpc('gym_responder_valoracion', params: <String, dynamic>{'g': id, 'u': usuario, 'p_texto': texto});
+
+  Future<void> reportarValoracion(String id, String usuario) =>
+      supa.rpc('gym_reportar_valoracion', params: <String, dynamic>{'g': id, 'u': usuario});
+
+  Future<void> solicitar(String nombre, String ciudad, String contacto, String mensaje) =>
+      supa.rpc('gym_solicitar', params: <String, dynamic>{
+        'p_nombre': nombre.trim(),
+        'p_ciudad': ciudad.trim(),
+        'p_contacto': contacto.trim(),
+        'p_mensaje': mensaje.trim(),
+      });
+
+  // --- Moderadores ---
+
+  Future<Map<String, dynamic>> adminLista() async => mapaGym(await supa.rpc('gym_admin_lista'));
+
+  Future<Map<String, dynamic>> adminCrear(String nombre, String ciudad, String plan, DateTime? hasta) async {
+    final Object? r = await supa.rpc('gym_admin_crear', params: <String, dynamic>{
+      'p_nombre': nombre.trim(),
+      'p_ciudad': ciudad.trim(),
+      'p_plan': plan,
+      'p_hasta': hasta == null ? null : isoDiaGym(hasta),
+    });
+    return mapaGym(r);
+  }
+
+  Future<void> adminEditar(String id, {required bool activo, required String plan, DateTime? hasta}) =>
+      supa.rpc('gym_admin_editar', params: <String, dynamic>{
+        'g': id,
+        'p_activo': activo,
+        'p_plan': plan,
+        'p_hasta': hasta == null ? null : isoDiaGym(hasta),
+      });
+
+  Future<String> adminCodigoDueno(String id) async =>
+      textoGym(await supa.rpc('gym_admin_codigo_dueno', params: <String, dynamic>{'g': id}));
+
+  Future<void> adminSolicitud(String solicitudId, String estado) =>
+      supa.rpc('gym_admin_solicitud', params: <String, dynamic>{'p_id': solicitudId, 'p_estado': estado});
+
+  Future<void> adminValoracion(String gymId, String usuario, String accion) =>
+      supa.rpc('gym_admin_valoracion', params: <String, dynamic>{'g': gymId, 'u': usuario, 'p_accion': accion});
+
+  // --- Aviso de la mensualidad (notificación local) ---
+
+  String _clavePago(String u) => 'gym_pago_$u';
+
+  Future<void> _guardarPago() async {
+    final String? u = SesionTemplo.instancia.uid;
+    if (u == null) return;
+    try {
+      final SharedPreferences p = await SharedPreferences.getInstance();
+      final MiGymInfo? s = socio;
+      final String nuevo = s == null || !s.activo || s.pagoHasta == null ? '' : '${isoDiaGym(s.pagoHasta!)}|${s.gym.nombre}';
+      final String antes = p.getString(_clavePago(u)) ?? '';
+      if (nuevo == antes) return;
+      if (nuevo.isEmpty) {
+        await p.remove(_clavePago(u));
+      } else {
+        await p.setString(_clavePago(u), nuevo);
+      }
+      unawaited(Recordatorios.instancia.reprogramar());
+    } catch (_) {}
+  }
+
+  /// Lo llama Recordatorios.reprogramar() después de cancelar todo.
+  Future<void> programarAvisosPago(Recordatorios r) async {
+    final String? u = SesionTemplo.instancia.uid;
+    if (u == null) return;
+    String dato = '';
+    try {
+      final SharedPreferences p = await SharedPreferences.getInstance();
+      dato = p.getString(_clavePago(u)) ?? '';
+    } catch (_) {}
+    final List<String> partes = dato.split('|');
+    if (partes.length < 2) return;
+    final DateTime? vence = DateTime.tryParse(partes.first);
+    if (vence == null) return;
+    final String gym = partes.sublist(1).join('|');
+    final DateTime ahora = DateTime.now();
+    final DateTime antes = DateTime(vence.year, vence.month, vence.day - 3, 9, 30);
+    final DateTime dia = DateTime(vence.year, vence.month, vence.day, 9, 30);
+    if (antes.isAfter(ahora)) {
+      await r._programar(
+        500,
+        antes,
+        canal: 'gym',
+        nombreCanal: 'Tu gym',
+        descripcion: 'Avisos de tu mensualidad y de tu gym.',
+        titulo: 'Tu mensualidad vence pronto',
+        cuerpo: 'En $gym quedas al día hasta el ${fechaGym(vence)}. Renuévala para seguir entrenando.',
+      );
+    }
+    if (dia.isAfter(ahora)) {
+      await r._programar(
+        501,
+        dia,
+        canal: 'gym',
+        nombreCanal: 'Tu gym',
+        descripcion: 'Avisos de tu mensualidad y de tu gym.',
+        titulo: 'Hoy vence tu mensualidad',
+        cuerpo: 'Pasa por la recepción de $gym para renovarla.',
+      );
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// 57.4 PIEZAS VISUALES
+// ---------------------------------------------------------------------------
+
+class EstrellasGym extends StatelessWidget {
+  const EstrellasGym({super.key, required this.valor, this.size = 14, this.onElegir});
+  final double valor;
+  final double size;
+  final ValueChanged<int>? onElegir;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: <Widget>[
+        for (int i = 1; i <= 5; i++)
+          GestureDetector(
+            onTap: onElegir == null ? null : () => onElegir!(i),
+            child: Padding(
+              padding: EdgeInsets.symmetric(horizontal: onElegir == null ? 0.5 : 4),
+              child: Icon(
+                valor >= i - 0.25
+                    ? Icons.star_rounded
+                    : (valor >= i - 0.75 ? Icons.star_half_rounded : Icons.star_outline_rounded),
+                size: size,
+                color: valor >= i - 0.75 ? TempleColors.dorado : TempleColors.textoTenue,
+              ),
+            ),
+          ),
+      ],
+    );
+  }
+}
+
+class FotoGym extends StatelessWidget {
+  const FotoGym({super.key, required this.ruta, this.alto, this.ancho, this.radio = 14});
+  final String ruta;
+  final double? alto;
+  final double? ancho;
+  final double radio;
+
+  @override
+  Widget build(BuildContext context) {
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(radio),
+      child: Container(
+        height: alto,
+        width: ancho,
+        color: TempleColors.superficieAlta,
+        child: Image.network(
+          urlFotoGym(ruta),
+          fit: BoxFit.cover,
+          errorBuilder: (_, __, ___) =>
+              const Center(child: Icon(Icons.image_not_supported_outlined, color: TempleColors.textoTenue)),
+          loadingBuilder: (BuildContext c, Widget w, ImageChunkEvent? p) => p == null
+              ? w
+              : const Center(
+                  child: SizedBox(
+                      width: 18,
+                      height: 18,
+                      child: CircularProgressIndicator(strokeWidth: 1.6, color: TempleColors.violetaClaro))),
+        ),
+      ),
+    );
+  }
+}
+
+/// Un templo dibujado cuando el gym todavía no tiene fotos.
+class _PortadaVaciaGym extends StatelessWidget {
+  const _PortadaVaciaGym({required this.kanji, required this.color, this.alto = 170});
+  final String kanji;
+  final int color;
+  final double alto;
+
+  @override
+  Widget build(BuildContext context) {
+    final Color c = kColoresClan[color.clamp(0, kColoresClan.length - 1)];
+    return Container(
+      height: alto,
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(TempleRadius.tarjeta),
+        gradient: LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: <Color>[c.withValues(alpha: 0.35), TempleColors.moradoProfundo.withValues(alpha: 0.5), TempleColors.grafito],
+        ),
+        border: Border.all(color: TempleColors.borde),
+      ),
+      alignment: Alignment.center,
+      child: Text(kanji, style: TextStyle(fontSize: 64, color: c.withValues(alpha: 0.85), height: 1)),
+    );
+  }
+}
+
+class PortadaGym extends StatefulWidget {
+  const PortadaGym({super.key, required this.fotos, required this.kanji, required this.color, this.alto = 190});
+  final List<String> fotos;
+  final String kanji;
+  final int color;
+  final double alto;
+
+  @override
+  State<PortadaGym> createState() => _PortadaGymState();
+}
+
+class _PortadaGymState extends State<PortadaGym> {
+  int _i = 0;
+
+  @override
+  Widget build(BuildContext context) {
+    if (widget.fotos.isEmpty) return _PortadaVaciaGym(kanji: widget.kanji, color: widget.color, alto: widget.alto);
+    return SizedBox(
+      height: widget.alto,
+      child: Stack(
+        children: <Widget>[
+          PageView.builder(
+            itemCount: widget.fotos.length,
+            onPageChanged: (int i) => setState(() => _i = i),
+            itemBuilder: (_, int i) => GestureDetector(
+              onTap: () => Navigator.of(context).push(MaterialPageRoute<void>(
+                  builder: (_) => _FotosPantallaGym(fotos: widget.fotos, inicio: i))),
+              child: FotoGym(ruta: widget.fotos[i], radio: TempleRadius.tarjeta),
+            ),
+          ),
+          if (widget.fotos.length > 1)
+            Positioned(
+              bottom: 10,
+              left: 0,
+              right: 0,
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: <Widget>[
+                  for (int i = 0; i < widget.fotos.length; i++)
+                    AnimatedContainer(
+                      duration: TempleMotion.rapido,
+                      margin: const EdgeInsets.symmetric(horizontal: 3),
+                      width: i == _i ? 16 : 6,
+                      height: 6,
+                      decoration: BoxDecoration(
+                        color: i == _i ? Colors.white : Colors.white54,
+                        borderRadius: BorderRadius.circular(3),
+                      ),
+                    ),
+                ],
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+class _FotosPantallaGym extends StatelessWidget {
+  const _FotosPantallaGym({required this.fotos, required this.inicio});
+  final List<String> fotos;
+  final int inicio;
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: Colors.black,
+      appBar: AppBar(backgroundColor: Colors.black, foregroundColor: Colors.white),
+      body: PageView.builder(
+        controller: PageController(initialPage: inicio),
+        itemCount: fotos.length,
+        itemBuilder: (_, int i) => InteractiveViewer(
+          child: Center(child: Image.network(urlFotoGym(fotos[i]), fit: BoxFit.contain)),
+        ),
+      ),
+    );
+  }
+}
+
+/// Barras simples (horas pico, visitas por día).
+class BarrasGym extends StatelessWidget {
+  const BarrasGym({super.key, required this.valores, required this.etiquetas, this.alto = 70, this.resaltar});
+  final List<int> valores;
+  final List<String> etiquetas;
+  final double alto;
+  final int? resaltar;
+
+  @override
+  Widget build(BuildContext context) {
+    final int maximo = valores.fold<int>(0, (int a, int b) => math.max(a, b));
+    return Column(
+      children: <Widget>[
+        SizedBox(
+          height: alto,
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.end,
+            children: <Widget>[
+              for (int i = 0; i < valores.length; i++)
+                Expanded(
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 1.5),
+                    child: Container(
+                      height: maximo == 0 ? 3.0 : math.max(3.0, alto * valores[i] / maximo),
+                      decoration: BoxDecoration(
+                        borderRadius: BorderRadius.circular(3),
+                        color: i == resaltar
+                            ? TempleColors.violetaClaro
+                            : TempleColors.violeta.withValues(alpha: valores[i] == 0 ? 0.18 : 0.55),
+                      ),
+                    ),
+                  ),
+                ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 4),
+        Row(
+          children: <Widget>[
+            for (int i = 0; i < etiquetas.length; i++)
+              Expanded(
+                child: Text(etiquetas[i],
+                    textAlign: TextAlign.center,
+                    maxLines: 1,
+                    overflow: TextOverflow.clip,
+                    style: const TextStyle(fontSize: 9, color: TempleColors.textoTenue)),
+              ),
+          ],
+        ),
+      ],
+    );
+  }
+}
+
+InputDecoration decoracionGym(String etiqueta, [String pista = '']) => InputDecoration(
+      labelText: etiqueta,
+      hintText: pista.isEmpty ? null : pista,
+      labelStyle: const TextStyle(color: TempleColors.textoSuave),
+      hintStyle: const TextStyle(color: TempleColors.textoTenue),
+      filled: true,
+      fillColor: TempleColors.superficie,
+      isDense: true,
+      counterStyle: const TextStyle(color: TempleColors.textoTenue, fontSize: 11),
+      border: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(TempleRadius.campo),
+        borderSide: const BorderSide(color: TempleColors.borde),
+      ),
+      enabledBorder: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(TempleRadius.campo),
+        borderSide: const BorderSide(color: TempleColors.borde),
+      ),
+      focusedBorder: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(TempleRadius.campo),
+        borderSide: const BorderSide(color: TempleColors.violeta),
+      ),
+    );
+
+const TextStyle kTituloGym = TextStyle(fontSize: 15, fontWeight: FontWeight.w600, color: TempleColors.blancoLuna);
+const TextStyle kTextoGym = TextStyle(fontSize: 13, height: 1.4, color: TempleColors.texto);
+const TextStyle kSuaveGym = TextStyle(fontSize: 12, height: 1.35, color: TempleColors.textoSuave);
+
+Widget chipGym(String texto, bool activo, VoidCallback onTap, {IconData? icono}) {
+  return Padding(
+    padding: const EdgeInsets.only(right: 8, bottom: 8),
+    child: ChoiceChip(
+      avatar: icono == null ? null : Icon(icono, size: 15, color: activo ? Colors.white : TempleColors.textoSuave),
+      label: Text(texto),
+      selected: activo,
+      onSelected: (_) => onTap(),
+      showCheckmark: false,
+      selectedColor: TempleColors.violeta.withValues(alpha: 0.32),
+      backgroundColor: TempleColors.superficie,
+      labelStyle: TextStyle(
+          color: activo ? TempleColors.blancoLuna : TempleColors.textoSuave,
+          fontSize: 12.5,
+          fontWeight: activo ? FontWeight.w600 : FontWeight.w400),
+      side: BorderSide(color: activo ? TempleColors.violeta.withValues(alpha: 0.6) : TempleColors.borde),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(TempleRadius.pastilla)),
+    ),
+  );
+}
+
+Future<T?> hojaGym<T>(BuildContext context, Widget Function(BuildContext) contenido) {
+  return showModalBottomSheet<T>(
+    context: context,
+    isScrollControlled: true,
+    backgroundColor: TempleColors.grafito,
+    shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(24))),
+    builder: (BuildContext c) => Padding(
+      padding: EdgeInsets.only(bottom: MediaQuery.viewInsetsOf(c).bottom),
+      child: SafeArea(
+        top: false,
+        child: ConstrainedBox(
+          constraints: BoxConstraints(maxHeight: MediaQuery.sizeOf(c).height * 0.88),
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.fromLTRB(TempleSpace.borde, 14, TempleSpace.borde, 18),
+            child: contenido(c),
+          ),
+        ),
+      ),
+    ),
+  );
+}
+
+Widget asaHojaGym(String titulo, [String? subtitulo]) => Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: <Widget>[
+        Center(
+          child: Container(
+            width: 38,
+            height: 4,
+            decoration: BoxDecoration(color: TempleColors.bordeVivo, borderRadius: BorderRadius.circular(2)),
+          ),
+        ),
+        const SizedBox(height: 14),
+        Text(titulo, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w600, color: TempleColors.blancoLuna)),
+        if (subtitulo != null) ...<Widget>[
+          const SizedBox(height: 4),
+          Text(subtitulo, style: kSuaveGym),
+        ],
+        const SizedBox(height: 16),
+      ],
+    );
+
+Future<bool> confirmarGym(BuildContext context, String titulo, String texto, {String si = 'Sí', bool peligro = false}) async {
+  final bool? r = await showDialog<bool>(
+    context: context,
+    builder: (BuildContext c) => AlertDialog(
+      backgroundColor: TempleColors.grafito,
+      title: Text(titulo, style: const TextStyle(color: TempleColors.blancoLuna, fontSize: 17)),
+      content: Text(texto, style: kTextoGym),
+      actions: <Widget>[
+        TextButton(onPressed: () => Navigator.pop(c, false), child: const Text('Cancelar')),
+        FilledButton(
+          style: FilledButton.styleFrom(backgroundColor: peligro ? TempleColors.error : TempleColors.violeta),
+          onPressed: () => Navigator.pop(c, true),
+          child: Text(si),
+        ),
+      ],
+    ),
+  );
+  return r == true;
+}
+
+/// Fila: puesto, avatar, nombre y valor.
+class FilaPersonaGym extends StatelessWidget {
+  const FilaPersonaGym({
+    super.key,
+    required this.persona,
+    required this.valor,
+    this.puesto,
+    this.subtitulo,
+    this.rol,
+    this.esYo = false,
+    this.onTap,
+    this.colorValor,
+  });
+
+  final ClanPersona persona;
+  final String valor;
+  final int? puesto;
+  final String? subtitulo;
+  final String? rol;
+  final bool esYo;
+  final VoidCallback? onTap;
+  final Color? colorValor;
+
+  @override
+  Widget build(BuildContext context) {
+    final int? p = puesto;
+    final Color colorPuesto = p == 1
+        ? TempleColors.dorado
+        : (p == 2 ? const Color(0xFFC9CED8) : (p == 3 ? const Color(0xFFCD8F5B) : TempleColors.textoTenue));
+    return InkWell(
+      borderRadius: BorderRadius.circular(12),
+      onTap: onTap ??
+          () => Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => PerfilClanScreen(id: persona.id))),
+      child: Container(
+        padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 6),
+        decoration: esYo
+            ? BoxDecoration(
+                color: TempleColors.violeta.withValues(alpha: 0.10),
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: TempleColors.violeta.withValues(alpha: 0.35)),
+              )
+            : null,
+        child: Row(
+          children: <Widget>[
+            if (p != null)
+              SizedBox(
+                width: 28,
+                child: p <= 3
+                    ? Icon(Icons.workspace_premium_rounded, size: 20, color: colorPuesto)
+                    : Text('$p',
+                        textAlign: TextAlign.center,
+                        style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: colorPuesto)),
+              ),
+            if (p != null) const SizedBox(width: 4),
+            ClanAvatar(persona: persona, size: 36),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: <Widget>[
+                  Row(
+                    children: <Widget>[
+                      Flexible(
+                        child: Text(persona.nombre,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                                fontSize: 13.5,
+                                fontWeight: esYo ? FontWeight.w700 : FontWeight.w500,
+                                color: TempleColors.blancoLuna)),
+                      ),
+                      if (rol == 'dueno' || rol == 'coach') ...<Widget>[
+                        const SizedBox(width: 6),
+                        _pastillaClan(nombreRolGym(rol), color: rol == 'dueno' ? TempleColors.dorado : TempleColors.violetaClaro),
+                      ],
+                    ],
+                  ),
+                  if (subtitulo != null && subtitulo!.isNotEmpty)
+                    Text(subtitulo!,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(fontSize: 11, color: TempleColors.textoTenue)),
+                ],
+              ),
+            ),
+            const SizedBox(width: 8),
+            Text(valor,
+                style: TextStyle(
+                    fontSize: 13, fontWeight: FontWeight.w700, color: colorValor ?? TempleColors.violetaClaro)),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+Widget cargandoGym() => const Padding(
+      padding: EdgeInsets.symmetric(vertical: 30),
+      child: Center(
+        child: SizedBox(width: 22, height: 22, child: CircularProgressIndicator(strokeWidth: 1.8, color: TempleColors.violeta)),
+      ),
+    );
+
+Widget errorGym(String texto, VoidCallback reintentar) => Padding(
+      padding: const EdgeInsets.symmetric(vertical: 24),
+      child: Column(
+        children: <Widget>[
+          Text(texto, textAlign: TextAlign.center, style: kSuaveGym),
+          const SizedBox(height: 10),
+          OutlinedButton(style: _botonClanSecundario(), onPressed: reintentar, child: const Text('Reintentar')),
+        ],
+      ),
+    );
+
+/// Emblema del gym con el sello de aliado o fundador.
+class EmblemaGym extends StatelessWidget {
+  const EmblemaGym({super.key, required this.gym, this.size = 46});
+  final GymResumen gym;
+  final double size;
+
+  @override
+  Widget build(BuildContext context) {
+    return Stack(
+      clipBehavior: Clip.none,
+      children: <Widget>[
+        EmblemaClan(kanji: gym.kanji, color: gym.color, size: size),
+        Positioned(
+          right: -3,
+          bottom: -3,
+          child: Container(
+            padding: const EdgeInsets.all(2.5),
+            decoration: BoxDecoration(
+              color: gym.fundador ? TempleColors.dorado : TempleColors.violeta,
+              shape: BoxShape.circle,
+              border: Border.all(color: TempleColors.negro, width: 2),
+            ),
+            child: Icon(gym.fundador ? Icons.auto_awesome_rounded : Icons.verified_rounded,
+                size: size * 0.24, color: Colors.white),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// 57.5 PESTAÑA «GYM» DEL CLAN Y DIRECTORIO
+// ---------------------------------------------------------------------------
+
+class PestanaGym extends StatefulWidget {
+  const PestanaGym({super.key});
+
+  @override
+  State<PestanaGym> createState() => _PestanaGymState();
+}
+
+class _PestanaGymState extends State<PestanaGym> {
+  String? _elegido;
+
+  @override
+  void initState() {
+    super.initState();
+    if (!GymsRepo.instancia.cargado) GymsRepo.instancia.cargarMio();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return ListenableBuilder(
+      listenable: GymsRepo.instancia,
+      builder: (BuildContext context, _) {
+        final GymsRepo r = GymsRepo.instancia;
+        if (!r.cargado) return cargandoGym();
+        final List<(String, String, String)> mios = r.misGyms;
+        String? id = _elegido;
+        if (id == null || !mios.any(((String, String, String) x) => x.$1 == id)) id = r.principal;
+        if (id == null) return DirectorioGyms(pendiente: r.socio);
+        return VistaGym(
+          key: ValueKey<String>('gym-$id'),
+          id: id,
+          incrustada: true,
+          otros: mios.length > 1 ? mios : const <(String, String, String)>[],
+          onCambiar: (String otro) => setState(() => _elegido = otro),
+        );
+      },
+    );
+  }
+}
+
+class DirectorioGyms extends StatefulWidget {
+  const DirectorioGyms({super.key, this.pendiente, this.incrustada = true});
+  final MiGymInfo? pendiente;
+  final bool incrustada;
+
+  @override
+  State<DirectorioGyms> createState() => _DirectorioGymsState();
+}
+
+class _DirectorioGymsState extends State<DirectorioGyms> {
+  final TextEditingController _buscar = TextEditingController();
+  Timer? _espera;
+  List<GymResumen>? _lista;
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    _cargar();
+  }
+
+  @override
+  void dispose() {
+    _espera?.cancel();
+    _buscar.dispose();
+    super.dispose();
+  }
+
+  Future<void> _cargar() async {
+    try {
+      final List<GymResumen> l = await GymsRepo.instancia.lista(_buscar.text);
+      if (mounted) {
+        setState(() {
+          _lista = l;
+          _error = null;
+        });
+      }
+    } catch (e) {
+      if (mounted) setState(() => _error = SesionTemplo.mensajeDe(e));
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final MiGymInfo? p = widget.pendiente;
+    final double abajo = widget.incrustada ? kAlturaNavBar + MediaQuery.paddingOf(context).bottom + 30 : 30;
+    final List<GymResumen>? l = _lista;
+    return RefreshIndicator(
+      color: TempleColors.violeta,
+      backgroundColor: TempleColors.superficieAlta,
+      onRefresh: () async {
+        await GymsRepo.instancia.cargarMio();
+        await _cargar();
+      },
+      child: ListView(
+        physics: const AlwaysScrollableScrollPhysics(),
+        padding: EdgeInsets.fromLTRB(TempleSpace.borde, 10, TempleSpace.borde, abajo),
+        children: <Widget>[
+          if (p != null && !p.activo) ...<Widget>[
+            TempleCard(
+              destacada: true,
+              child: Row(
+                children: <Widget>[
+                  EmblemaGym(gym: p.gym, size: 42),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: <Widget>[
+                        Text('Tu solicitud a «${p.gym.nombre}»', style: kTituloGym),
+                        const SizedBox(height: 2),
+                        const Text('El equipo del gym debe aceptarla. Si tienes el código de socio, úsalo y entras de una.',
+                            style: kSuaveGym),
+                      ],
+                    ),
+                  ),
+                  TextButton(
+                    onPressed: () async {
+                      try {
+                        await GymsRepo.instancia.salir(p.gym.id);
+                      } catch (e) {
+                        if (context.mounted) avisoClan(context, SesionTemplo.mensajeDe(e), error: true);
+                      }
+                    },
+                    child: const Text('Cancelar', style: TextStyle(color: TempleColors.textoSuave)),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 14),
+          ],
+          TempleCard(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: <Widget>[
+                const Row(
+                  children: <Widget>[
+                    EmblemaClan(kanji: '鋼', color: 0, size: 46),
+                    SizedBox(width: 14),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: <Widget>[
+                          Text('Tu gym en el templo', style: kTituloGym),
+                          SizedBox(height: 3),
+                          Text('Únete a tu gym: registra tu llegada, compite en su ranking, '
+                              'valida tus récords con los coaches y entérate de sus avisos.',
+                              style: kSuaveGym),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 14),
+                Row(
+                  children: <Widget>[
+                    Expanded(
+                      child: FilledButton.icon(
+                        style: _botonClanPrincipal(),
+                        onPressed: () => mostrarHojaCodigoGym(context),
+                        icon: const Icon(Icons.vpn_key_outlined, size: 18),
+                        label: const Text('Tengo un código'),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 8),
+                const Text('Sirve el código de socio, el de coach y el de dueño.',
+                    style: TextStyle(fontSize: 11, color: TempleColors.textoTenue)),
+              ],
+            ),
+          ),
+          const SizedBox(height: 16),
+          TextField(
+            controller: _buscar,
+            style: const TextStyle(color: TempleColors.texto),
+            onChanged: (_) {
+              _espera?.cancel();
+              _espera = Timer(const Duration(milliseconds: 350), _cargar);
+            },
+            decoration: InputDecoration(
+              hintText: 'Buscar por nombre, barrio o ciudad',
+              hintStyle: const TextStyle(color: TempleColors.textoTenue),
+              prefixIcon: const Icon(Icons.search_rounded, color: TempleColors.textoSuave),
+              filled: true,
+              fillColor: TempleColors.superficie,
+              contentPadding: const EdgeInsets.symmetric(vertical: 12),
+              border: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(TempleRadius.pastilla),
+                borderSide: const BorderSide(color: TempleColors.borde),
+              ),
+              enabledBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(TempleRadius.pastilla),
+                borderSide: const BorderSide(color: TempleColors.borde),
+              ),
+              focusedBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(TempleRadius.pastilla),
+                borderSide: const BorderSide(color: TempleColors.violeta),
+              ),
+            ),
+          ),
+          const SizedBox(height: 16),
+          EtiquetaSeccion(_buscar.text.trim().isEmpty ? 'Templos aliados' : 'Resultados'),
+          if (_error != null)
+            errorGym(_error!, _cargar)
+          else if (l == null)
+            cargandoGym()
+          else if (l.isEmpty)
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 18),
+              child: Text(
+                _buscar.text.trim().isEmpty
+                    ? 'Todavía no hay gyms aliados. Si entrenas en uno, cuéntale al dueño que puede estar aquí.'
+                    : 'No encontramos gyms con ese nombre.',
+                textAlign: TextAlign.center,
+                style: kSuaveGym,
+              ),
+            )
+          else
+            for (final GymResumen g in l)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 12),
+                child: TarjetaGymLista(gym: g),
+              ),
+          const SizedBox(height: 10),
+          TempleCard(
+            onTap: () => Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => const SolicitudGymScreen())),
+            child: const Row(
+              children: <Widget>[
+                Icon(Icons.storefront_outlined, color: TempleColors.dorado),
+                SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: <Widget>[
+                      Text('¿Tienes un gym?', style: kTituloGym),
+                      SizedBox(height: 2),
+                      Text('Ponlo en Temple of Strength: tu perfil, tu ranking y el control de tus socios.',
+                          style: kSuaveGym),
+                    ],
+                  ),
+                ),
+                Icon(Icons.chevron_right_rounded, color: TempleColors.textoSuave),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class TarjetaGymLista extends StatelessWidget {
+  const TarjetaGymLista({super.key, required this.gym});
+  final GymResumen gym;
+
+  @override
+  Widget build(BuildContext context) {
+    final String? foto = gym.foto;
+    return TempleCard(
+      padding: EdgeInsets.zero,
+      onTap: () => Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => GymScreen(id: gym.id))),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: <Widget>[
+          if (foto != null)
+            ClipRRect(
+              borderRadius: const BorderRadius.vertical(top: Radius.circular(TempleRadius.tarjeta)),
+              child: SizedBox(height: 120, child: FotoGym(ruta: foto, radio: 0)),
+            ),
+          Padding(
+            padding: const EdgeInsets.all(14),
+            child: Row(
+              children: <Widget>[
+                EmblemaGym(gym: gym, size: 42),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: <Widget>[
+                      Text(gym.nombre, maxLines: 1, overflow: TextOverflow.ellipsis, style: kTituloGym),
+                      if (gym.lugar.isNotEmpty) Text(gym.lugar, maxLines: 1, overflow: TextOverflow.ellipsis, style: kSuaveGym),
+                      const SizedBox(height: 6),
+                      Wrap(
+                        spacing: 8,
+                        runSpacing: 6,
+                        crossAxisAlignment: WrapCrossAlignment.center,
+                        children: <Widget>[
+                          if (gym.estrellas != null)
+                            Row(mainAxisSize: MainAxisSize.min, children: <Widget>[
+                              EstrellasGym(valor: gym.estrellas!, size: 13),
+                              const SizedBox(width: 4),
+                              Text('${gym.estrellas!.toStringAsFixed(1)} (${gym.nValoraciones})',
+                                  style: const TextStyle(fontSize: 11.5, color: TempleColors.textoSuave)),
+                            ]),
+                          _pastillaClan('${gym.ahora} ahora', icono: Icons.circle, color: gym.ahora > 0 ? TempleColors.exito : TempleColors.textoTenue),
+                          if (gym.precioDesde != null) _pastillaClan('Desde ${pesosGym(gym.precioDesde!)}/mes'),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+                const Icon(Icons.chevron_right_rounded, color: TempleColors.textoSuave),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Un solo campo para los tres códigos.
+Future<void> mostrarHojaCodigoGym(BuildContext context) async {
+  final Map<String, dynamic>? r = await hojaGym<Map<String, dynamic>>(context, (BuildContext c) => const _HojaCodigoGym());
+  if (r == null || !context.mounted) return;
+  final String nombre = textoGym(r['nombre']);
+  final String tipo = textoGym(r['tipo']);
+  sonar(SonidoTemplo.desbloqueo);
+  final String texto = switch (tipo) {
+    'dueno' => 'Ya eres el dueño de $nombre en la app. Tienes el Pase del Templo y el panel del gym.',
+    'coach' => 'Ya eres coach de $nombre. Tienes el Pase del Templo y el panel del gym.',
+    'solicitud' => 'Enviamos tu solicitud a $nombre.',
+    _ => r['ya'] == true ? 'Ya eras parte de $nombre.' : 'Bienvenido a $nombre. Registra tu llegada cada vez que entrenes.',
+  };
+  avisoClan(context, texto);
+}
+
+class _HojaCodigoGym extends StatefulWidget {
+  const _HojaCodigoGym();
+
+  @override
+  State<_HojaCodigoGym> createState() => _HojaCodigoGymState();
+}
+
+class _HojaCodigoGymState extends State<_HojaCodigoGym> {
+  final TextEditingController _c = TextEditingController();
+  bool _ranking = true;
+  bool _acepto = false;
+  bool _enviando = false;
+  String? _error;
+
+  @override
+  void dispose() {
+    _c.dispose();
+    super.dispose();
+  }
+
+  String get _limpio => _c.text.toUpperCase().replaceAll(RegExp(r'[^A-Z0-9]'), '');
+  bool get _esSocio => _limpio.startsWith('S');
+
+  Future<void> _usar() async {
+    setState(() {
+      _enviando = true;
+      _error = null;
+    });
+    try {
+      final Map<String, dynamic> r = await GymsRepo.instancia.usarCodigo(_c.text, ranking: _ranking);
+      if (mounted) Navigator.of(context).pop(r);
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _enviando = false;
+          _error = SesionTemplo.mensajeDe(e);
+        });
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final bool listo = _limpio.length >= 6 && _acepto && !_enviando;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: <Widget>[
+        asaHojaGym('Tengo un código', 'Escríbelo como te lo dieron en el gym. Da igual si usas guiones o minúsculas.'),
+        TextField(
+          controller: _c,
+          autofocus: true,
+          textCapitalization: TextCapitalization.characters,
+          style: const TextStyle(color: TempleColors.blancoLuna, fontSize: 20, letterSpacing: 2.5, fontWeight: FontWeight.w600),
+          inputFormatters: <TextInputFormatter>[
+            FilteringTextInputFormatter.allow(RegExp(r'[A-Za-z0-9-]')),
+            LengthLimitingTextInputFormatter(14),
+          ],
+          onChanged: (_) => setState(() {}),
+          decoration: decoracionGym('Código', 'S-ABCDE'),
+        ),
+        const SizedBox(height: 14),
+        Container(
+          padding: const EdgeInsets.all(12),
+          decoration: BoxDecoration(
+            color: TempleColors.superficie,
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(color: TempleColors.borde),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: <Widget>[
+              Text(
+                _esSocio || _limpio.isEmpty
+                    ? 'Al unirte, el dueño y los coaches del gym verán tu asistencia, tus récords, tu mensualidad '
+                        'y tu progreso en el ranking del gym. Puedes salirte cuando quieras.'
+                    : 'Como dueño o coach, verás la lista de socios del gym, su asistencia y sus pagos. '
+                        'Úsalos solo para atender el gym. Debes ser mayor de edad.',
+                style: kSuaveGym,
+              ),
+              CheckboxListTile(
+                value: _acepto,
+                onChanged: (bool? v) => setState(() => _acepto = v ?? false),
+                contentPadding: EdgeInsets.zero,
+                dense: true,
+                controlAffinity: ListTileControlAffinity.leading,
+                activeColor: TempleColors.violeta,
+                title: const Text('Entiendo y acepto', style: kTextoGym),
+              ),
+              if (_esSocio)
+                SwitchListTile(
+                  value: _ranking,
+                  onChanged: (bool v) => setState(() => _ranking = v),
+                  contentPadding: EdgeInsets.zero,
+                  dense: true,
+                  activeTrackColor: TempleColors.violeta,
+                  title: const Text('Aparecer en el ranking del gym', style: kTextoGym),
+                ),
+            ],
+          ),
+        ),
+        if (_error != null) ...<Widget>[
+          const SizedBox(height: 10),
+          Text(_error!, style: const TextStyle(color: TempleColors.error, fontSize: 12.5)),
+        ],
+        const SizedBox(height: 16),
+        FilledButton(
+          style: _botonClanPrincipal(),
+          onPressed: listo ? _usar : null,
+          child: _enviando
+              ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+              : const Text('Entrar al templo'),
+        ),
+      ],
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// 57.6 VISTA DE UN GYM
+// ---------------------------------------------------------------------------
+
+class GymScreen extends StatelessWidget {
+  const GymScreen({super.key, required this.id});
+  final String id;
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: TempleColors.negro,
+      body: FondoTemplo(
+        child: Column(
+          children: <Widget>[
+            const BarraClan(titulo: 'Gym', subtitulo: 'Templo aliado'),
+            Expanded(child: VistaGym(id: id)),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class VistaGym extends StatefulWidget {
+  const VistaGym({
+    super.key,
+    required this.id,
+    this.incrustada = false,
+    this.otros = const <(String, String, String)>[],
+    this.onCambiar,
+  });
+
+  final String id;
+  final bool incrustada;
+  final List<(String, String, String)> otros;
+  final ValueChanged<String>? onCambiar;
+
+  @override
+  State<VistaGym> createState() => _VistaGymState();
+}
+
+class _VistaGymState extends State<VistaGym> {
+  DetalleGym? _d;
+  String? _error;
+  int _seccion = 0;
+  bool _marcando = false;
+
+  /// Sube cuando hay que recargar las secciones de adentro.
+  int _version = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    _cargar();
+  }
+
+  Future<void> _cargar() async {
+    try {
+      final DetalleGym d = await GymsRepo.instancia.detalle(widget.id);
+      if (mounted) {
+        setState(() {
+          _d = d;
+          _error = null;
+          _version++;
+        });
+      }
+    } catch (e) {
+      if (mounted) setState(() => _error = SesionTemplo.mensajeDe(e));
+    }
+  }
+
+  Future<void> _ingreso() async {
+    final DetalleGym? d = _d;
+    if (d == null || _marcando) return;
+    setState(() => _marcando = true);
+    try {
+      final (bool dentro, int ahora) = await GymsRepo.instancia.ingreso(d.id);
+      HapticFeedback.mediumImpact();
+      if (dentro) sonar(SonidoTemplo.toque);
+      if (mounted) {
+        avisoClan(
+            context,
+            dentro
+                ? 'Llegaste al templo. Hay $ahora ${ahora == 1 ? 'persona' : 'personas'} entrenando.'
+                : 'Salida registrada. Buen entrenamiento.');
+      }
+      await _cargar();
+    } catch (e) {
+      if (mounted) avisoClan(context, SesionTemplo.mensajeDe(e), error: true);
+    }
+    if (mounted) setState(() => _marcando = false);
+  }
+
+  Future<void> _unirse() async {
+    final DetalleGym? d = _d;
+    if (d == null) return;
+    final bool ok = await confirmarGym(
+      context,
+      d.ingreso == 'abierto' ? 'Unirte a ${d.r.nombre}' : 'Pedir entrar a ${d.r.nombre}',
+      'El dueño y los coaches del gym verán tu asistencia, tus récords, tu mensualidad y tu progreso en el '
+          'ranking del gym. Puedes salirte cuando quieras.',
+      si: d.ingreso == 'abierto' ? 'Unirme' : 'Enviar solicitud',
+    );
+    if (!ok || !mounted) return;
+    try {
+      final Map<String, dynamic> r = await GymsRepo.instancia.unirse(d.id);
+      if (mounted) {
+        avisoClan(context, r['tipo'] == 'solicitud' ? 'Solicitud enviada. El equipo del gym la revisará.' : 'Ya eres parte de ${d.r.nombre}.');
+      }
+      await _cargar();
+    } catch (e) {
+      if (mounted) avisoClan(context, SesionTemplo.mensajeDe(e), error: true);
+    }
+  }
+
+  void _abrirPanel() {
+    final DetalleGym? d = _d;
+    if (d == null) return;
+    Navigator.of(context)
+        .push(MaterialPageRoute<void>(builder: (_) => PanelGymScreen(gymId: d.id, nombre: d.r.nombre)))
+        .then((_) => _cargar());
+  }
+
+  void _comoLlegar(DetalleGym d) {
+    final String url = d.mapaUrl.isNotEmpty
+        ? d.mapaUrl
+        : 'https://www.google.com/maps/search/?api=1&query=${Uri.encodeComponent(<String>[d.direccion, d.r.barrio, d.r.ciudad].where((String s) => s.trim().isNotEmpty).join(', '))}';
+    abrirEnlaceGym(context, url);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final DetalleGym? d = _d;
+    final double abajo = widget.incrustada ? kAlturaNavBar + MediaQuery.paddingOf(context).bottom + 30 : 30;
+    if (d == null) {
+      return ListView(
+        padding: EdgeInsets.fromLTRB(TempleSpace.borde, 10, TempleSpace.borde, abajo),
+        children: <Widget>[if (_error != null) errorGym(_error!, _cargar) else cargandoGym()],
+      );
+    }
+    final List<String> secciones =
+        d.deAdentro ? const <String>['Inicio', 'Ranking', 'Récords', 'Info', 'Reseñas'] : const <String>['Info', 'Reseñas'];
+    final int s = _seccion.clamp(0, secciones.length - 1);
+    final String actual = secciones[s];
+    return RefreshIndicator(
+      color: TempleColors.violeta,
+      backgroundColor: TempleColors.superficieAlta,
+      onRefresh: _cargar,
+      child: ListView(
+        physics: const AlwaysScrollableScrollPhysics(),
+        padding: EdgeInsets.fromLTRB(TempleSpace.borde, 8, TempleSpace.borde, abajo),
+        children: <Widget>[
+          if (widget.otros.length > 1)
+            SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              child: Row(
+                children: <Widget>[
+                  for (final (String, String, String) o in widget.otros)
+                    chipGym(o.$2, o.$1 == d.id, () => widget.onCambiar?.call(o.$1),
+                        icono: o.$3 == 'dueno' ? Icons.key_rounded : (o.$3 == 'coach' ? Icons.sports_rounded : null)),
+                ],
+              ),
+            ),
+          PortadaGym(fotos: d.fotos, kanji: d.r.kanji, color: d.r.color),
+          const SizedBox(height: 14),
+          _CabeceraGym(d: d),
+          const SizedBox(height: 14),
+          _accionesGym(d),
+          if (d.soyEquipo) ...<Widget>[
+            const SizedBox(height: 12),
+            TempleCard(
+              destacada: true,
+              onTap: _abrirPanel,
+              child: Row(
+                children: <Widget>[
+                  Icon(d.soyDueno ? Icons.key_rounded : Icons.sports_rounded, color: TempleColors.dorado),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: <Widget>[
+                        Text(d.soyDueno ? 'Panel del dueño' : 'Panel del coach', style: kTituloGym),
+                        const Text('Socios, pagos, récords, avisos, retos y estadísticas.', style: kSuaveGym),
+                      ],
+                    ),
+                  ),
+                  const Icon(Icons.chevron_right_rounded, color: TempleColors.textoSuave),
+                ],
+              ),
+            ),
+          ],
+          if (!d.deAdentro) ...<Widget>[
+            const SizedBox(height: 12),
+            _tarjetaUnirse(d),
+          ],
+          const SizedBox(height: 16),
+          SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            child: Row(
+              children: <Widget>[
+                for (int i = 0; i < secciones.length; i++)
+                  chipGym(secciones[i], i == s, () {
+                    HapticFeedback.selectionClick();
+                    setState(() => _seccion = i);
+                  }),
+              ],
+            ),
+          ),
+          const SizedBox(height: 6),
+          if (actual == 'Inicio') _InicioGym(key: ValueKey<String>('inicio-$_version'), d: d, onCambio: _cargar),
+          if (actual == 'Ranking') RankingGymVista(key: ValueKey<String>('rk-$_version'), gymId: d.id),
+          if (actual == 'Récords') RecordsGymVista(key: ValueKey<String>('rc-$_version'), d: d),
+          if (actual == 'Info') _InfoGym(d: d, onComoLlegar: () => _comoLlegar(d)),
+          if (actual == 'Reseñas') ResenasGymVista(key: ValueKey<String>('rs-$_version'), d: d, onCambio: _cargar),
+        ],
+      ),
+    );
+  }
+
+  Widget _accionesGym(DetalleGym d) {
+    final List<Widget> botones = <Widget>[
+      if (d.deAdentro)
+        Expanded(
+          flex: 3,
+          child: FilledButton.icon(
+            style: _botonClanPrincipal().copyWith(
+              backgroundColor: WidgetStatePropertyAll<Color>(d.dentro ? TempleColors.superficieAlta : TempleColors.violeta),
+              side: WidgetStatePropertyAll<BorderSide>(
+                  BorderSide(color: d.dentro ? TempleColors.exito.withValues(alpha: 0.6) : Colors.transparent)),
+            ),
+            onPressed: _marcando ? null : _ingreso,
+            icon: Icon(d.dentro ? Icons.logout_rounded : Icons.login_rounded, size: 18),
+            label: Text(d.dentro ? 'Ya salí' : 'Llegué'),
+          ),
+        ),
+      if (d.direccion.isNotEmpty || d.mapaUrl.isNotEmpty) ...<Widget>[
+        if (d.deAdentro) const SizedBox(width: 8),
+        Expanded(
+          flex: 2,
+          child: OutlinedButton.icon(
+            style: _botonClanSecundario(),
+            onPressed: () => _comoLlegar(d),
+            icon: const Icon(Icons.near_me_outlined, size: 17),
+            label: const Text('Llegar'),
+          ),
+        ),
+      ],
+      if (d.whatsapp.isNotEmpty) ...<Widget>[
+        const SizedBox(width: 8),
+        IconButton.outlined(
+          style: IconButton.styleFrom(side: const BorderSide(color: TempleColors.bordeVivo)),
+          tooltip: 'WhatsApp del gym',
+          onPressed: () => abrirEnlaceGym(context, 'https://wa.me/${whatsappDeGym(d.whatsapp)}'),
+          icon: const Icon(Icons.chat_outlined, color: TempleColors.violetaClaro, size: 19),
+        ),
+      ],
+      if (d.instagram.isNotEmpty) ...<Widget>[
+        const SizedBox(width: 4),
+        IconButton.outlined(
+          style: IconButton.styleFrom(side: const BorderSide(color: TempleColors.bordeVivo)),
+          tooltip: 'Instagram del gym',
+          onPressed: () => abrirEnlaceGym(context, 'https://instagram.com/${d.instagram}'),
+          icon: const Icon(Icons.photo_camera_outlined, color: TempleColors.violetaClaro, size: 19),
+        ),
+      ],
+    ];
+    if (botones.isEmpty) return const SizedBox.shrink();
+    return Row(children: botones);
+  }
+
+  Widget _tarjetaUnirse(DetalleGym d) {
+    if (d.pendiente) {
+      return const TempleCard(
+        child: Row(
+          children: <Widget>[
+            Icon(Icons.hourglass_top_rounded, color: TempleColors.dorado),
+            SizedBox(width: 12),
+            Expanded(child: Text('Tu solicitud está esperando. El equipo del gym debe aceptarla.', style: kTextoGym)),
+          ],
+        ),
+      );
+    }
+    return TempleCard(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: <Widget>[
+          Text(d.otroGym != null ? 'Ya entrenas en ${d.otroGym}' : '¿Entrenas aquí?', style: kTituloGym),
+          const SizedBox(height: 4),
+          Text(
+            d.otroGym != null
+                ? 'Solo puedes ser socio de un gym. Sal del tuyo si te cambiaste a este.'
+                : (d.ingreso == 'codigo'
+                    ? 'Este gym solo acepta socios con su código. Pídelo en la recepción.'
+                    : 'Únete para registrar tu llegada, entrar a su ranking y validar tus récords.'),
+            style: kSuaveGym,
+          ),
+          const SizedBox(height: 12),
+          Row(
+            children: <Widget>[
+              if (d.otroGym == null && d.ingreso != 'codigo') ...<Widget>[
+                Expanded(
+                  child: FilledButton(
+                    style: _botonClanPrincipal(),
+                    onPressed: _unirse,
+                    child: Text(d.ingreso == 'abierto' ? 'Unirme' : 'Pedir entrar'),
+                  ),
+                ),
+                const SizedBox(width: 8),
+              ],
+              Expanded(
+                child: OutlinedButton(
+                  style: _botonClanSecundario(),
+                  onPressed: () async {
+                    await mostrarHojaCodigoGym(context);
+                    await _cargar();
+                  },
+                  child: const Text('Tengo un código'),
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _CabeceraGym extends StatelessWidget {
+  const _CabeceraGym({required this.d});
+  final DetalleGym d;
+
+  @override
+  Widget build(BuildContext context) {
+    final GymResumen r = d.r;
+    final int? aforo = r.aforo;
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: <Widget>[
+        EmblemaGym(gym: r, size: 52),
+        const SizedBox(width: 14),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: <Widget>[
+              Text(r.nombre,
+                  style: const TextStyle(fontSize: 21, fontWeight: FontWeight.w700, color: TempleColors.blancoLuna)),
+              if (r.lema.isNotEmpty) Text('«${r.lema}»', style: const TextStyle(fontSize: 12.5, color: TempleColors.violetaClaro)),
+              if (r.lugar.isNotEmpty) ...<Widget>[
+                const SizedBox(height: 2),
+                Text(r.lugar, style: kSuaveGym),
+              ],
+              const SizedBox(height: 8),
+              Wrap(
+                spacing: 8,
+                runSpacing: 6,
+                crossAxisAlignment: WrapCrossAlignment.center,
+                children: <Widget>[
+                  _pastillaClan(
+                    aforo != null ? '${r.ahora}/$aforo ahora' : '${r.ahora} entrenando ahora',
+                    icono: Icons.circle,
+                    color: r.ahora > 0 ? TempleColors.exito : TempleColors.textoTenue,
+                  ),
+                  _pastillaClan('${r.nSocios} ${r.nSocios == 1 ? 'socio' : 'socios'}', icono: Icons.groups_outlined),
+                  if (r.estrellas != null)
+                    _pastillaClan('${r.estrellas!.toStringAsFixed(1)} ★ (${r.nValoraciones})', color: TempleColors.dorado),
+                  if (r.fundador) _pastillaClan('Templo fundador', icono: Icons.auto_awesome_rounded, color: TempleColors.dorado),
+                  if (d.soyEquipo) _pastillaClan(nombreRolGym(d.miRol), icono: Icons.badge_outlined, color: TempleColors.violetaClaro),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+// --- Inicio: lo del día para el socio ---------------------------------------
+
+class _InicioGym extends StatefulWidget {
+  const _InicioGym({super.key, required this.d, required this.onCambio});
+  final DetalleGym d;
+  final Future<void> Function() onCambio;
+
+  @override
+  State<_InicioGym> createState() => _InicioGymState();
+}
+
+class _InicioGymState extends State<_InicioGym> {
+  late Future<List<AvisoGym>> _avisos;
+  late Future<List<RetoGym>> _retos;
+  late bool _ranking;
+
+  @override
+  void initState() {
+    super.initState();
+    _avisos = GymsRepo.instancia.avisos(widget.d.id);
+    _retos = GymsRepo.instancia.retos(widget.d.id);
+    _ranking = widget.d.enRanking;
+  }
+
+  Widget _mensualidad() {
+    final DetalleGym d = widget.d;
+    final DateTime? h = d.miPagoHasta;
+    if (!d.soySocio) return const SizedBox.shrink();
+    final int? dias = h == null ? null : diasHastaGym(h);
+    final Color c = dias == null
+        ? TempleColors.textoSuave
+        : (dias < 0 ? TempleColors.error : (dias <= 5 ? TempleColors.alertaSuave : TempleColors.exito));
+    final String titulo = h == null
+        ? 'Tu mensualidad'
+        : (dias! < 0
+            ? 'Tu mensualidad venció el ${fechaGym(h)}'
+            : (dias == 0 ? 'Tu mensualidad vence hoy' : 'Al día hasta el ${fechaGym(h)}'));
+    final String texto = h == null
+        ? 'Todavía no está registrada en la app. Cuando pagues, pídele a la recepción que la anote.'
+        : (dias! < 0
+            ? 'Pasa por la recepción para renovarla.'
+            : '${d.miPlan.isEmpty ? 'Plan' : d.miPlan} · ${dias == 0 ? 'último día' : 'quedan $dias ${dias == 1 ? 'día' : 'días'}'}');
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 12),
+      child: TempleCard(
+        child: Row(
+          children: <Widget>[
+            Container(
+              width: 40,
+              height: 40,
+              decoration: BoxDecoration(color: c.withValues(alpha: 0.15), shape: BoxShape.circle),
+              child: Icon(Icons.receipt_long_outlined, color: c, size: 20),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: <Widget>[
+                  Text(titulo, style: kTituloGym),
+                  Text(texto, style: kSuaveGym),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final DetalleGym d = widget.d;
+    final int hoy = DateTime.now().weekday;
+    final List<ClaseGym> clasesHoy = d.clases.where((ClaseGym c) => c.dia == hoy).toList()
+      ..sort((ClaseGym a, ClaseGym b) => a.hora.compareTo(b.hora));
+    final String? pico = mejorFranjaGym(d.picos);
+    final String? tranquila = mejorFranjaGym(d.picos, menos: true);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: <Widget>[
+        _mensualidad(),
+        FutureBuilder<List<AvisoGym>>(
+          future: _avisos,
+          builder: (BuildContext c, AsyncSnapshot<List<AvisoGym>> s) {
+            final List<AvisoGym> l = s.data ?? const <AvisoGym>[];
+            if (l.isEmpty) return const SizedBox.shrink();
+            return Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: <Widget>[
+                const EtiquetaSeccion('Avisos del gym'),
+                for (final AvisoGym a in l.take(4)) TarjetaAvisoGym(aviso: a),
+                if (l.length > 4)
+                  TextButton(
+                    onPressed: () => Navigator.of(context).push(MaterialPageRoute<void>(
+                        builder: (_) => AvisosGymScreen(gymId: d.id, equipo: d.soyEquipo))),
+                    child: Text('Ver los ${l.length} avisos'),
+                  ),
+                const SizedBox(height: 6),
+              ],
+            );
+          },
+        ),
+        FutureBuilder<List<RetoGym>>(
+          future: _retos,
+          builder: (BuildContext c, AsyncSnapshot<List<RetoGym>> s) {
+            final List<RetoGym> l = s.data ?? const <RetoGym>[];
+            if (l.isEmpty) return const SizedBox.shrink();
+            return Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: <Widget>[
+                const EtiquetaSeccion('Retos del gym'),
+                for (final RetoGym r in l) TarjetaRetoGym(reto: r),
+                const SizedBox(height: 6),
+              ],
+            );
+          },
+        ),
+        if (clasesHoy.isNotEmpty) ...<Widget>[
+          const EtiquetaSeccion('Clases de hoy'),
+          TempleCard(
+            child: Column(
+              children: <Widget>[
+                for (final ClaseGym c in clasesHoy)
+                  Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 5),
+                    child: Row(
+                      children: <Widget>[
+                        SizedBox(
+                            width: 50,
+                            child: Text(c.hora,
+                                style: const TextStyle(fontWeight: FontWeight.w700, color: TempleColors.violetaClaro))),
+                        Expanded(child: Text(c.nombre, style: kTextoGym)),
+                        Text('${c.duracion} min${c.coach.isEmpty ? '' : ' · ${c.coach}'}', style: kSuaveGym),
+                      ],
+                    ),
+                  ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 14),
+        ],
+        if (pico != null) ...<Widget>[
+          const EtiquetaSeccion('¿Cuándo ir?'),
+          TempleCard(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: <Widget>[
+                Text('Más lleno: $pico', style: kTextoGym),
+                if (tranquila != null) Text('Más tranquilo: $tranquila', style: kSuaveGym),
+                const SizedBox(height: 12),
+                BarrasGym(
+                  valores: d.picos.sublist(5, 23),
+                  etiquetas: <String>[for (int h = 5; h < 23; h++) h % 3 == 0 ? '${h % 12 == 0 ? 12 : h % 12}' : ''],
+                  resaltar: DateTime.now().hour - 5,
+                ),
+                const SizedBox(height: 6),
+                const Text('Según las llegadas de las últimas cuatro semanas.',
+                    style: TextStyle(fontSize: 10.5, color: TempleColors.textoTenue)),
+              ],
+            ),
+          ),
+          const SizedBox(height: 14),
+        ],
+        if (d.soySocio) ...<Widget>[
+          const EtiquetaSeccion('Tu lugar en el gym'),
+          TempleCard(
+            child: Column(
+              children: <Widget>[
+                SwitchListTile(
+                  value: _ranking,
+                  contentPadding: EdgeInsets.zero,
+                  activeTrackColor: TempleColors.violeta,
+                  title: const Text('Aparecer en el ranking del gym', style: kTextoGym),
+                  subtitle: const Text('Si lo apagas, el equipo igual ve tu asistencia y tu mensualidad.', style: kSuaveGym),
+                  onChanged: (bool v) async {
+                    setState(() => _ranking = v);
+                    try {
+                      await GymsRepo.instancia.preferencias(d.id, v);
+                    } catch (e) {
+                      if (mounted) {
+                        setState(() => _ranking = !v);
+                        avisoClan(context, SesionTemplo.mensajeDe(e), error: true);
+                      }
+                    }
+                  },
+                ),
+                const Divider(color: TempleColors.borde),
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: TextButton.icon(
+                    onPressed: () async {
+                      final bool ok = await confirmarGym(context, 'Salir de ${d.r.nombre}',
+                          'Dejarás de aparecer en su ranking y el equipo ya no verá tus datos. Tus récords validados se borran del ranking.',
+                          si: 'Salir', peligro: true);
+                      if (!ok) return;
+                      try {
+                        await GymsRepo.instancia.salir(d.id);
+                        await widget.onCambio();
+                      } catch (e) {
+                        if (context.mounted) avisoClan(context, SesionTemplo.mensajeDe(e), error: true);
+                      }
+                    },
+                    icon: const Icon(Icons.logout_rounded, size: 17, color: TempleColors.error),
+                    label: const Text('Salir del gym', style: TextStyle(color: TempleColors.error)),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ],
+    );
+  }
+}
+
+class TarjetaAvisoGym extends StatelessWidget {
+  const TarjetaAvisoGym({super.key, required this.aviso, this.onOpciones});
+  final AvisoGym aviso;
+  final VoidCallback? onOpciones;
+
+  @override
+  Widget build(BuildContext context) {
+    final ClanPersona? a = aviso.autor;
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 10),
+      child: TempleCard(
+        destacada: aviso.fijado,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: <Widget>[
+            Row(
+              children: <Widget>[
+                if (aviso.fijado) ...<Widget>[
+                  const Icon(Icons.push_pin_rounded, size: 15, color: TempleColors.dorado),
+                  const SizedBox(width: 6),
+                ],
+                Expanded(
+                  child: Text(
+                    '${a?.nombre ?? 'El gym'}${aviso.rol != null ? ' · ${nombreRolGym(aviso.rol)}' : ''}'
+                    '${aviso.fecha != null ? ' · ${haceGym(aviso.fecha!)}' : ''}',
+                    style: const TextStyle(fontSize: 11.5, color: TempleColors.textoSuave),
+                  ),
+                ),
+                if (onOpciones != null)
+                  InkWell(
+                    onTap: onOpciones,
+                    child: const Icon(Icons.more_horiz_rounded, size: 18, color: TempleColors.textoSuave),
+                  ),
+              ],
+            ),
+            const SizedBox(height: 6),
+            Text(aviso.texto, style: kTextoGym),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class AvisosGymScreen extends StatefulWidget {
+  const AvisosGymScreen({super.key, required this.gymId, this.equipo = false});
+  final String gymId;
+  final bool equipo;
+
+  @override
+  State<AvisosGymScreen> createState() => _AvisosGymScreenState();
+}
+
+class _AvisosGymScreenState extends State<AvisosGymScreen> {
+  List<AvisoGym>? _l;
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    _cargar();
+  }
+
+  Future<void> _cargar() async {
+    try {
+      final List<AvisoGym> l = await GymsRepo.instancia.avisos(widget.gymId);
+      if (mounted) setState(() => _l = l);
+    } catch (e) {
+      if (mounted) setState(() => _error = SesionTemplo.mensajeDe(e));
+    }
+  }
+
+  Future<void> _nuevo() async {
+    final bool? ok = await hojaGym<bool>(context, (BuildContext c) => _HojaAvisoGym(gymId: widget.gymId));
+    if (ok == true) await _cargar();
+  }
+
+  void _opciones(AvisoGym a) {
+    mostrarOpcionesClan(context, <OpcionHoja>[
+      OpcionHoja(a.fijado ? Icons.push_pin_outlined : Icons.push_pin_rounded, a.fijado ? 'Desfijar' : 'Fijar arriba',
+          () async {
+        try {
+          await GymsRepo.instancia.editarAviso(a.id, fijado: !a.fijado);
+          await _cargar();
+        } catch (e) {
+          if (mounted) avisoClan(context, SesionTemplo.mensajeDe(e), error: true);
+        }
+      }),
+      OpcionHoja(Icons.delete_outline_rounded, 'Borrar aviso', () async {
+        try {
+          await GymsRepo.instancia.editarAviso(a.id, borrar: true);
+          await _cargar();
+        } catch (e) {
+          if (mounted) avisoClan(context, SesionTemplo.mensajeDe(e), error: true);
+        }
+      }, peligro: true),
+    ]);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final List<AvisoGym>? l = _l;
+    return Scaffold(
+      backgroundColor: TempleColors.negro,
+      floatingActionButton: widget.equipo
+          ? FloatingActionButton.extended(
+              backgroundColor: TempleColors.violeta,
+              foregroundColor: Colors.white,
+              onPressed: _nuevo,
+              icon: const Icon(Icons.campaign_outlined),
+              label: const Text('Nuevo aviso'),
+            )
+          : null,
+      body: FondoTemplo(
+        child: Column(
+          children: <Widget>[
+            const BarraClan(titulo: 'Avisos', subtitulo: 'Lo que el gym quiere que sepas'),
+            Expanded(
+              child: RefreshIndicator(
+                onRefresh: _cargar,
+                child: ListView(
+                  padding: const EdgeInsets.fromLTRB(TempleSpace.borde, 8, TempleSpace.borde, 100),
+                  children: <Widget>[
+                    if (_error != null)
+                      errorGym(_error!, _cargar)
+                    else if (l == null)
+                      cargandoGym()
+                    else if (l.isEmpty)
+                      const Padding(
+                        padding: EdgeInsets.only(top: 30),
+                        child: Text('Todavía no hay avisos.', textAlign: TextAlign.center, style: kSuaveGym),
+                      )
+                    else
+                      for (final AvisoGym a in l)
+                        TarjetaAvisoGym(aviso: a, onOpciones: widget.equipo ? () => _opciones(a) : null),
+                  ],
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _HojaAvisoGym extends StatefulWidget {
+  const _HojaAvisoGym({required this.gymId});
+  final String gymId;
+
+  @override
+  State<_HojaAvisoGym> createState() => _HojaAvisoGymState();
+}
+
+class _HojaAvisoGymState extends State<_HojaAvisoGym> {
+  final TextEditingController _t = TextEditingController();
+  bool _fijado = false;
+  bool _enviando = false;
+
+  @override
+  void dispose() {
+    _t.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: <Widget>[
+        asaHojaGym('Nuevo aviso', 'Lo ven todos los socios del gym en su pestaña.'),
+        TextField(
+          controller: _t,
+          maxLength: 600,
+          minLines: 3,
+          maxLines: 6,
+          autofocus: true,
+          style: const TextStyle(color: TempleColors.texto),
+          onChanged: (_) => setState(() {}),
+          decoration: decoracionGym('Aviso', 'El lunes festivo abrimos de 8 a. m. a 2 p. m.'),
+        ),
+        SwitchListTile(
+          value: _fijado,
+          contentPadding: EdgeInsets.zero,
+          activeTrackColor: TempleColors.violeta,
+          title: const Text('Fijarlo arriba', style: kTextoGym),
+          onChanged: (bool v) => setState(() => _fijado = v),
+        ),
+        const SizedBox(height: 8),
+        FilledButton(
+          style: _botonClanPrincipal(),
+          onPressed: _t.text.trim().length < 2 || _enviando
+              ? null
+              : () async {
+                  setState(() => _enviando = true);
+                  try {
+                    await GymsRepo.instancia.nuevoAviso(widget.gymId, _t.text, _fijado);
+                    if (context.mounted) Navigator.of(context).pop(true);
+                  } catch (e) {
+                    if (context.mounted) avisoClan(context, SesionTemplo.mensajeDe(e), error: true);
+                    if (mounted) setState(() => _enviando = false);
+                  }
+                },
+          child: const Text('Publicar aviso'),
+        ),
+      ],
+    );
+  }
+}
+
+// --- Info: todo lo del gym -------------------------------------------------
+
+class _InfoGym extends StatelessWidget {
+  const _InfoGym({required this.d, required this.onComoLlegar});
+  final DetalleGym d;
+  final VoidCallback onComoLlegar;
+
+  String _periodo(String p) => kPeriodosGym[p] ?? p;
+
+  @override
+  Widget build(BuildContext context) {
+    final Map<String, List<EquipoMaquinaGym>> porCategoria = <String, List<EquipoMaquinaGym>>{};
+    for (final EquipoMaquinaGym e in d.equipos) {
+      porCategoria.putIfAbsent(e.categoria, () => <EquipoMaquinaGym>[]).add(e);
+    }
+    final List<(ClanPersona, String)> coaches = d.equipo;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: <Widget>[
+        if (d.descripcion.isNotEmpty) ...<Widget>[
+          TempleCard(child: Text(d.descripcion, style: kTextoGym)),
+          const SizedBox(height: 14),
+        ],
+        if (d.planes.isNotEmpty) ...<Widget>[
+          const EtiquetaSeccion('Mensualidad y planes'),
+          TempleCard(
+            child: Column(
+              children: <Widget>[
+                for (int i = 0; i < d.planes.length; i++) ...<Widget>[
+                  if (i > 0) const Divider(color: TempleColors.borde, height: 18),
+                  Row(
+                    children: <Widget>[
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: <Widget>[
+                            Text(d.planes[i].nombre, style: kTituloGym),
+                            if (d.planes[i].detalle.isNotEmpty) Text(d.planes[i].detalle, style: kSuaveGym),
+                          ],
+                        ),
+                      ),
+                      Text(
+                        d.planes[i].precio > 0 ? pesosGym(d.planes[i].precio) : 'Consultar',
+                        style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: TempleColors.dorado),
+                      ),
+                      Text(' /${_periodo(d.planes[i].periodo)}', style: kSuaveGym),
+                    ],
+                  ),
+                ],
+              ],
+            ),
+          ),
+          const SizedBox(height: 14),
+        ],
+        if (d.horario.isNotEmpty) ...<Widget>[
+          const EtiquetaSeccion('Horario'),
+          TempleCard(
+            child: Column(
+              children: <Widget>[
+                for (final HorarioGym h in d.horario)
+                  Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 4),
+                    child: Row(
+                      children: <Widget>[
+                        Expanded(child: Text(h.dias, style: kTextoGym)),
+                        Text('${h.abre} – ${h.cierra}',
+                            style: const TextStyle(fontWeight: FontWeight.w600, color: TempleColors.blancoLuna)),
+                      ],
+                    ),
+                  ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 14),
+        ],
+        if (d.clases.isNotEmpty) ...<Widget>[
+          const EtiquetaSeccion('Clases de la semana'),
+          TempleCard(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: <Widget>[
+                for (int dia = 1; dia <= 7; dia++)
+                  if (d.clases.any((ClaseGym c) => c.dia == dia))
+                    Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 4),
+                      child: Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: <Widget>[
+                          SizedBox(width: 42, child: Text(kDiasCortosGym[dia - 1], style: kSuaveGym)),
+                          Expanded(
+                            child: Text(
+                              (d.clases.where((ClaseGym c) => c.dia == dia).toList()
+                                    ..sort((ClaseGym a, ClaseGym b) => a.hora.compareTo(b.hora)))
+                                  .map((ClaseGym c) => '${c.hora} ${c.nombre}')
+                                  .join(' · '),
+                              style: kTextoGym,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 14),
+        ],
+        if (d.equipos.isNotEmpty) ...<Widget>[
+          EtiquetaSeccion('Máquinas y equipos (${d.maquinas})'),
+          TempleCard(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: <Widget>[
+                for (final String cat in kCategoriasEquipoGym.keys)
+                  if (porCategoria[cat] != null) ...<Widget>[
+                    Text(kCategoriasEquipoGym[cat]!,
+                        style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: TempleColors.violetaClaro)),
+                    const SizedBox(height: 6),
+                    Wrap(
+                      spacing: 6,
+                      runSpacing: 6,
+                      children: <Widget>[
+                        for (final EquipoMaquinaGym e in porCategoria[cat]!) _pastillaClan('${e.cantidad} × ${e.nombre}'),
+                      ],
+                    ),
+                    const SizedBox(height: 12),
+                  ],
+              ],
+            ),
+          ),
+          const SizedBox(height: 14),
+        ],
+        if (d.servicios.isNotEmpty) ...<Widget>[
+          const EtiquetaSeccion('Servicios'),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: <Widget>[
+              for (final String s in d.servicios)
+                if (kServiciosGym[s] != null)
+                  _pastillaClan(kServiciosGym[s]!.$1, icono: kServiciosGym[s]!.$2, color: TempleColors.texto),
+            ],
+          ),
+          const SizedBox(height: 18),
+        ],
+        if (d.direccion.isNotEmpty || d.mapaUrl.isNotEmpty || d.telefono.isNotEmpty) ...<Widget>[
+          const EtiquetaSeccion('Ubicación y contacto'),
+          TempleCard(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: <Widget>[
+                if (d.direccion.isNotEmpty)
+                  Row(
+                    children: <Widget>[
+                      const Icon(Icons.place_outlined, size: 18, color: TempleColors.violetaClaro),
+                      const SizedBox(width: 8),
+                      Expanded(child: Text(<String>[d.direccion, d.r.lugar].where((String s) => s.isNotEmpty).join(' · '), style: kTextoGym)),
+                    ],
+                  ),
+                const SizedBox(height: 10),
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: <Widget>[
+                    OutlinedButton.icon(
+                      style: _botonClanSecundario(),
+                      onPressed: onComoLlegar,
+                      icon: const Icon(Icons.map_outlined, size: 17),
+                      label: const Text('Ver en el mapa'),
+                    ),
+                    if (d.telefono.isNotEmpty)
+                      OutlinedButton.icon(
+                        style: _botonClanSecundario(),
+                        onPressed: () => abrirEnlaceGym(context, 'tel:${d.telefono.replaceAll(' ', '')}'),
+                        icon: const Icon(Icons.call_outlined, size: 17),
+                        label: Text(d.telefono),
+                      ),
+                    if (d.whatsapp.isNotEmpty)
+                      OutlinedButton.icon(
+                        style: _botonClanSecundario(),
+                        onPressed: () => abrirEnlaceGym(context, 'https://wa.me/${whatsappDeGym(d.whatsapp)}'),
+                        icon: const Icon(Icons.chat_outlined, size: 17),
+                        label: const Text('WhatsApp'),
+                      ),
+                    if (d.instagram.isNotEmpty)
+                      OutlinedButton.icon(
+                        style: _botonClanSecundario(),
+                        onPressed: () => abrirEnlaceGym(context, 'https://instagram.com/${d.instagram}'),
+                        icon: const Icon(Icons.photo_camera_outlined, size: 17),
+                        label: Text('@${d.instagram}'),
+                      ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 14),
+        ],
+        if (coaches.isNotEmpty) ...<Widget>[
+          const EtiquetaSeccion('El equipo'),
+          TempleCard(
+            child: Column(
+              children: <Widget>[
+                for (final (ClanPersona, String) e in coaches)
+                  FilaPersonaGym(persona: e.$1, valor: '', rol: e.$2, subtitulo: nombreRolGym(e.$2)),
+              ],
+            ),
+          ),
+          const SizedBox(height: 14),
+        ],
+        if (d.descripcion.isEmpty && d.planes.isEmpty && d.horario.isEmpty && d.equipos.isEmpty)
+          Padding(
+            padding: const EdgeInsets.symmetric(vertical: 20),
+            child: Text(
+              d.soyDueno
+                  ? 'Tu gym todavía no tiene información. Complétala en el panel del dueño → Editar el gym.'
+                  : 'Este gym todavía no ha completado su información.',
+              textAlign: TextAlign.center,
+              style: kSuaveGym,
+            ),
+          ),
+      ],
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// 57.7 RANKING, RÉCORDS, RETOS Y RESEÑAS
+// ---------------------------------------------------------------------------
+
+class RankingGymVista extends StatefulWidget {
+  const RankingGymVista({super.key, required this.gymId});
+  final String gymId;
+
+  @override
+  State<RankingGymVista> createState() => _RankingGymVistaState();
+}
+
+class _RankingGymVistaState extends State<RankingGymVista> {
+  String _tipo = 'asistencia';
+  String _musculo = 'pecho';
+  late Future<RankingGym> _f;
+
+  static const Map<String, String> _tipos = <String, String>{
+    'asistencia': 'Asistencia del mes',
+    'xp': 'XP de la semana',
+    'ranked': 'Ranked total',
+    'musculo': 'Por músculo',
+  };
+
+  @override
+  void initState() {
+    super.initState();
+    _pedir();
+  }
+
+  void _pedir() {
+    _f = GymsRepo.instancia.ranking(widget.gymId, _tipo, musculo: _tipo == 'musculo' ? _musculo : '');
+  }
+
+  String _valor(FilaRankingGym f) {
+    final int v = f.valor.round();
+    if (_tipo == 'asistencia') return '$v ${v == 1 ? 'día' : 'días'}';
+    return '${milesTemplo(v)} XP';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: <Widget>[
+        Wrap(
+          children: <Widget>[
+            for (final MapEntry<String, String> t in _tipos.entries)
+              chipGym(t.value, _tipo == t.key, () => setState(() {
+                    _tipo = t.key;
+                    _pedir();
+                  })),
+          ],
+        ),
+        if (_tipo == 'musculo')
+          SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            child: Row(
+              children: <Widget>[
+                for (final GrupoMuscular g in GrupoMuscular.values)
+                  chipGym(g.etiqueta, _musculo == g.name, () => setState(() {
+                        _musculo = g.name;
+                        _pedir();
+                      })),
+              ],
+            ),
+          ),
+        const SizedBox(height: 6),
+        FutureBuilder<RankingGym>(
+          future: _f,
+          builder: (BuildContext c, AsyncSnapshot<RankingGym> s) {
+            if (s.hasError) return errorGym(SesionTemplo.mensajeDe(s.error!), () => setState(_pedir));
+            final RankingGym? r = s.data;
+            if (r == null) return cargandoGym();
+            if (r.lista.isEmpty) {
+              return const Padding(
+                padding: EdgeInsets.symmetric(vertical: 24),
+                child: Text('Todavía nadie aparece en este ranking.', textAlign: TextAlign.center, style: kSuaveGym),
+              );
+            }
+            return Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: <Widget>[
+                if (r.miPuesto != null)
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 10),
+                    child: TempleCard(
+                      destacada: true,
+                      child: Row(
+                        children: <Widget>[
+                          Text('#${r.miPuesto}',
+                              style: const TextStyle(fontSize: 26, fontWeight: FontWeight.w700, color: TempleColors.dorado)),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: Text(
+                              'Tu puesto entre ${r.total} ${r.total == 1 ? 'guerrero' : 'guerreros'} del gym · '
+                              '${_tipo == 'asistencia' ? '${(r.miValor ?? 0).round()} días este mes' : '${milesTemplo(r.miValor ?? 0)} XP'}',
+                              style: kTextoGym,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                TempleCard(
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+                  child: Column(
+                    children: <Widget>[
+                      for (final FilaRankingGym f in r.lista)
+                        FilaPersonaGym(
+                          persona: f.persona,
+                          puesto: f.puesto,
+                          valor: _valor(f),
+                          rol: f.rol,
+                          esYo: f.esYo,
+                          subtitulo: _tipo == 'musculo' && (f.r ?? -1) >= 0 ? RangosRanked.nombre(f.r!) : 'Nivel ${f.persona.nivel}',
+                        ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  _tipo == 'asistencia'
+                      ? 'Cuenta los días distintos con llegada registrada este mes.'
+                      : (_tipo == 'xp'
+                          ? 'La experiencia de las sesiones de esta semana, de lunes a domingo.'
+                          : 'Según el Ranked de cada guerrero.'),
+                  style: const TextStyle(fontSize: 11, color: TempleColors.textoTenue),
+                  textAlign: TextAlign.center,
+                ),
+              ],
+            );
+          },
+        ),
+      ],
+    );
+  }
+}
+
+class RecordsGymVista extends StatefulWidget {
+  const RecordsGymVista({super.key, required this.d});
+  final DetalleGym d;
+
+  @override
+  State<RecordsGymVista> createState() => _RecordsGymVistaState();
+}
+
+class _RecordsGymVistaState extends State<RecordsGymVista> {
+  String _ej = 'banca';
+  late Future<(List<RecordGym>, RecordGym?)> _tabla;
+  late Future<List<RecordGym>> _mios;
+
+  @override
+  void initState() {
+    super.initState();
+    _pedir();
+  }
+
+  void _pedir() {
+    _tabla = GymsRepo.instancia.records(widget.d.id, _ej);
+    _mios = GymsRepo.instancia.misRecords(widget.d.id);
+  }
+
+  Future<void> _nuevo() async {
+    final bool? ok = await hojaGym<bool>(context, (BuildContext c) => _HojaRecordGym(gymId: widget.d.id, inicial: _ej));
+    if (ok == true && mounted) {
+      avisoClan(context, 'Récord enviado. Un coach del gym lo validará.');
+      setState(_pedir);
+    }
+  }
+
+  Color _colorEstado(String e) =>
+      e == 'validado' ? TempleColors.exito : (e == 'rechazado' ? TempleColors.error : TempleColors.alertaSuave);
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: <Widget>[
+        SingleChildScrollView(
+          scrollDirection: Axis.horizontal,
+          child: Row(
+            children: <Widget>[
+              for (final MapEntry<String, String> e in kEjerciciosGym.entries)
+                chipGym(e.value, _ej == e.key, () => setState(() {
+                      _ej = e.key;
+                      _pedir();
+                    })),
+            ],
+          ),
+        ),
+        const SizedBox(height: 6),
+        FilledButton.icon(
+          style: _botonClanPrincipal(),
+          onPressed: _nuevo,
+          icon: const Icon(Icons.add_rounded, size: 18),
+          label: const Text('Registrar un récord'),
+        ),
+        const SizedBox(height: 14),
+        EtiquetaSeccion('Muro de fuerza · ${kEjerciciosGym[_ej]}'),
+        FutureBuilder<(List<RecordGym>, RecordGym?)>(
+          future: _tabla,
+          builder: (BuildContext c, AsyncSnapshot<(List<RecordGym>, RecordGym?)> s) {
+            if (s.hasError) return errorGym(SesionTemplo.mensajeDe(s.error!), () => setState(_pedir));
+            final (List<RecordGym>, RecordGym?)? r = s.data;
+            if (r == null) return cargandoGym();
+            if (r.$1.isEmpty) {
+              return const Padding(
+                padding: EdgeInsets.symmetric(vertical: 18),
+                child: Text('Aún no hay récords validados en este ejercicio. ¡El primero se queda con el trono!',
+                    textAlign: TextAlign.center, style: kSuaveGym),
+              );
+            }
+            return TempleCard(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+              child: Column(
+                children: <Widget>[
+                  for (final RecordGym x in r.$1)
+                    FilaPersonaGym(
+                      persona: x.persona!,
+                      puesto: x.puesto,
+                      esYo: x.esYo,
+                      valor: x.marca,
+                      colorValor: TempleColors.dorado,
+                      subtitulo: x.unaRm > 0
+                          ? '1RM estimado ${x.unaRm.toStringAsFixed(1)} kg${x.fecha != null ? ' · ${fechaGym(x.fecha!)}' : ''}'
+                          : (x.fecha != null ? 'Validado el ${fechaGym(x.fecha!)}' : null),
+                    ),
+                ],
+              ),
+            );
+          },
+        ),
+        const SizedBox(height: 16),
+        const EtiquetaSeccion('Mis récords'),
+        FutureBuilder<List<RecordGym>>(
+          future: _mios,
+          builder: (BuildContext c, AsyncSnapshot<List<RecordGym>> s) {
+            final List<RecordGym> l = s.data ?? const <RecordGym>[];
+            if (s.connectionState != ConnectionState.done) return cargandoGym();
+            if (l.isEmpty) {
+              return const Text('Cuando registres uno, aquí verás si ya lo validaron.', style: kSuaveGym);
+            }
+            return TempleCard(
+              child: Column(
+                children: <Widget>[
+                  for (final RecordGym x in l)
+                    Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 6),
+                      child: Row(
+                        children: <Widget>[
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: <Widget>[
+                                Text('${kEjerciciosGym[x.ejercicio] ?? x.ejercicio} · ${x.marca}', style: kTextoGym),
+                                if (x.nota.isNotEmpty) Text('«${x.nota}»', style: kSuaveGym),
+                              ],
+                            ),
+                          ),
+                          _pastillaClan(
+                            x.estado == 'validado' ? 'Validado' : (x.estado == 'rechazado' ? 'Rechazado' : 'En revisión'),
+                            color: _colorEstado(x.estado),
+                          ),
+                          if (x.estado != 'validado')
+                            IconButton(
+                              visualDensity: VisualDensity.compact,
+                              tooltip: 'Borrar',
+                              onPressed: () async {
+                                try {
+                                  await GymsRepo.instancia.borrarRecord(x.id);
+                                  if (mounted) setState(_pedir);
+                                } catch (e) {
+                                  if (context.mounted) avisoClan(context, SesionTemplo.mensajeDe(e), error: true);
+                                }
+                              },
+                              icon: const Icon(Icons.close_rounded, size: 17, color: TempleColors.textoTenue),
+                            ),
+                        ],
+                      ),
+                    ),
+                ],
+              ),
+            );
+          },
+        ),
+      ],
+    );
+  }
+}
+
+class _HojaRecordGym extends StatefulWidget {
+  const _HojaRecordGym({required this.gymId, required this.inicial});
+  final String gymId;
+  final String inicial;
+
+  @override
+  State<_HojaRecordGym> createState() => _HojaRecordGymState();
+}
+
+class _HojaRecordGymState extends State<_HojaRecordGym> {
+  late String _ej = widget.inicial;
+  final TextEditingController _peso = TextEditingController();
+  int _reps = 1;
+  bool _enviando = false;
+
+  @override
+  void dispose() {
+    _peso.dispose();
+    super.dispose();
+  }
+
+  double get _kg => double.tryParse(_peso.text.replaceAll(',', '.')) ?? 0;
+
+  @override
+  Widget build(BuildContext context) {
+    final bool corporal = ejercicioCorporalGym(_ej);
+    final bool valido = corporal ? _reps >= 1 : _kg > 0;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: <Widget>[
+        asaHojaGym('Registrar un récord', 'Un coach del gym lo valida, idealmente después de verte hacerlo.'),
+        Wrap(
+          children: <Widget>[
+            for (final MapEntry<String, String> e in kEjerciciosGym.entries)
+              chipGym(e.value, _ej == e.key, () => setState(() => _ej = e.key)),
+          ],
+        ),
+        const SizedBox(height: 8),
+        TextField(
+          controller: _peso,
+          keyboardType: const TextInputType.numberWithOptions(decimal: true),
+          inputFormatters: <TextInputFormatter>[FilteringTextInputFormatter.allow(RegExp(r'[0-9.,]'))],
+          style: const TextStyle(color: TempleColors.texto),
+          onChanged: (_) => setState(() {}),
+          decoration: decoracionGym(corporal ? 'Lastre en kg (opcional)' : 'Peso en kg', corporal ? '0' : '80'),
+        ),
+        const SizedBox(height: 12),
+        Row(
+          children: <Widget>[
+            const Expanded(child: Text('Repeticiones', style: kTextoGym)),
+            IconButton(
+              onPressed: _reps > 1 ? () => setState(() => _reps--) : null,
+              icon: const Icon(Icons.remove_circle_outline_rounded, color: TempleColors.violetaClaro),
+            ),
+            Text('$_reps', style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w700, color: TempleColors.blancoLuna)),
+            IconButton(
+              onPressed: _reps < 60 ? () => setState(() => _reps++) : null,
+              icon: const Icon(Icons.add_circle_outline_rounded, color: TempleColors.violetaClaro),
+            ),
+          ],
+        ),
+        if (!corporal && _kg > 0)
+          Text('1RM estimado: ${(_kg * (1 + _reps / 30.0)).toStringAsFixed(1)} kg', style: kSuaveGym),
+        const SizedBox(height: 16),
+        FilledButton(
+          style: _botonClanPrincipal(),
+          onPressed: !valido || _enviando
+              ? null
+              : () async {
+                  setState(() => _enviando = true);
+                  try {
+                    await GymsRepo.instancia.nuevoRecord(widget.gymId, _ej, _kg, _reps);
+                    if (context.mounted) Navigator.of(context).pop(true);
+                  } catch (e) {
+                    if (context.mounted) avisoClan(context, SesionTemplo.mensajeDe(e), error: true);
+                    if (mounted) setState(() => _enviando = false);
+                  }
+                },
+          child: const Text('Enviar para validar'),
+        ),
+      ],
+    );
+  }
+}
+
+class TarjetaRetoGym extends StatelessWidget {
+  const TarjetaRetoGym({super.key, required this.reto, this.onOpciones});
+  final RetoGym reto;
+  final VoidCallback? onOpciones;
+
+  @override
+  Widget build(BuildContext context) {
+    final RetoGym r = reto;
+    final String fechas = '${fechaGym(r.inicio)} – ${fechaGym(r.fin)}';
+    final String estado = r.estado == 'proximo'
+        ? 'Empieza el ${fechaGym(r.inicio)}'
+        : (r.estado == 'terminado' ? 'Terminó' : 'Quedan ${diasHastaGym(r.fin) + 1} días');
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 10),
+      child: TempleCard(
+        destacada: r.cumplido && r.activo,
+        onTap: () => Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => RetoGymScreen(reto: r))),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: <Widget>[
+            Row(
+              children: <Widget>[
+                const Icon(Icons.local_fire_department_outlined, size: 18, color: TempleColors.dorado),
+                const SizedBox(width: 8),
+                Expanded(child: Text(r.titulo, style: kTituloGym)),
+                if (onOpciones != null)
+                  InkWell(onTap: onOpciones, child: const Icon(Icons.more_horiz_rounded, color: TempleColors.textoSuave)),
+              ],
+            ),
+            if (r.descripcion.isNotEmpty) ...<Widget>[
+              const SizedBox(height: 4),
+              Text(r.descripcion, style: kSuaveGym),
+            ],
+            const SizedBox(height: 10),
+            ClipRRect(
+              borderRadius: BorderRadius.circular(6),
+              child: LinearProgressIndicator(
+                value: r.avance,
+                minHeight: 8,
+                backgroundColor: TempleColors.superficieAlta,
+                color: r.cumplido ? TempleColors.dorado : TempleColors.violeta,
+              ),
+            ),
+            const SizedBox(height: 6),
+            Row(
+              children: <Widget>[
+                Expanded(
+                  child: Text('${milesTemplo(r.mio)} / ${milesTemplo(r.meta)} ${r.unidad} · $estado',
+                      style: const TextStyle(fontSize: 12, color: TempleColors.texto)),
+                ),
+                Text('${r.cumplen}/${r.socios} lo cumplen', style: const TextStyle(fontSize: 11, color: TempleColors.textoSuave)),
+              ],
+            ),
+            const SizedBox(height: 4),
+            Text(
+              '$fechas${r.premio.isNotEmpty ? ' · Premio: ${r.premio}' : ''}',
+              style: const TextStyle(fontSize: 11, color: TempleColors.textoTenue),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class RetoGymScreen extends StatelessWidget {
+  const RetoGymScreen({super.key, required this.reto});
+  final RetoGym reto;
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: TempleColors.negro,
+      body: FondoTemplo(
+        child: Column(
+          children: <Widget>[
+            BarraClan(titulo: reto.titulo, subtitulo: kClasesRetoGym[reto.clase]?.$1 ?? 'Reto del gym'),
+            Expanded(
+              child: FutureBuilder<List<FilaRankingGym>>(
+                future: GymsRepo.instancia.tablaReto(reto.id),
+                builder: (BuildContext c, AsyncSnapshot<List<FilaRankingGym>> s) {
+                  return ListView(
+                    padding: const EdgeInsets.fromLTRB(TempleSpace.borde, 8, TempleSpace.borde, 30),
+                    children: <Widget>[
+                      TarjetaRetoGym(reto: reto),
+                      const SizedBox(height: 6),
+                      const EtiquetaSeccion('Tabla del reto'),
+                      if (s.hasError)
+                        Text(SesionTemplo.mensajeDe(s.error!), style: kSuaveGym)
+                      else if (!s.hasData)
+                        cargandoGym()
+                      else
+                        TempleCard(
+                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+                          child: Column(
+                            children: <Widget>[
+                              for (final FilaRankingGym f in s.data!)
+                                FilaPersonaGym(
+                                  persona: f.persona,
+                                  puesto: f.puesto,
+                                  esYo: f.esYo,
+                                  valor: '${milesTemplo(f.valor)} ${reto.unidad}',
+                                  colorValor: f.valor >= reto.meta ? TempleColors.dorado : TempleColors.violetaClaro,
+                                  subtitulo: f.valor >= reto.meta ? 'Cumplido' : null,
+                                ),
+                            ],
+                          ),
+                        ),
+                    ],
+                  );
+                },
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _HojaRetoGym extends StatefulWidget {
+  const _HojaRetoGym({required this.gymId});
+  final String gymId;
+
+  @override
+  State<_HojaRetoGym> createState() => _HojaRetoGymState();
+}
+
+class _HojaRetoGymState extends State<_HojaRetoGym> {
+  final TextEditingController _titulo = TextEditingController();
+  final TextEditingController _desc = TextEditingController();
+  final TextEditingController _premio = TextEditingController();
+  String _clase = 'asistencia';
+  double _meta = 12;
+  DateTime _inicio = hoyGym();
+  int _duracion = 30;
+  bool _enviando = false;
+
+  static const Map<String, (double, double, double)> _rangos = <String, (double, double, double)>{
+    'asistencia': (1, 31, 1),
+    'sesiones': (1, 40, 1),
+    'minutos': (60, 3000, 30),
+    'series': (20, 1000, 10),
+    'volumen': (1000, 200000, 1000),
+  };
+
+  @override
+  void dispose() {
+    _titulo.dispose();
+    _desc.dispose();
+    _premio.dispose();
+    super.dispose();
+  }
+
+  void _cambiarClase(String c) {
+    setState(() {
+      _clase = c;
+      final (double, double, double) r = _rangos[c]!;
+      _meta = c == 'asistencia' ? 12.0 : (r.$1 * 4).clamp(r.$1, r.$2).toDouble();
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final (double, double, double) r = _rangos[_clase]!;
+    final DateTime fin = _inicio.add(Duration(days: _duracion - 1));
+    final bool valido = _titulo.text.trim().length >= 3 && !_enviando;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: <Widget>[
+        asaHojaGym('Nuevo reto del gym', 'Todos los socios participan solos: cuenta lo que ya registran.'),
+        TextField(
+          controller: _titulo,
+          maxLength: 60,
+          style: const TextStyle(color: TempleColors.texto),
+          onChanged: (_) => setState(() {}),
+          decoration: decoracionGym('Nombre del reto', 'Noviembre de hierro'),
+        ),
+        const SizedBox(height: 6),
+        TextField(
+          controller: _desc,
+          maxLength: 300,
+          maxLines: 2,
+          style: const TextStyle(color: TempleColors.texto),
+          decoration: decoracionGym('Descripción (opcional)', 'Ven 12 días este mes'),
+        ),
+        const SizedBox(height: 6),
+        const Text('Qué se cuenta', style: kSuaveGym),
+        const SizedBox(height: 6),
+        Wrap(
+          children: <Widget>[
+            for (final MapEntry<String, (String, String)> e in kClasesRetoGym.entries)
+              chipGym(e.value.$1, _clase == e.key, () => _cambiarClase(e.key)),
+          ],
+        ),
+        Text('Meta: ${milesTemplo(_meta)} ${kClasesRetoGym[_clase]!.$2}', style: kTituloGym),
+        Slider(
+          value: _meta.clamp(r.$1, r.$2).toDouble(),
+          min: r.$1,
+          max: r.$2,
+          divisions: ((r.$2 - r.$1) / r.$3).round(),
+          activeColor: TempleColors.violeta,
+          onChanged: (double v) => setState(() => _meta = v.roundToDouble()),
+        ),
+        const Text('Duración', style: kSuaveGym),
+        const SizedBox(height: 6),
+        Wrap(
+          children: <Widget>[
+            for (final (int, String) d in const <(int, String)>[(7, '1 semana'), (14, '2 semanas'), (30, '1 mes'), (60, '2 meses'), (90, '3 meses')])
+              chipGym(d.$2, _duracion == d.$1, () => setState(() => _duracion = d.$1)),
+          ],
+        ),
+        Row(
+          children: <Widget>[
+            Expanded(child: Text('Del ${fechaGym(_inicio)} al ${fechaGym(fin)}', style: kTextoGym)),
+            TextButton(
+              onPressed: () => setState(() => _inicio = _inicio.add(const Duration(days: 1))),
+              child: const Text('Empezar después'),
+            ),
+            if (_inicio.isAfter(hoyGym()))
+              TextButton(onPressed: () => setState(() => _inicio = hoyGym()), child: const Text('Hoy')),
+          ],
+        ),
+        TextField(
+          controller: _premio,
+          maxLength: 80,
+          style: const TextStyle(color: TempleColors.texto),
+          decoration: decoracionGym('Premio (opcional)', 'Un batido gratis, una camiseta…'),
+        ),
+        const SizedBox(height: 10),
+        FilledButton(
+          style: _botonClanPrincipal(),
+          onPressed: !valido
+              ? null
+              : () async {
+                  setState(() => _enviando = true);
+                  try {
+                    await GymsRepo.instancia.nuevoReto(
+                      id: widget.gymId,
+                      titulo: _titulo.text,
+                      descripcion: _desc.text,
+                      clase: _clase,
+                      meta: _meta,
+                      inicio: _inicio,
+                      fin: fin,
+                      premio: _premio.text,
+                    );
+                    if (context.mounted) Navigator.of(context).pop(true);
+                  } catch (e) {
+                    if (context.mounted) avisoClan(context, SesionTemplo.mensajeDe(e), error: true);
+                    if (mounted) setState(() => _enviando = false);
+                  }
+                },
+          child: const Text('Lanzar el reto'),
+        ),
+      ],
+    );
+  }
+}
+
+class ResenasGymVista extends StatefulWidget {
+  const ResenasGymVista({super.key, required this.d, required this.onCambio});
+  final DetalleGym d;
+  final Future<void> Function() onCambio;
+
+  @override
+  State<ResenasGymVista> createState() => _ResenasGymVistaState();
+}
+
+class _ResenasGymVistaState extends State<ResenasGymVista> {
+  late Future<List<ValoracionGym>> _f;
+
+  @override
+  void initState() {
+    super.initState();
+    _f = GymsRepo.instancia.valoraciones(widget.d.id);
+  }
+
+  Future<void> _escribir() async {
+    final bool? ok = await hojaGym<bool>(context, (BuildContext c) => _HojaResenaGym(d: widget.d));
+    if (ok == true) await widget.onCambio();
+  }
+
+  void _opcionesDueno(ValoracionGym v) {
+    mostrarOpcionesClan(context, <OpcionHoja>[
+      OpcionHoja(Icons.reply_rounded, v.respuesta.isEmpty ? 'Responder' : 'Cambiar la respuesta', () async {
+        final String? t = await hojaGym<String>(context, (BuildContext c) => _HojaRespuestaGym(inicial: v.respuesta));
+        if (t == null) return;
+        try {
+          await GymsRepo.instancia.responderValoracion(widget.d.id, v.persona.id, t);
+          if (mounted) setState(() => _f = GymsRepo.instancia.valoraciones(widget.d.id));
+        } catch (e) {
+          if (mounted) avisoClan(context, SesionTemplo.mensajeDe(e), error: true);
+        }
+      }),
+      OpcionHoja(Icons.flag_outlined, 'Reportar a moderación', () async {
+        try {
+          await GymsRepo.instancia.reportarValoracion(widget.d.id, v.persona.id);
+          if (mounted) avisoClan(context, 'Reseña reportada. La revisará el equipo de Temple of Strength.');
+        } catch (e) {
+          if (mounted) avisoClan(context, SesionTemplo.mensajeDe(e), error: true);
+        }
+      }, peligro: true),
+    ]);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final DetalleGym d = widget.d;
+    final double? prom = d.r.estrellas;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: <Widget>[
+        TempleCard(
+          child: Row(
+            children: <Widget>[
+              Text(prom == null ? '—' : prom.toStringAsFixed(1),
+                  style: const TextStyle(fontSize: 34, fontWeight: FontWeight.w700, color: TempleColors.dorado)),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: <Widget>[
+                    EstrellasGym(valor: prom ?? 0, size: 18),
+                    const SizedBox(height: 2),
+                    Text('${d.r.nValoraciones} ${d.r.nValoraciones == 1 ? 'reseña de socios' : 'reseñas de socios'}',
+                        style: kSuaveGym),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 12),
+        if (d.soySocio && !d.soyEquipo)
+          OutlinedButton.icon(
+            style: _botonClanSecundario(),
+            onPressed: _escribir,
+            icon: const Icon(Icons.rate_review_outlined, size: 18),
+            label: Text(d.miEstrellas == null ? 'Escribir mi reseña' : 'Cambiar mi reseña'),
+          )
+        else if (!d.deAdentro)
+          const Text('Solo los socios del gym pueden dejar reseñas.', style: kSuaveGym),
+        const SizedBox(height: 12),
+        FutureBuilder<List<ValoracionGym>>(
+          future: _f,
+          builder: (BuildContext c, AsyncSnapshot<List<ValoracionGym>> s) {
+            if (s.hasError) return Text(SesionTemplo.mensajeDe(s.error!), style: kSuaveGym);
+            final List<ValoracionGym>? l = s.data;
+            if (l == null) return cargandoGym();
+            if (l.isEmpty) {
+              return const Padding(
+                padding: EdgeInsets.symmetric(vertical: 16),
+                child: Text('Todavía no hay reseñas.', textAlign: TextAlign.center, style: kSuaveGym),
+              );
+            }
+            return Column(
+              children: <Widget>[
+                for (final ValoracionGym v in l)
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 10),
+                    child: TempleCard(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: <Widget>[
+                          Row(
+                            children: <Widget>[
+                              ClanAvatar(persona: v.persona, size: 30),
+                              const SizedBox(width: 8),
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: <Widget>[
+                                    Text(v.persona.nombre,
+                                        style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: TempleColors.blancoLuna)),
+                                    Row(children: <Widget>[
+                                      EstrellasGym(valor: v.estrellas.toDouble(), size: 12),
+                                      if (v.fecha != null) Text('  ${haceGym(v.fecha!)}', style: const TextStyle(fontSize: 11, color: TempleColors.textoTenue)),
+                                    ]),
+                                  ],
+                                ),
+                              ),
+                              if (d.soyDueno && !v.esYo)
+                                InkWell(
+                                  onTap: () => _opcionesDueno(v),
+                                  child: const Icon(Icons.more_horiz_rounded, color: TempleColors.textoSuave),
+                                ),
+                            ],
+                          ),
+                          if (v.comentario.isNotEmpty) ...<Widget>[
+                            const SizedBox(height: 8),
+                            Text(v.comentario, style: kTextoGym),
+                          ],
+                          if (v.respuesta.isNotEmpty) ...<Widget>[
+                            const SizedBox(height: 8),
+                            Container(
+                              width: double.infinity,
+                              padding: const EdgeInsets.all(10),
+                              decoration: BoxDecoration(
+                                color: TempleColors.superficieAlta,
+                                borderRadius: BorderRadius.circular(12),
+                              ),
+                              child: Text('Respuesta del gym: ${v.respuesta}', style: kSuaveGym),
+                            ),
+                          ],
+                        ],
+                      ),
+                    ),
+                  ),
+              ],
+            );
+          },
+        ),
+      ],
+    );
+  }
+}
+
+class _HojaResenaGym extends StatefulWidget {
+  const _HojaResenaGym({required this.d});
+  final DetalleGym d;
+
+  @override
+  State<_HojaResenaGym> createState() => _HojaResenaGymState();
+}
+
+class _HojaResenaGymState extends State<_HojaResenaGym> {
+  late int _estrellas = widget.d.miEstrellas ?? 0;
+  late final TextEditingController _t = TextEditingController(text: widget.d.miComentario);
+  bool _enviando = false;
+
+  @override
+  void dispose() {
+    _t.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: <Widget>[
+        asaHojaGym('Tu reseña de ${widget.d.r.nombre}', 'Cuenta cómo es entrenar ahí: ambiente, equipos, coaches, limpieza.'),
+        Center(child: EstrellasGym(valor: _estrellas.toDouble(), size: 36, onElegir: (int v) => setState(() => _estrellas = v))),
+        const SizedBox(height: 14),
+        TextField(
+          controller: _t,
+          maxLength: 400,
+          minLines: 2,
+          maxLines: 5,
+          style: const TextStyle(color: TempleColors.texto),
+          decoration: decoracionGym('Comentario (opcional)'),
+        ),
+        const SizedBox(height: 10),
+        Row(
+          children: <Widget>[
+            if (widget.d.miEstrellas != null)
+              TextButton(
+                onPressed: () async {
+                  try {
+                    await GymsRepo.instancia.borrarValoracion(widget.d.id);
+                    if (context.mounted) Navigator.of(context).pop(true);
+                  } catch (e) {
+                    if (context.mounted) avisoClan(context, SesionTemplo.mensajeDe(e), error: true);
+                  }
+                },
+                child: const Text('Borrar', style: TextStyle(color: TempleColors.error)),
+              ),
+            const Spacer(),
+            FilledButton(
+              style: _botonClanPrincipal(),
+              onPressed: _estrellas == 0 || _enviando
+                  ? null
+                  : () async {
+                      setState(() => _enviando = true);
+                      try {
+                        await GymsRepo.instancia.valorar(widget.d.id, _estrellas, _t.text);
+                        if (context.mounted) Navigator.of(context).pop(true);
+                      } catch (e) {
+                        if (context.mounted) avisoClan(context, SesionTemplo.mensajeDe(e), error: true);
+                        if (mounted) setState(() => _enviando = false);
+                      }
+                    },
+              child: const Text('Publicar reseña'),
+            ),
+          ],
+        ),
+      ],
+    );
+  }
+}
+
+class _HojaRespuestaGym extends StatefulWidget {
+  const _HojaRespuestaGym({required this.inicial});
+  final String inicial;
+
+  @override
+  State<_HojaRespuestaGym> createState() => _HojaRespuestaGymState();
+}
+
+class _HojaRespuestaGymState extends State<_HojaRespuestaGym> {
+  late final TextEditingController _t = TextEditingController(text: widget.inicial);
+
+  @override
+  void dispose() {
+    _t.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: <Widget>[
+        asaHojaGym('Responder la reseña', 'La respuesta se ve debajo de la reseña. Déjala vacía para quitarla.'),
+        TextField(
+          controller: _t,
+          maxLength: 400,
+          minLines: 2,
+          maxLines: 5,
+          autofocus: true,
+          style: const TextStyle(color: TempleColors.texto),
+          decoration: decoracionGym('Respuesta'),
+        ),
+        const SizedBox(height: 10),
+        FilledButton(
+          style: _botonClanPrincipal(),
+          onPressed: () => Navigator.of(context).pop(_t.text.trim()),
+          child: const Text('Guardar'),
+        ),
+      ],
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// 57.8 PANEL DEL TEMPLO (DUEÑO Y COACHES)
+// ---------------------------------------------------------------------------
+
+class PanelGymScreen extends StatefulWidget {
+  const PanelGymScreen({super.key, required this.gymId, required this.nombre});
+  final String gymId;
+  final String nombre;
+
+  @override
+  State<PanelGymScreen> createState() => _PanelGymScreenState();
+}
+
+class _PanelGymScreenState extends State<PanelGymScreen> {
+  PanelGym? _p;
+  String? _error;
+  late Future<List<RetoGym>> _retos;
+
+  @override
+  void initState() {
+    super.initState();
+    _cargar();
+  }
+
+  Future<void> _cargar() async {
+    _retos = GymsRepo.instancia.retos(widget.gymId);
+    try {
+      final PanelGym p = await GymsRepo.instancia.panel(widget.gymId);
+      if (mounted) {
+        setState(() {
+          _p = p;
+          _error = null;
+        });
+      }
+    } catch (e) {
+      if (mounted) setState(() => _error = SesionTemplo.mensajeDe(e));
+    }
+  }
+
+  Future<void> _ir(Widget w) async {
+    await Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => w));
+    await _cargar();
+  }
+
+  Future<void> _regenerar(String tipo) async {
+    final bool ok = await confirmarGym(
+      context,
+      tipo == 'coach' ? 'Cambiar el código de coach' : 'Cambiar el código de socio',
+      tipo == 'coach'
+          ? 'El código anterior deja de servir. Los coaches que ya están en el equipo siguen en él.'
+          : 'El código anterior deja de servir. Cambia también el afiche de la recepción. Los socios actuales siguen en el gym.',
+      si: 'Cambiar',
+    );
+    if (!ok) return;
+    try {
+      await GymsRepo.instancia.regenerarCodigo(widget.gymId, tipo);
+      await _cargar();
+    } catch (e) {
+      if (mounted) avisoClan(context, SesionTemplo.mensajeDe(e), error: true);
+    }
+  }
+
+  Widget _dato(String valor, String etiqueta, {Color? color, IconData? icono}) {
+    return Expanded(
+      child: Container(
+        padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 8),
+        margin: const EdgeInsets.all(4),
+        decoration: BoxDecoration(
+          color: TempleColors.superficie,
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(color: TempleColors.borde),
+        ),
+        child: Column(
+          children: <Widget>[
+            if (icono != null) Icon(icono, size: 16, color: color ?? TempleColors.violetaClaro),
+            Text(valor, style: TextStyle(fontSize: 20, fontWeight: FontWeight.w700, color: color ?? TempleColors.blancoLuna)),
+            Text(etiqueta, textAlign: TextAlign.center, style: const TextStyle(fontSize: 10.5, color: TempleColors.textoSuave)),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _codigo(String titulo, String codigo, String explicacion, String tipo, bool dueno) {
+    final String bonito = formatoCodigoGym(codigo);
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 10),
+      child: TempleCard(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: <Widget>[
+            Text(titulo, style: kTituloGym),
+            Text(explicacion, style: kSuaveGym),
+            const SizedBox(height: 10),
+            Row(
+              children: <Widget>[
+                Expanded(
+                  child: SelectableText(bonito,
+                      style: const TextStyle(
+                          fontSize: 24, letterSpacing: 3, fontWeight: FontWeight.w700, color: TempleColors.dorado)),
+                ),
+                IconButton(
+                  tooltip: 'Copiar',
+                  onPressed: () async {
+                    await Clipboard.setData(ClipboardData(text: bonito));
+                    if (mounted) avisoClan(context, 'Código copiado.');
+                  },
+                  icon: const Icon(Icons.copy_rounded, color: TempleColors.violetaClaro),
+                ),
+                IconButton(
+                  tooltip: 'Compartir por WhatsApp',
+                  onPressed: () => compartirTextoGym(
+                    context,
+                    tipo == 'coach'
+                        ? 'Únete como coach de ${widget.nombre} en Temple of Strength. En la app, ve a Clan → Gym → '
+                            '«Tengo un código» y escribe: $bonito'
+                        : 'Únete a ${widget.nombre} en Temple of Strength. Descarga la app en '
+                            'https://ssguerrerotenjiro-cyber.github.io y en Clan → Gym → «Tengo un código» escribe: $bonito',
+                  ),
+                  icon: const Icon(Icons.share_outlined, color: TempleColors.violetaClaro),
+                ),
+              ],
+            ),
+            if (dueno)
+              Align(
+                alignment: Alignment.centerLeft,
+                child: TextButton.icon(
+                  onPressed: () => _regenerar(tipo),
+                  icon: const Icon(Icons.autorenew_rounded, size: 16),
+                  label: const Text('Cambiar el código'),
+                ),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _accion(IconData icono, String texto, VoidCallback onTap, {int aviso = 0}) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: TempleCard(
+        onTap: onTap,
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+        child: Row(
+          children: <Widget>[
+            Icon(icono, color: TempleColors.violetaClaro, size: 20),
+            const SizedBox(width: 12),
+            Expanded(child: Text(texto, style: kTextoGym)),
+            if (aviso > 0)
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                decoration: BoxDecoration(color: TempleColors.violeta, borderRadius: BorderRadius.circular(10)),
+                child: Text('$aviso', style: const TextStyle(fontSize: 11.5, fontWeight: FontWeight.w700, color: Colors.white)),
+              ),
+            const SizedBox(width: 4),
+            const Icon(Icons.chevron_right_rounded, color: TempleColors.textoSuave),
+          ],
+        ),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final PanelGym? p = _p;
+    return Scaffold(
+      backgroundColor: TempleColors.negro,
+      body: FondoTemplo(
+        child: Column(
+          children: <Widget>[
+            BarraClan(titulo: p?.dueno ?? false ? 'Panel del dueño' : 'Panel del coach', subtitulo: widget.nombre),
+            Expanded(
+              child: RefreshIndicator(
+                onRefresh: _cargar,
+                child: ListView(
+                  physics: const AlwaysScrollableScrollPhysics(),
+                  padding: EdgeInsets.fromLTRB(TempleSpace.borde, 8, TempleSpace.borde, 30 + MediaQuery.paddingOf(context).bottom),
+                  children: p == null
+                      ? <Widget>[if (_error != null) errorGym(_error!, _cargar) else cargandoGym()]
+                      : _contenido(p),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  List<Widget> _contenido(PanelGym p) {
+    final Map<String, dynamic> pagos = p.pagos;
+    final List<(DateTime, int)> dias = p.dias;
+    final DateTime? hasta = p.aliadoHasta;
+    return <Widget>[
+      const EtiquetaSeccion('Hoy en el gym'),
+      Row(children: <Widget>[
+        _dato('${p.ahora}', 'entrenando\nahora', color: TempleColors.exito, icono: Icons.circle),
+        _dato('${p.hoy}', 'vinieron\nhoy'),
+        _dato('${p.semana}', 'activos\nesta semana'),
+      ]),
+      Row(children: <Widget>[
+        _dato('${p.socios}', 'socios'),
+        _dato('+${p.nuevosMes}', 'nuevos\neste mes'),
+        _dato('${p.visitas30}', 'visitas en\n30 días'),
+      ]),
+      const SizedBox(height: 10),
+      if (dias.isNotEmpty)
+        TempleCard(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: <Widget>[
+              const Text('Personas por día (14 días)', style: kSuaveGym),
+              const SizedBox(height: 10),
+              BarrasGym(
+                valores: <int>[for (final (DateTime, int) d in dias) d.$2],
+                etiquetas: <String>[for (final (DateTime, int) d in dias) kDiasCortosGym[d.$1.weekday - 1].substring(0, 1)],
+                resaltar: dias.length - 1,
+              ),
+            ],
+          ),
+        ),
+      if (p.picos.any((int x) => x > 0)) ...<Widget>[
+        const SizedBox(height: 10),
+        TempleCard(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: <Widget>[
+              Text('Horas pico: ${mejorFranjaGym(p.picos) ?? '—'}', style: kTextoGym),
+              const SizedBox(height: 10),
+              BarrasGym(
+                valores: p.picos.sublist(5, 23),
+                etiquetas: <String>[for (int h = 5; h < 23; h++) h % 3 == 0 ? '${h % 12 == 0 ? 12 : h % 12}' : ''],
+              ),
+            ],
+          ),
+        ),
+      ],
+      const SizedBox(height: 16),
+      const EtiquetaSeccion('Mensualidades'),
+      Row(children: <Widget>[
+        _dato('${entGym(pagos['al_dia'])}', 'al día', color: TempleColors.exito),
+        _dato('${entGym(pagos['por_vencer'])}', 'vencen en\n7 días', color: TempleColors.alertaSuave),
+        _dato('${entGym(pagos['vencidos'])}', 'vencidas', color: TempleColors.error),
+        _dato('${entGym(pagos['sin_registro'])}', 'sin\nregistro', color: TempleColors.textoSuave),
+      ]),
+      if (p.dueno && p.ingresosMes != null)
+        Padding(
+          padding: const EdgeInsets.only(top: 6),
+          child: TempleCard(
+            child: Row(
+              children: <Widget>[
+                const Icon(Icons.payments_outlined, color: TempleColors.dorado),
+                const SizedBox(width: 10),
+                Expanded(child: Text('Registrado este mes (${p.pagosMes} pagos)', style: kTextoGym)),
+                Text(pesosGym(p.ingresosMes!),
+                    style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: TempleColors.dorado)),
+              ],
+            ),
+          ),
+        ),
+      const SizedBox(height: 16),
+      const EtiquetaSeccion('Administrar'),
+      _accion(Icons.groups_outlined, 'Socios, pagos y entradas',
+          () => _ir(SociosGymScreen(gymId: widget.gymId, nombre: widget.nombre)), aviso: p.pendientes),
+      _accion(Icons.verified_outlined, 'Récords por validar', () => _ir(ValidarRecordsGymScreen(gymId: widget.gymId)),
+          aviso: p.recordsPendientes),
+      _accion(Icons.campaign_outlined, 'Avisos del gym', () => _ir(AvisosGymScreen(gymId: widget.gymId, equipo: true))),
+      _accion(Icons.local_fire_department_outlined, 'Nuevo reto', () async {
+        final bool? ok = await hojaGym<bool>(context, (BuildContext c) => _HojaRetoGym(gymId: widget.gymId));
+        if (ok == true) await _cargar();
+      }),
+      if (p.dueno) ...<Widget>[
+        _accion(Icons.edit_outlined, 'Editar el gym: planes, horario, máquinas…', () => _ir(EditarGymScreen(gymId: widget.gymId))),
+        _accion(Icons.photo_library_outlined, 'Fotos del gym', () => _ir(FotosGymScreen(gymId: widget.gymId))),
+      ],
+      _accion(Icons.badge_outlined, p.dueno ? 'Equipo de coaches (${p.equipo})' : 'El equipo (${p.equipo})',
+          () => _ir(EquipoGymScreen(gymId: widget.gymId, dueno: p.dueno))),
+      FutureBuilder<List<RetoGym>>(
+        future: _retos,
+        builder: (BuildContext c, AsyncSnapshot<List<RetoGym>> s) {
+          final List<RetoGym> l = s.data ?? const <RetoGym>[];
+          if (l.isEmpty) return const SizedBox.shrink();
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: <Widget>[
+              const SizedBox(height: 10),
+              const EtiquetaSeccion('Retos'),
+              for (final RetoGym r in l)
+                TarjetaRetoGym(
+                  reto: r,
+                  onOpciones: () => mostrarOpcionesClan(context, <OpcionHoja>[
+                    OpcionHoja(Icons.delete_outline_rounded, 'Borrar el reto', () async {
+                      try {
+                        await GymsRepo.instancia.borrarReto(r.id);
+                        await _cargar();
+                      } catch (e) {
+                        if (mounted) avisoClan(context, SesionTemplo.mensajeDe(e), error: true);
+                      }
+                    }, peligro: true),
+                  ]),
+                ),
+            ],
+          );
+        },
+      ),
+      const SizedBox(height: 16),
+      const EtiquetaSeccion('Códigos'),
+      _codigo('Código de socio', p.codigoSocio,
+          'Para el afiche de la recepción o el grupo de WhatsApp. Quien lo use entra al gym de una vez.', 'socio', p.dueno),
+      _codigo('Código de coach', p.codigoCoach,
+          'Solo para tu equipo. Quien lo use queda como coach, con el Pase del Templo y este panel.', 'coach', p.dueno),
+      const SizedBox(height: 6),
+      TempleCard(
+        child: Row(
+          children: <Widget>[
+            Icon(p.planTemplo == 'fundador' ? Icons.auto_awesome_rounded : Icons.verified_rounded, color: TempleColors.dorado),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Text(
+                '${p.planTemplo == 'fundador' ? 'Templo fundador' : 'Templo aliado'}'
+                '${hasta != null ? ' · al día hasta el ${fechaGym(hasta, conAnio: true)}' : ''}',
+                style: kTextoGym,
+              ),
+            ),
+          ],
+        ),
+      ),
+      if (p.estrellas != null) ...<Widget>[
+        const SizedBox(height: 10),
+        TempleCard(
+          child: Row(
+            children: <Widget>[
+              EstrellasGym(valor: p.estrellas!, size: 16),
+              const SizedBox(width: 8),
+              Expanded(child: Text('${p.estrellas!.toStringAsFixed(1)} de 5 · ${p.nValoraciones} reseñas', style: kTextoGym)),
+            ],
+          ),
+        ),
+      ],
+    ];
+  }
+}
+
+class SociosGymScreen extends StatefulWidget {
+  const SociosGymScreen({super.key, required this.gymId, required this.nombre});
+  final String gymId;
+  final String nombre;
+
+  @override
+  State<SociosGymScreen> createState() => _SociosGymScreenState();
+}
+
+class _SociosGymScreenState extends State<SociosGymScreen> {
+  List<SocioGym>? _l;
+  List<PlanGym> _planes = const <PlanGym>[];
+  String? _error;
+  String _filtro = 'todos';
+  final TextEditingController _buscar = TextEditingController();
+
+  @override
+  void initState() {
+    super.initState();
+    _cargar();
+    _cargarPlanes();
+  }
+
+  @override
+  void dispose() {
+    _buscar.dispose();
+    super.dispose();
+  }
+
+  Future<void> _cargarPlanes() async {
+    try {
+      final DetalleGym d = await GymsRepo.instancia.detalle(widget.gymId);
+      if (mounted) setState(() => _planes = d.planes);
+    } catch (_) {}
+  }
+
+  Future<void> _cargar() async {
+    try {
+      final List<SocioGym> l = await GymsRepo.instancia.socios(widget.gymId);
+      if (mounted) {
+        setState(() {
+          _l = l;
+          _error = null;
+        });
+      }
+    } catch (e) {
+      if (mounted) setState(() => _error = SesionTemplo.mensajeDe(e));
+    }
+  }
+
+  bool _pasa(SocioGym s) {
+    final String q = _buscar.text.trim().toLowerCase();
+    if (q.isNotEmpty && !s.persona.nombre.toLowerCase().contains(q) && !s.persona.usuario.toLowerCase().contains(q)) {
+      return false;
+    }
+    switch (_filtro) {
+      case 'pendientes':
+        return s.pendiente;
+      case 'dentro':
+        return s.dentro;
+      case 'vencen':
+        return !s.pendiente && s.porVencer;
+      case 'vencidos':
+        return !s.pendiente && s.vencido;
+      case 'sin_pago':
+        return !s.pendiente && s.pagoHasta == null && s.rol == null;
+      default:
+        return true;
+    }
+  }
+
+  String _subtitulo(SocioGym s) {
+    if (s.pendiente) return 'Quiere entrar al gym';
+    final List<String> p = <String>[];
+    final int? dp = s.diasPago;
+    if (s.pagoHasta != null) {
+      p.add(dp! < 0 ? 'Venció ${fechaGym(s.pagoHasta!)}' : (dp == 0 ? 'Vence hoy' : 'Al día hasta ${fechaGym(s.pagoHasta!)}'));
+    } else if (s.rol == null) {
+      p.add('Sin pago registrado');
+    }
+    p.add('${s.visitasMes} ${s.visitasMes == 1 ? 'visita' : 'visitas'} este mes');
+    if (s.ultima != null) p.add('última ${haceGym(s.ultima!)}');
+    return p.join(' · ');
+  }
+
+  Color _color(SocioGym s) {
+    if (s.pendiente) return TempleColors.dorado;
+    if (s.dentro) return TempleColors.exito;
+    if (s.vencido) return TempleColors.error;
+    if (s.porVencer) return TempleColors.alertaSuave;
+    return TempleColors.textoSuave;
+  }
+
+  Future<void> _accion(SocioGym s, String accion) async {
+    try {
+      await GymsRepo.instancia.accionSocio(widget.gymId, s.persona.id, accion);
+      if (mounted) {
+        avisoClan(
+            context,
+            switch (accion) {
+              'aceptar' => '${s.persona.nombre} ya es socio del gym.',
+              'ingreso' => 'Entrada registrada para ${s.persona.nombre}.',
+              'quitar' => '${s.persona.nombre} salió del gym.',
+              _ => 'Listo.',
+            });
+      }
+      await _cargar();
+    } catch (e) {
+      if (mounted) avisoClan(context, SesionTemplo.mensajeDe(e), error: true);
+    }
+  }
+
+  void _abrir(SocioGym s) {
+    if (s.pendiente) {
+      mostrarOpcionesClan(context, <OpcionHoja>[
+        OpcionHoja(Icons.check_circle_outline_rounded, 'Aceptar a ${s.persona.nombre}', () => _accion(s, 'aceptar')),
+        OpcionHoja(Icons.person_outline_rounded, 'Ver su perfil',
+            () => Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => PerfilClanScreen(id: s.persona.id)))),
+        OpcionHoja(Icons.close_rounded, 'Rechazar', () => _accion(s, 'rechazar'), peligro: true),
+      ]);
+      return;
+    }
+    mostrarOpcionesClan(context, <OpcionHoja>[
+      OpcionHoja(Icons.payments_outlined, 'Registrar un pago', () async {
+        final bool? ok = await hojaGym<bool>(
+            context, (BuildContext c) => _HojaPagoGym(gymId: widget.gymId, socio: s, planes: _planes));
+        if (ok == true) await _cargar();
+      }),
+      if (!s.dentro) OpcionHoja(Icons.login_rounded, 'Marcar su entrada de hoy', () => _accion(s, 'ingreso')),
+      OpcionHoja(Icons.history_rounded, 'Historial de pagos', () {
+        hojaGym<void>(context, (BuildContext c) => _HistorialPagosGym(gymId: widget.gymId, socio: s));
+      }),
+      OpcionHoja(Icons.sticky_note_2_outlined, s.nota.isEmpty ? 'Añadir una nota' : 'Nota: ${s.nota}', () async {
+        final String? t = await hojaGym<String>(context, (BuildContext c) => _HojaNotaGym(inicial: s.nota));
+        if (t == null) return;
+        try {
+          await GymsRepo.instancia.notaSocio(widget.gymId, s.persona.id, t);
+          await _cargar();
+        } catch (e) {
+          if (mounted) avisoClan(context, SesionTemplo.mensajeDe(e), error: true);
+        }
+      }),
+      OpcionHoja(Icons.person_outline_rounded, 'Ver su perfil',
+          () => Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => PerfilClanScreen(id: s.persona.id)))),
+      if (s.rol != 'dueno')
+        OpcionHoja(Icons.person_remove_outlined, 'Quitar del gym', () async {
+          final bool ok = await confirmarGym(context, 'Quitar a ${s.persona.nombre}',
+              'Saldrá del gym y de su ranking. Puede volver a entrar con el código de socio.',
+              si: 'Quitar', peligro: true);
+          if (ok) await _accion(s, 'quitar');
+        }, peligro: true),
+    ]);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final List<SocioGym>? l = _l;
+    final List<SocioGym> vista = l == null ? const <SocioGym>[] : l.where(_pasa).toList();
+    final int pendientes = l?.where((SocioGym s) => s.pendiente).length ?? 0;
+    return Scaffold(
+      backgroundColor: TempleColors.negro,
+      body: FondoTemplo(
+        child: Column(
+          children: <Widget>[
+            BarraClan(titulo: 'Socios', subtitulo: widget.nombre),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(TempleSpace.borde, 4, TempleSpace.borde, 4),
+              child: TextField(
+                controller: _buscar,
+                onChanged: (_) => setState(() {}),
+                style: const TextStyle(color: TempleColors.texto),
+                decoration: decoracionGym('Buscar socio').copyWith(prefixIcon: const Icon(Icons.search_rounded, color: TempleColors.textoSuave)),
+              ),
+            ),
+            SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              padding: const EdgeInsets.symmetric(horizontal: TempleSpace.borde),
+              child: Row(
+                children: <Widget>[
+                  for (final (String, String) f in <(String, String)>[
+                    ('todos', 'Todos (${l?.length ?? 0})'),
+                    ('pendientes', 'Solicitudes ($pendientes)'),
+                    ('dentro', 'En el gym ahora'),
+                    ('vencen', 'Vencen pronto'),
+                    ('vencidos', 'Vencidos'),
+                    ('sin_pago', 'Sin pago'),
+                  ])
+                    chipGym(f.$2, _filtro == f.$1, () => setState(() => _filtro = f.$1)),
+                ],
+              ),
+            ),
+            Expanded(
+              child: RefreshIndicator(
+                onRefresh: _cargar,
+                child: ListView(
+                  physics: const AlwaysScrollableScrollPhysics(),
+                  padding: EdgeInsets.fromLTRB(TempleSpace.borde, 4, TempleSpace.borde, 30 + MediaQuery.paddingOf(context).bottom),
+                  children: <Widget>[
+                    if (_error != null)
+                      errorGym(_error!, _cargar)
+                    else if (l == null)
+                      cargandoGym()
+                    else if (vista.isEmpty)
+                      const Padding(
+                        padding: EdgeInsets.only(top: 30),
+                        child: Text('Nadie en esta lista.', textAlign: TextAlign.center, style: kSuaveGym),
+                      )
+                    else
+                      TempleCard(
+                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+                        child: Column(
+                          children: <Widget>[
+                            for (final SocioGym s in vista)
+                              FilaPersonaGym(
+                                persona: s.persona,
+                                rol: s.rol,
+                                valor: s.pendiente ? 'Revisar' : (s.dentro ? 'Adentro' : (s.plan.isEmpty ? '' : s.plan)),
+                                colorValor: _color(s),
+                                subtitulo: _subtitulo(s),
+                                onTap: () => _abrir(s),
+                              ),
+                          ],
+                        ),
+                      ),
+                    const SizedBox(height: 10),
+                    const Text(
+                      'Toca a un socio para registrar su pago, marcar su entrada o dejarle una nota. '
+                      'La app no cobra: solo lleva el registro.',
+                      style: TextStyle(fontSize: 11, color: TempleColors.textoTenue),
+                      textAlign: TextAlign.center,
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _HojaPagoGym extends StatefulWidget {
+  const _HojaPagoGym({required this.gymId, required this.socio, required this.planes});
+  final String gymId;
+  final SocioGym socio;
+  final List<PlanGym> planes;
+
+  @override
+  State<_HojaPagoGym> createState() => _HojaPagoGymState();
+}
+
+class _HojaPagoGymState extends State<_HojaPagoGym> {
+  late final TextEditingController _plan = TextEditingController(
+      text: widget.socio.plan.isNotEmpty ? widget.socio.plan : (widget.planes.isNotEmpty ? widget.planes.first.nombre : 'Mensual'));
+  final TextEditingController _monto = TextEditingController();
+  late DateTime _hasta;
+  bool _enviando = false;
+
+  DateTime get _base {
+    final DateTime? h = widget.socio.pagoHasta;
+    final DateTime hoy = hoyGym();
+    return h != null && !h.isBefore(hoy) ? h : hoy;
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    final PlanGym? p = widget.planes.isEmpty ? null : widget.planes.first;
+    _hasta = _base.add(Duration(days: p?.dias ?? 30));
+    if (p != null && p.precio > 0) _monto.text = p.precio.round().toString();
+  }
+
+  @override
+  void dispose() {
+    _plan.dispose();
+    _monto.dispose();
+    super.dispose();
+  }
+
+  void _elegir(PlanGym p) {
+    setState(() {
+      _plan.text = p.nombre;
+      if (p.precio > 0) _monto.text = p.precio.round().toString();
+      _hasta = _base.add(Duration(days: p.dias));
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: <Widget>[
+        asaHojaGym('Pago de ${widget.socio.persona.nombre}', 'La app no cobra: anota aquí el pago que recibiste.'),
+        if (widget.planes.isNotEmpty) ...<Widget>[
+          Wrap(
+            children: <Widget>[
+              for (final PlanGym p in widget.planes) chipGym(p.nombre, _plan.text == p.nombre, () => _elegir(p)),
+            ],
+          ),
+          const SizedBox(height: 6),
+        ],
+        TextField(
+          controller: _plan,
+          maxLength: 40,
+          style: const TextStyle(color: TempleColors.texto),
+          onChanged: (_) => setState(() {}),
+          decoration: decoracionGym('Plan'),
+        ),
+        const SizedBox(height: 6),
+        TextField(
+          controller: _monto,
+          keyboardType: TextInputType.number,
+          inputFormatters: <TextInputFormatter>[FilteringTextInputFormatter.digitsOnly],
+          style: const TextStyle(color: TempleColors.texto),
+          decoration: decoracionGym('Valor recibido (COP, opcional)', '90000'),
+        ),
+        const SizedBox(height: 14),
+        const Text('Queda al día hasta', style: kSuaveGym),
+        Row(
+          children: <Widget>[
+            IconButton(
+              onPressed: () => setState(() => _hasta = _hasta.subtract(const Duration(days: 1))),
+              icon: const Icon(Icons.chevron_left_rounded, color: TempleColors.violetaClaro),
+            ),
+            Expanded(
+              child: Text(
+                fechaGym(_hasta, conAnio: true),
+                textAlign: TextAlign.center,
+                style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w700, color: TempleColors.blancoLuna),
+              ),
+            ),
+            IconButton(
+              onPressed: () => setState(() => _hasta = _hasta.add(const Duration(days: 1))),
+              icon: const Icon(Icons.chevron_right_rounded, color: TempleColors.violetaClaro),
+            ),
+          ],
+        ),
+        Wrap(
+          children: <Widget>[
+            for (final (int, String) d in const <(int, String)>[(1, '+1 día'), (7, '+1 semana'), (15, '+15 días'), (30, '+1 mes'), (91, '+3 meses')])
+              chipGym(d.$2, false, () => setState(() => _hasta = _base.add(Duration(days: d.$1)))),
+          ],
+        ),
+        const SizedBox(height: 10),
+        FilledButton(
+          style: _botonClanPrincipal(),
+          onPressed: _enviando
+              ? null
+              : () async {
+                  setState(() => _enviando = true);
+                  try {
+                    await GymsRepo.instancia.registrarPago(
+                        widget.gymId, widget.socio.persona.id, _plan.text, double.tryParse(_monto.text) ?? 0, _hasta);
+                    if (context.mounted) {
+                      avisoClan(context, 'Pago registrado. ${widget.socio.persona.nombre} queda al día hasta el ${fechaGym(_hasta)}.');
+                      Navigator.of(context).pop(true);
+                    }
+                  } catch (e) {
+                    if (context.mounted) avisoClan(context, SesionTemplo.mensajeDe(e), error: true);
+                    if (mounted) setState(() => _enviando = false);
+                  }
+                },
+          child: const Text('Registrar el pago'),
+        ),
+      ],
+    );
+  }
+}
+
+class _HistorialPagosGym extends StatelessWidget {
+  const _HistorialPagosGym({required this.gymId, required this.socio});
+  final String gymId;
+  final SocioGym socio;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: <Widget>[
+        asaHojaGym('Pagos de ${socio.persona.nombre}'),
+        FutureBuilder<List<Map<String, dynamic>>>(
+          future: GymsRepo.instancia.pagosDe(gymId, socio.persona.id),
+          builder: (BuildContext c, AsyncSnapshot<List<Map<String, dynamic>>> s) {
+            if (s.hasError) return Text(SesionTemplo.mensajeDe(s.error!), style: kSuaveGym);
+            final List<Map<String, dynamic>>? l = s.data;
+            if (l == null) return cargandoGym();
+            if (l.isEmpty) return const Text('Todavía no hay pagos registrados.', style: kSuaveGym);
+            return Column(
+              children: <Widget>[
+                for (final Map<String, dynamic> p in l)
+                  Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 6),
+                    child: Row(
+                      children: <Widget>[
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: <Widget>[
+                              Text(
+                                  '${textoGym(p['plan']).isEmpty ? 'Pago' : textoGym(p['plan'])} · hasta ${fechaGym(fechaDeGym(p['hasta']) ?? hoyGym())}',
+                                  style: kTextoGym),
+                              Text(
+                                'Anotado ${fechaDeGym(p['fecha']) == null ? '' : fechaGym(fechaDeGym(p['fecha'])!)}'
+                                '${mapaGym(p['por'])['usuario'] != null ? ' por ${mapaGym(p['por'])['usuario']}' : ''}',
+                                style: kSuaveGym,
+                              ),
+                            ],
+                          ),
+                        ),
+                        if (numGym(p['monto']) > 0)
+                          Text(pesosGym(numGym(p['monto'])), style: const TextStyle(fontWeight: FontWeight.w700, color: TempleColors.dorado)),
+                      ],
+                    ),
+                  ),
+              ],
+            );
+          },
+        ),
+      ],
+    );
+  }
+}
+
+class _HojaNotaGym extends StatefulWidget {
+  const _HojaNotaGym({required this.inicial});
+  final String inicial;
+
+  @override
+  State<_HojaNotaGym> createState() => _HojaNotaGymState();
+}
+
+class _HojaNotaGymState extends State<_HojaNotaGym> {
+  late final TextEditingController _t = TextEditingController(text: widget.inicial);
+
+  @override
+  void dispose() {
+    _t.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: <Widget>[
+        asaHojaGym('Nota del socio', 'Solo la ve el equipo del gym. Ejemplo: lesión de rodilla, plan con descuento.'),
+        TextField(
+          controller: _t,
+          maxLength: 200,
+          maxLines: 3,
+          autofocus: true,
+          style: const TextStyle(color: TempleColors.texto),
+          decoration: decoracionGym('Nota'),
+        ),
+        const SizedBox(height: 10),
+        FilledButton(
+          style: _botonClanPrincipal(),
+          onPressed: () => Navigator.of(context).pop(_t.text.trim()),
+          child: const Text('Guardar'),
+        ),
+      ],
+    );
+  }
+}
+
+class ValidarRecordsGymScreen extends StatefulWidget {
+  const ValidarRecordsGymScreen({super.key, required this.gymId});
+  final String gymId;
+
+  @override
+  State<ValidarRecordsGymScreen> createState() => _ValidarRecordsGymScreenState();
+}
+
+class _ValidarRecordsGymScreenState extends State<ValidarRecordsGymScreen> {
+  List<RecordGym>? _l;
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    _cargar();
+  }
+
+  Future<void> _cargar() async {
+    try {
+      final List<RecordGym> l = await GymsRepo.instancia.recordsPendientes(widget.gymId);
+      if (mounted) setState(() => _l = l);
+    } catch (e) {
+      if (mounted) setState(() => _error = SesionTemplo.mensajeDe(e));
+    }
+  }
+
+  Future<void> _decidir(RecordGym r, bool aprobar) async {
+    String nota = '';
+    if (!aprobar) {
+      final String? t = await hojaGym<String>(context, (BuildContext c) => const _HojaNotaRecordGym());
+      if (t == null) return;
+      nota = t;
+    }
+    try {
+      await GymsRepo.instancia.validarRecord(r.id, aprobar, nota);
+      if (aprobar) sonar(SonidoTemplo.record);
+      await _cargar();
+    } catch (e) {
+      if (mounted) avisoClan(context, SesionTemplo.mensajeDe(e), error: true);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final List<RecordGym>? l = _l;
+    return Scaffold(
+      backgroundColor: TempleColors.negro,
+      body: FondoTemplo(
+        child: Column(
+          children: <Widget>[
+            const BarraClan(titulo: 'Récords por validar', subtitulo: 'Valida solo lo que viste o puedes comprobar'),
+            Expanded(
+              child: RefreshIndicator(
+                onRefresh: _cargar,
+                child: ListView(
+                  physics: const AlwaysScrollableScrollPhysics(),
+                  padding: const EdgeInsets.fromLTRB(TempleSpace.borde, 8, TempleSpace.borde, 30),
+                  children: <Widget>[
+                    if (_error != null)
+                      errorGym(_error!, _cargar)
+                    else if (l == null)
+                      cargandoGym()
+                    else if (l.isEmpty)
+                      const Padding(
+                        padding: EdgeInsets.only(top: 30),
+                        child: Text('No hay récords esperando. Todo al día.', textAlign: TextAlign.center, style: kSuaveGym),
+                      )
+                    else
+                      for (final RecordGym r in l)
+                        Padding(
+                          padding: const EdgeInsets.only(bottom: 10),
+                          child: TempleCard(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.stretch,
+                              children: <Widget>[
+                                Row(
+                                  children: <Widget>[
+                                    ClanAvatar(persona: r.persona!, size: 36),
+                                    const SizedBox(width: 10),
+                                    Expanded(
+                                      child: Column(
+                                        crossAxisAlignment: CrossAxisAlignment.start,
+                                        children: <Widget>[
+                                          Text(r.persona!.nombre, style: kTituloGym),
+                                          Text(
+                                              '${kEjerciciosGym[r.ejercicio] ?? r.ejercicio}${r.fecha != null ? ' · ${haceGym(r.fecha!)}' : ''}',
+                                              style: kSuaveGym),
+                                        ],
+                                      ),
+                                    ),
+                                    Text(r.marca,
+                                        style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: TempleColors.dorado)),
+                                  ],
+                                ),
+                                const SizedBox(height: 10),
+                                if (r.propio)
+                                  const Text('Es tuyo: otro miembro del equipo debe validarlo.', style: kSuaveGym)
+                                else
+                                  Row(
+                                    children: <Widget>[
+                                      Expanded(
+                                        child: OutlinedButton(
+                                          style: _botonClanSecundario(),
+                                          onPressed: () => _decidir(r, false),
+                                          child: const Text('Rechazar'),
+                                        ),
+                                      ),
+                                      const SizedBox(width: 8),
+                                      Expanded(
+                                        child: FilledButton(
+                                          style: _botonClanPrincipal(),
+                                          onPressed: () => _decidir(r, true),
+                                          child: const Text('Validar'),
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                              ],
+                            ),
+                          ),
+                        ),
+                  ],
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _HojaNotaRecordGym extends StatefulWidget {
+  const _HojaNotaRecordGym();
+
+  @override
+  State<_HojaNotaRecordGym> createState() => _HojaNotaRecordGymState();
+}
+
+class _HojaNotaRecordGymState extends State<_HojaNotaRecordGym> {
+  final TextEditingController _t = TextEditingController();
+
+  @override
+  void dispose() {
+    _t.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: <Widget>[
+        asaHojaGym('¿Por qué no se valida?', 'El socio verá esta nota. Sé claro y amable.'),
+        TextField(
+          controller: _t,
+          maxLength: 160,
+          autofocus: true,
+          style: const TextStyle(color: TempleColors.texto),
+          decoration: decoracionGym('Nota', 'Faltó profundidad; repítelo con un coach presente'),
+        ),
+        const SizedBox(height: 10),
+        FilledButton(
+          style: _botonClanPrincipal(),
+          onPressed: () => Navigator.of(context).pop(_t.text.trim()),
+          child: const Text('Rechazar el récord'),
+        ),
+      ],
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// 57.9 EDITAR EL GYM, FOTOS Y EQUIPO
+// ---------------------------------------------------------------------------
+
+final List<String> kHorasGym = <String>[
+  for (int h = 0; h < 24; h++)
+    for (final int m in const <int>[0, 30]) '${h.toString().padLeft(2, '0')}:${m.toString().padLeft(2, '0')}',
+];
+
+Widget selectorHoraGym(String etiqueta, String valor, ValueChanged<String> onCambio) {
+  return DropdownButtonFormField<String>(
+    initialValue: kHorasGym.contains(valor) ? valor : '06:00',
+    isExpanded: true,
+    dropdownColor: TempleColors.superficieAlta,
+    style: const TextStyle(color: TempleColors.texto),
+    decoration: decoracionGym(etiqueta),
+    items: <DropdownMenuItem<String>>[
+      for (final String h in kHorasGym) DropdownMenuItem<String>(value: h, child: Text(h)),
+    ],
+    onChanged: (String? v) {
+      if (v != null) onCambio(v);
+    },
+  );
+}
+
+class EditarGymScreen extends StatefulWidget {
+  const EditarGymScreen({super.key, required this.gymId});
+  final String gymId;
+
+  @override
+  State<EditarGymScreen> createState() => _EditarGymScreenState();
+}
+
+class _EditarGymScreenState extends State<EditarGymScreen> {
+  DetalleGym? _d;
+  String? _error;
+  bool _guardando = false;
+
+  final TextEditingController _lema = TextEditingController();
+  final TextEditingController _desc = TextEditingController();
+  final TextEditingController _ciudad = TextEditingController();
+  final TextEditingController _barrio = TextEditingController();
+  final TextEditingController _direccion = TextEditingController();
+  final TextEditingController _mapa = TextEditingController();
+  final TextEditingController _telefono = TextEditingController();
+  final TextEditingController _whatsapp = TextEditingController();
+  final TextEditingController _instagram = TextEditingController();
+  final TextEditingController _aforo = TextEditingController();
+  String _kanji = '鋼';
+  int _color = 0;
+  String _ingreso = 'solicitud';
+  List<HorarioGym> _horario = <HorarioGym>[];
+  List<PlanGym> _planes = <PlanGym>[];
+  List<EquipoMaquinaGym> _equipos = <EquipoMaquinaGym>[];
+  List<ClaseGym> _clases = <ClaseGym>[];
+  Set<String> _servicios = <String>{};
+
+  static const List<String> _kanjis = <String>['鋼', '力', '武', '炎', '龍', '虎', '山', '雷', '月', '心', '道', '剛'];
+
+  @override
+  void initState() {
+    super.initState();
+    _cargar();
+  }
+
+  @override
+  void dispose() {
+    for (final TextEditingController c in <TextEditingController>[
+      _lema, _desc, _ciudad, _barrio, _direccion, _mapa, _telefono, _whatsapp, _instagram, _aforo,
+    ]) {
+      c.dispose();
+    }
+    super.dispose();
+  }
+
+  Future<void> _cargar() async {
+    try {
+      final DetalleGym d = await GymsRepo.instancia.detalle(widget.gymId);
+      if (!mounted) return;
+      setState(() {
+        _d = d;
+        _lema.text = d.r.lema;
+        _desc.text = d.descripcion;
+        _ciudad.text = d.r.ciudad;
+        _barrio.text = d.r.barrio;
+        _direccion.text = d.direccion;
+        _mapa.text = d.mapaUrl;
+        _telefono.text = d.telefono;
+        _whatsapp.text = d.whatsapp;
+        _instagram.text = d.instagram;
+        _aforo.text = d.r.aforo?.toString() ?? '';
+        _kanji = d.r.kanji;
+        _color = d.r.color;
+        _ingreso = d.ingreso;
+        _horario = List<HorarioGym>.of(d.horario);
+        _planes = List<PlanGym>.of(d.planes);
+        _equipos = List<EquipoMaquinaGym>.of(d.equipos);
+        _clases = List<ClaseGym>.of(d.clases);
+        _servicios = d.servicios.toSet();
+      });
+    } catch (e) {
+      if (mounted) setState(() => _error = SesionTemplo.mensajeDe(e));
+    }
+  }
+
+  Future<void> _guardar() async {
+    final String mapa = _mapa.text.trim();
+    if (mapa.isNotEmpty && !mapa.startsWith('https://')) {
+      avisoClan(context, 'El enlace del mapa debe empezar por https://. Cópialo desde Google Maps → Compartir.', error: true);
+      return;
+    }
+    setState(() => _guardando = true);
+    try {
+      await GymsRepo.instancia.editar(widget.gymId, <String, dynamic>{
+        'lema': _lema.text,
+        'descripcion': _desc.text,
+        'ciudad': _ciudad.text,
+        'barrio': _barrio.text,
+        'direccion': _direccion.text,
+        'mapa_url': mapa,
+        'telefono': _telefono.text,
+        'whatsapp': _whatsapp.text,
+        'instagram': _instagram.text.replaceAll('@', ''),
+        'aforo': int.tryParse(_aforo.text) ?? 0,
+        'kanji': _kanji,
+        'color': _color,
+        'ingreso': _ingreso,
+        'horario': <Map<String, dynamic>>[for (final HorarioGym h in _horario) h.aMapa()],
+        'planes': <Map<String, dynamic>>[for (final PlanGym p in _planes) p.aMapa()],
+        'equipos': <Map<String, dynamic>>[for (final EquipoMaquinaGym e in _equipos) e.aMapa()],
+        'clases': <Map<String, dynamic>>[for (final ClaseGym c in _clases) c.aMapa()],
+        'servicios': _servicios.toList(),
+      });
+      unawaited(GymsRepo.instancia.cargarMio());
+      if (mounted) {
+        avisoClan(context, 'El gym quedó actualizado.');
+        Navigator.of(context).pop();
+      }
+    } catch (e) {
+      if (mounted) avisoClan(context, SesionTemplo.mensajeDe(e), error: true);
+    }
+    if (mounted) setState(() => _guardando = false);
+  }
+
+  Widget _campo(TextEditingController c, String etiqueta,
+      {String pista = '', int? max, int lineas = 1, TextInputType? teclado, List<TextInputFormatter>? formato}) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 10),
+      child: TextField(
+        controller: c,
+        maxLength: max,
+        minLines: lineas,
+        maxLines: lineas == 1 ? 1 : lineas + 3,
+        keyboardType: teclado,
+        inputFormatters: formato,
+        style: const TextStyle(color: TempleColors.texto),
+        decoration: decoracionGym(etiqueta, pista),
+      ),
+    );
+  }
+
+  Widget _filaLista(String titulo, String subtitulo, VoidCallback onBorrar, {VoidCallback? onEditar}) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 6),
+      child: Container(
+        padding: const EdgeInsets.fromLTRB(12, 8, 4, 8),
+        decoration: BoxDecoration(
+          color: TempleColors.superficie,
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: TempleColors.borde),
+        ),
+        child: Row(
+          children: <Widget>[
+            Expanded(
+              child: InkWell(
+                onTap: onEditar,
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: <Widget>[
+                    Text(titulo, style: kTextoGym),
+                    if (subtitulo.isNotEmpty) Text(subtitulo, style: kSuaveGym),
+                  ],
+                ),
+              ),
+            ),
+            IconButton(
+              visualDensity: VisualDensity.compact,
+              onPressed: onBorrar,
+              icon: const Icon(Icons.delete_outline_rounded, size: 19, color: TempleColors.textoSuave),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _botonAnadir(String texto, VoidCallback onTap) => Align(
+        alignment: Alignment.centerLeft,
+        child: TextButton.icon(onPressed: onTap, icon: const Icon(Icons.add_rounded, size: 18), label: Text(texto)),
+      );
+
+  Future<void> _editarPlan([int? i]) async {
+    final PlanGym? r = await hojaGym<PlanGym>(context, (BuildContext c) => _HojaPlanGym(inicial: i == null ? null : _planes[i]));
+    if (r == null) return;
+    setState(() {
+      if (i == null) {
+        _planes.add(r);
+      } else {
+        _planes[i] = r;
+      }
+    });
+  }
+
+  Future<void> _editarHorario([int? i]) async {
+    final HorarioGym? r =
+        await hojaGym<HorarioGym>(context, (BuildContext c) => _HojaHorarioGym(inicial: i == null ? null : _horario[i]));
+    if (r == null) return;
+    setState(() {
+      if (i == null) {
+        _horario.add(r);
+      } else {
+        _horario[i] = r;
+      }
+    });
+  }
+
+  Future<void> _editarEquipo([int? i]) async {
+    final EquipoMaquinaGym? r = await hojaGym<EquipoMaquinaGym>(
+        context, (BuildContext c) => _HojaEquipoGym(inicial: i == null ? null : _equipos[i]));
+    if (r == null) return;
+    setState(() {
+      if (i == null) {
+        _equipos.add(r);
+      } else {
+        _equipos[i] = r;
+      }
+    });
+  }
+
+  Future<void> _editarClase([int? i]) async {
+    final ClaseGym? r =
+        await hojaGym<ClaseGym>(context, (BuildContext c) => _HojaClaseGym(inicial: i == null ? null : _clases[i]));
+    if (r == null) return;
+    setState(() {
+      if (i == null) {
+        _clases.add(r);
+      } else {
+        _clases[i] = r;
+      }
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final DetalleGym? d = _d;
+    return Scaffold(
+      backgroundColor: TempleColors.negro,
+      body: FondoTemplo(
+        child: Column(
+          children: <Widget>[
+            BarraClan(
+              titulo: 'Editar el gym',
+              subtitulo: d?.r.nombre,
+              acciones: <Widget>[
+                TextButton(
+                  onPressed: d == null || _guardando ? null : _guardar,
+                  child: const Text('Guardar', style: TextStyle(fontWeight: FontWeight.w700)),
+                ),
+              ],
+            ),
+            Expanded(
+              child: d == null
+                  ? (_error != null ? errorGym(_error!, _cargar) : cargandoGym())
+                  : ListView(
+                      padding: EdgeInsets.fromLTRB(TempleSpace.borde, 8, TempleSpace.borde, 40 + MediaQuery.paddingOf(context).bottom),
+                      children: <Widget>[
+                        const EtiquetaSeccion('Identidad'),
+                        Row(
+                          children: <Widget>[
+                            EmblemaGym(
+                                gym: GymResumen(id: d.id, nombre: d.r.nombre, kanji: _kanji, color: _color, planTemplo: d.r.planTemplo),
+                                size: 54),
+                            const SizedBox(width: 14),
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: <Widget>[
+                                  Text(d.r.nombre, style: kTituloGym),
+                                  const Text('El nombre lo cambia el equipo de Temple of Strength.', style: kSuaveGym),
+                                ],
+                              ),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 10),
+                        Wrap(
+                          spacing: 6,
+                          runSpacing: 6,
+                          children: <Widget>[
+                            for (final String k in _kanjis)
+                              GestureDetector(
+                                onTap: () => setState(() => _kanji = k),
+                                child: Container(
+                                  width: 40,
+                                  height: 40,
+                                  alignment: Alignment.center,
+                                  decoration: BoxDecoration(
+                                    color: _kanji == k ? TempleColors.violeta.withValues(alpha: 0.3) : TempleColors.superficie,
+                                    borderRadius: BorderRadius.circular(12),
+                                    border: Border.all(color: _kanji == k ? TempleColors.violeta : TempleColors.borde),
+                                  ),
+                                  child: Text(k, style: const TextStyle(fontSize: 19, color: TempleColors.blancoLuna)),
+                                ),
+                              ),
+                          ],
+                        ),
+                        const SizedBox(height: 10),
+                        Wrap(
+                          spacing: 8,
+                          children: <Widget>[
+                            for (int i = 0; i < kColoresClan.length; i++)
+                              GestureDetector(
+                                onTap: () => setState(() => _color = i),
+                                child: Container(
+                                  width: 30,
+                                  height: 30,
+                                  decoration: BoxDecoration(
+                                    color: kColoresClan[i],
+                                    shape: BoxShape.circle,
+                                    border: Border.all(color: _color == i ? Colors.white : Colors.transparent, width: 2),
+                                  ),
+                                ),
+                              ),
+                          ],
+                        ),
+                        const SizedBox(height: 14),
+                        _campo(_lema, 'Lema', pista: 'Fuerza, disciplina y comunidad', max: 80),
+                        _campo(_desc, 'Descripción', pista: 'Qué hace especial a tu gym', max: 1200, lineas: 4),
+                        const EtiquetaSeccion('Ubicación y contacto'),
+                        _campo(_ciudad, 'Ciudad', pista: 'Bogotá', max: 60),
+                        _campo(_barrio, 'Barrio', pista: 'Chapinero', max: 60),
+                        _campo(_direccion, 'Dirección', pista: 'Calle 45 # 13-20', max: 160),
+                        _campo(_mapa, 'Enlace de Google Maps (opcional)',
+                            pista: 'https://maps.app.goo.gl/…', teclado: TextInputType.url),
+                        _campo(_whatsapp, 'WhatsApp', pista: '300 123 4567', teclado: TextInputType.phone),
+                        _campo(_telefono, 'Teléfono (opcional)', teclado: TextInputType.phone),
+                        _campo(_instagram, 'Instagram (sin @)', pista: 'mi.gym', max: 40),
+                        _campo(_aforo, 'Aforo máximo (opcional)',
+                            pista: '80', teclado: TextInputType.number, formato: <TextInputFormatter>[FilteringTextInputFormatter.digitsOnly]),
+                        const EtiquetaSeccion('Cómo entran los socios'),
+                        Wrap(
+                          children: <Widget>[
+                            chipGym('Con solicitud', _ingreso == 'solicitud', () => setState(() => _ingreso = 'solicitud')),
+                            chipGym('Solo con código', _ingreso == 'codigo', () => setState(() => _ingreso = 'codigo')),
+                            chipGym('Abierto a todos', _ingreso == 'abierto', () => setState(() => _ingreso = 'abierto')),
+                          ],
+                        ),
+                        Text(
+                          _ingreso == 'solicitud'
+                              ? 'Quien encuentre el gym en la app pide entrar y tu equipo lo acepta. Con el código de socio entra directo.'
+                              : (_ingreso == 'codigo'
+                                  ? 'Solo entra quien tenga el código de socio (el del afiche de la recepción).'
+                                  : 'Cualquiera puede unirse desde la app, sin aprobación.'),
+                          style: kSuaveGym,
+                        ),
+                        const SizedBox(height: 16),
+                        const EtiquetaSeccion('Mensualidad y planes'),
+                        for (int i = 0; i < _planes.length; i++)
+                          _filaLista(
+                            _planes[i].nombre,
+                            '${_planes[i].precio > 0 ? pesosGym(_planes[i].precio) : 'Sin precio'} por ${kPeriodosGym[_planes[i].periodo] ?? 'mes'}'
+                            '${_planes[i].detalle.isEmpty ? '' : ' · ${_planes[i].detalle}'}',
+                            () => setState(() => _planes.removeAt(i)),
+                            onEditar: () => _editarPlan(i),
+                          ),
+                        if (_planes.length < 8) _botonAnadir('Añadir un plan', _editarPlan),
+                        const EtiquetaSeccion('Horario'),
+                        for (int i = 0; i < _horario.length; i++)
+                          _filaLista(_horario[i].dias, '${_horario[i].abre} – ${_horario[i].cierra}',
+                              () => setState(() => _horario.removeAt(i)),
+                              onEditar: () => _editarHorario(i)),
+                        if (_horario.length < 7) _botonAnadir('Añadir horario', _editarHorario),
+                        EtiquetaSeccion('Máquinas y equipos (${_equipos.fold<int>(0, (int a, EquipoMaquinaGym e) => a + e.cantidad)})'),
+                        for (int i = 0; i < _equipos.length; i++)
+                          _filaLista('${_equipos[i].cantidad} × ${_equipos[i].nombre}',
+                              kCategoriasEquipoGym[_equipos[i].categoria] ?? '', () => setState(() => _equipos.removeAt(i)),
+                              onEditar: () => _editarEquipo(i)),
+                        if (_equipos.length < 80) _botonAnadir('Añadir máquina o equipo', _editarEquipo),
+                        const EtiquetaSeccion('Clases grupales'),
+                        for (int i = 0; i < _clases.length; i++)
+                          _filaLista('${kDiasGym[_clases[i].dia - 1]} ${_clases[i].hora} · ${_clases[i].nombre}',
+                              '${_clases[i].duracion} min${_clases[i].coach.isEmpty ? '' : ' · ${_clases[i].coach}'}',
+                              () => setState(() => _clases.removeAt(i)),
+                              onEditar: () => _editarClase(i)),
+                        if (_clases.length < 50) _botonAnadir('Añadir clase', _editarClase),
+                        const EtiquetaSeccion('Servicios'),
+                        Wrap(
+                          children: <Widget>[
+                            for (final MapEntry<String, (String, IconData)> s in kServiciosGym.entries)
+                              chipGym(s.value.$1, _servicios.contains(s.key), () {
+                                setState(() {
+                                  if (!_servicios.remove(s.key)) _servicios.add(s.key);
+                                });
+                              }, icono: s.value.$2),
+                          ],
+                        ),
+                        const SizedBox(height: 18),
+                        FilledButton(
+                          style: _botonClanPrincipal(),
+                          onPressed: _guardando ? null : _guardar,
+                          child: _guardando
+                              ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                              : const Text('Guardar cambios'),
+                        ),
+                      ],
+                    ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _HojaPlanGym extends StatefulWidget {
+  const _HojaPlanGym({this.inicial});
+  final PlanGym? inicial;
+
+  @override
+  State<_HojaPlanGym> createState() => _HojaPlanGymState();
+}
+
+class _HojaPlanGymState extends State<_HojaPlanGym> {
+  late final TextEditingController _nombre = TextEditingController(text: widget.inicial?.nombre ?? 'Mensual');
+  late final TextEditingController _precio =
+      TextEditingController(text: (widget.inicial?.precio ?? 0) > 0 ? widget.inicial!.precio.round().toString() : '');
+  late final TextEditingController _detalle = TextEditingController(text: widget.inicial?.detalle ?? '');
+  late String _periodo = widget.inicial?.periodo ?? 'mes';
+
+  @override
+  void dispose() {
+    _nombre.dispose();
+    _precio.dispose();
+    _detalle.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: <Widget>[
+        asaHojaGym(widget.inicial == null ? 'Nuevo plan' : 'Editar plan'),
+        Wrap(
+          children: <Widget>[
+            for (final (String, String) p in const <(String, String)>[
+              ('Mensual', 'mes'), ('Día', 'dia'), ('Semana', 'semana'), ('Trimestre', 'trimestre'), ('Estudiante', 'mes'), ('Anual', 'anio'),
+            ])
+              chipGym(p.$1, _nombre.text == p.$1, () => setState(() {
+                    _nombre.text = p.$1;
+                    _periodo = p.$2;
+                  })),
+          ],
+        ),
+        TextField(
+          controller: _nombre,
+          maxLength: 40,
+          style: const TextStyle(color: TempleColors.texto),
+          onChanged: (_) => setState(() {}),
+          decoration: decoracionGym('Nombre del plan'),
+        ),
+        const SizedBox(height: 6),
+        TextField(
+          controller: _precio,
+          keyboardType: TextInputType.number,
+          inputFormatters: <TextInputFormatter>[FilteringTextInputFormatter.digitsOnly],
+          style: const TextStyle(color: TempleColors.texto),
+          decoration: decoracionGym('Precio en pesos', '90000'),
+        ),
+        const SizedBox(height: 10),
+        const Text('Cada cuánto se paga', style: kSuaveGym),
+        const SizedBox(height: 6),
+        Wrap(
+          children: <Widget>[
+            for (final MapEntry<String, String> p in kPeriodosGym.entries)
+              chipGym(p.value, _periodo == p.key, () => setState(() => _periodo = p.key)),
+          ],
+        ),
+        TextField(
+          controller: _detalle,
+          maxLength: 120,
+          style: const TextStyle(color: TempleColors.texto),
+          decoration: decoracionGym('Detalle (opcional)', 'Incluye clases grupales'),
+        ),
+        const SizedBox(height: 8),
+        FilledButton(
+          style: _botonClanPrincipal(),
+          onPressed: _nombre.text.trim().isEmpty
+              ? null
+              : () => Navigator.of(context).pop(PlanGym(
+                    nombre: _nombre.text.trim(),
+                    precio: double.tryParse(_precio.text) ?? 0,
+                    periodo: _periodo,
+                    detalle: _detalle.text.trim(),
+                  )),
+          child: const Text('Listo'),
+        ),
+      ],
+    );
+  }
+}
+
+class _HojaHorarioGym extends StatefulWidget {
+  const _HojaHorarioGym({this.inicial});
+  final HorarioGym? inicial;
+
+  @override
+  State<_HojaHorarioGym> createState() => _HojaHorarioGymState();
+}
+
+class _HojaHorarioGymState extends State<_HojaHorarioGym> {
+  late final TextEditingController _dias = TextEditingController(text: widget.inicial?.dias ?? 'Lunes a viernes');
+  late String _abre = widget.inicial?.abre ?? '05:00';
+  late String _cierra = widget.inicial?.cierra ?? '22:00';
+
+  @override
+  void dispose() {
+    _dias.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: <Widget>[
+        asaHojaGym('Horario'),
+        Wrap(
+          children: <Widget>[
+            for (final String p in const <String>['Lunes a viernes', 'Sábados', 'Domingos y festivos', 'Todos los días'])
+              chipGym(p, _dias.text == p, () => setState(() => _dias.text = p)),
+          ],
+        ),
+        TextField(
+          controller: _dias,
+          maxLength: 30,
+          style: const TextStyle(color: TempleColors.texto),
+          onChanged: (_) => setState(() {}),
+          decoration: decoracionGym('Días'),
+        ),
+        const SizedBox(height: 8),
+        Row(
+          children: <Widget>[
+            Expanded(child: selectorHoraGym('Abre', _abre, (String v) => setState(() => _abre = v))),
+            const SizedBox(width: 10),
+            Expanded(child: selectorHoraGym('Cierra', _cierra, (String v) => setState(() => _cierra = v))),
+          ],
+        ),
+        const SizedBox(height: 14),
+        FilledButton(
+          style: _botonClanPrincipal(),
+          onPressed: _dias.text.trim().isEmpty
+              ? null
+              : () => Navigator.of(context).pop(HorarioGym(dias: _dias.text.trim(), abre: _abre, cierra: _cierra)),
+          child: const Text('Listo'),
+        ),
+      ],
+    );
+  }
+}
+
+class _HojaEquipoGym extends StatefulWidget {
+  const _HojaEquipoGym({this.inicial});
+  final EquipoMaquinaGym? inicial;
+
+  @override
+  State<_HojaEquipoGym> createState() => _HojaEquipoGymState();
+}
+
+class _HojaEquipoGymState extends State<_HojaEquipoGym> {
+  late final TextEditingController _nombre = TextEditingController(text: widget.inicial?.nombre ?? '');
+  late int _cantidad = widget.inicial?.cantidad ?? 1;
+  late String _categoria = widget.inicial?.categoria ?? 'maquinas';
+
+  static const Map<String, List<String>> _sugeridos = <String, List<String>>{
+    'cardio': <String>['Caminadora', 'Bicicleta estática', 'Elíptica', 'Remo', 'Escaladora', 'Air bike'],
+    'maquinas': <String>['Prensa de piernas', 'Polea alta', 'Polea cruzada', 'Máquina Smith', 'Extensión de piernas', 'Curl femoral', 'Pec deck', 'Hack squat'],
+    'libre': <String>['Rack de sentadilla', 'Banco plano', 'Banco inclinado', 'Mancuernas (pares)', 'Barras olímpicas', 'Discos (kg totales)'],
+    'funcional': <String>['Kettlebells', 'TRX', 'Cajón pliométrico', 'Cuerdas de batalla', 'Barra de dominadas', 'Balón medicinal'],
+    'otros': <String>['Saco de boxeo', 'Colchonetas', 'Rodillos de espuma'],
+  };
+
+  @override
+  void dispose() {
+    _nombre.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: <Widget>[
+        asaHojaGym(widget.inicial == null ? 'Añadir equipo' : 'Editar equipo'),
+        Wrap(
+          children: <Widget>[
+            for (final MapEntry<String, String> c in kCategoriasEquipoGym.entries)
+              chipGym(c.value, _categoria == c.key, () => setState(() => _categoria = c.key)),
+          ],
+        ),
+        Wrap(
+          children: <Widget>[
+            for (final String s in _sugeridos[_categoria] ?? const <String>[])
+              chipGym(s, _nombre.text == s, () => setState(() => _nombre.text = s)),
+          ],
+        ),
+        TextField(
+          controller: _nombre,
+          maxLength: 40,
+          style: const TextStyle(color: TempleColors.texto),
+          onChanged: (_) => setState(() {}),
+          decoration: decoracionGym('Nombre'),
+        ),
+        Row(
+          children: <Widget>[
+            const Expanded(child: Text('Cantidad', style: kTextoGym)),
+            IconButton(
+              onPressed: _cantidad > 1 ? () => setState(() => _cantidad--) : null,
+              icon: const Icon(Icons.remove_circle_outline_rounded, color: TempleColors.violetaClaro),
+            ),
+            Text('$_cantidad', style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w700, color: TempleColors.blancoLuna)),
+            IconButton(
+              onPressed: _cantidad < 500 ? () => setState(() => _cantidad++) : null,
+              icon: const Icon(Icons.add_circle_outline_rounded, color: TempleColors.violetaClaro),
+            ),
+            IconButton(
+              tooltip: '+10',
+              onPressed: _cantidad <= 490 ? () => setState(() => _cantidad += 10) : null,
+              icon: const Text('+10', style: TextStyle(color: TempleColors.violetaClaro, fontWeight: FontWeight.w700)),
+            ),
+          ],
+        ),
+        const SizedBox(height: 10),
+        FilledButton(
+          style: _botonClanPrincipal(),
+          onPressed: _nombre.text.trim().isEmpty
+              ? null
+              : () => Navigator.of(context)
+                  .pop(EquipoMaquinaGym(nombre: _nombre.text.trim(), cantidad: _cantidad, categoria: _categoria)),
+          child: const Text('Listo'),
+        ),
+      ],
+    );
+  }
+}
+
+class _HojaClaseGym extends StatefulWidget {
+  const _HojaClaseGym({this.inicial});
+  final ClaseGym? inicial;
+
+  @override
+  State<_HojaClaseGym> createState() => _HojaClaseGymState();
+}
+
+class _HojaClaseGymState extends State<_HojaClaseGym> {
+  late final TextEditingController _nombre = TextEditingController(text: widget.inicial?.nombre ?? '');
+  late final TextEditingController _coach = TextEditingController(text: widget.inicial?.coach ?? '');
+  late int _dia = widget.inicial?.dia ?? 1;
+  late String _hora = widget.inicial?.hora ?? '18:00';
+  late int _duracion = widget.inicial?.duracion ?? 60;
+
+  @override
+  void dispose() {
+    _nombre.dispose();
+    _coach.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: <Widget>[
+        asaHojaGym(widget.inicial == null ? 'Nueva clase' : 'Editar clase'),
+        Wrap(
+          children: <Widget>[
+            for (final String s in const <String>['Spinning', 'Funcional', 'Rumba', 'Yoga', 'Boxeo', 'Pilates', 'Crossfit', 'HIIT'])
+              chipGym(s, _nombre.text == s, () => setState(() => _nombre.text = s)),
+          ],
+        ),
+        TextField(
+          controller: _nombre,
+          maxLength: 40,
+          style: const TextStyle(color: TempleColors.texto),
+          onChanged: (_) => setState(() {}),
+          decoration: decoracionGym('Clase'),
+        ),
+        const Text('Día', style: kSuaveGym),
+        const SizedBox(height: 6),
+        Wrap(
+          children: <Widget>[
+            for (int d = 1; d <= 7; d++) chipGym(kDiasCortosGym[d - 1], _dia == d, () => setState(() => _dia = d)),
+          ],
+        ),
+        Row(
+          children: <Widget>[
+            Expanded(child: selectorHoraGym('Hora', _hora, (String v) => setState(() => _hora = v))),
+            const SizedBox(width: 10),
+            Expanded(
+              child: DropdownButtonFormField<int>(
+                initialValue: const <int>[30, 45, 60, 90].contains(_duracion) ? _duracion : 60,
+                dropdownColor: TempleColors.superficieAlta,
+                style: const TextStyle(color: TempleColors.texto),
+                decoration: decoracionGym('Duración'),
+                items: const <DropdownMenuItem<int>>[
+                  DropdownMenuItem<int>(value: 30, child: Text('30 min')),
+                  DropdownMenuItem<int>(value: 45, child: Text('45 min')),
+                  DropdownMenuItem<int>(value: 60, child: Text('1 hora')),
+                  DropdownMenuItem<int>(value: 90, child: Text('1 h 30')),
+                ],
+                onChanged: (int? v) => setState(() => _duracion = v ?? 60),
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 10),
+        TextField(
+          controller: _coach,
+          maxLength: 40,
+          style: const TextStyle(color: TempleColors.texto),
+          decoration: decoracionGym('Coach (opcional)'),
+        ),
+        const SizedBox(height: 6),
+        FilledButton(
+          style: _botonClanPrincipal(),
+          onPressed: _nombre.text.trim().isEmpty
+              ? null
+              : () => Navigator.of(context).pop(ClaseGym(
+                    nombre: _nombre.text.trim(),
+                    dia: _dia,
+                    hora: _hora,
+                    duracion: _duracion,
+                    coach: _coach.text.trim(),
+                  )),
+          child: const Text('Listo'),
+        ),
+      ],
+    );
+  }
+}
+
+class FotosGymScreen extends StatefulWidget {
+  const FotosGymScreen({super.key, required this.gymId});
+  final String gymId;
+
+  @override
+  State<FotosGymScreen> createState() => _FotosGymScreenState();
+}
+
+class _FotosGymScreenState extends State<FotosGymScreen> {
+  List<String>? _fotos;
+  bool _subiendo = false;
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    _cargar();
+  }
+
+  Future<void> _cargar() async {
+    try {
+      final DetalleGym d = await GymsRepo.instancia.detalle(widget.gymId);
+      if (mounted) setState(() => _fotos = List<String>.of(d.fotos));
+    } catch (e) {
+      if (mounted) setState(() => _error = SesionTemplo.mensajeDe(e));
+    }
+  }
+
+  Future<void> _guardar(List<String> nuevas) async {
+    await GymsRepo.instancia.guardarFotos(widget.gymId, nuevas);
+    if (mounted) setState(() => _fotos = nuevas);
+    unawaited(GymsRepo.instancia.cargarMio());
+  }
+
+  Future<void> _anadir() async {
+    final List<String> actuales = _fotos ?? <String>[];
+    if (actuales.length >= 10) return;
+    final XFile? f = await ImagePicker().pickImage(source: ImageSource.gallery, maxWidth: 1600, maxHeight: 1600, imageQuality: 82);
+    if (f == null) return;
+    setState(() => _subiendo = true);
+    try {
+      final String ruta = await GymsRepo.instancia.subirFoto(widget.gymId, f);
+      await _guardar(<String>[...actuales, ruta]);
+    } catch (e) {
+      if (mounted) avisoClan(context, SesionTemplo.mensajeDe(e), error: true);
+    }
+    if (mounted) setState(() => _subiendo = false);
+  }
+
+  void _opciones(int i) {
+    final List<String> l = List<String>.of(_fotos ?? <String>[]);
+    mostrarOpcionesClan(context, <OpcionHoja>[
+      if (i > 0)
+        OpcionHoja(Icons.star_outline_rounded, 'Usarla de portada', () async {
+          final String f = l.removeAt(i);
+          l.insert(0, f);
+          try {
+            await _guardar(l);
+          } catch (e) {
+            if (mounted) avisoClan(context, SesionTemplo.mensajeDe(e), error: true);
+          }
+        }),
+      OpcionHoja(Icons.delete_outline_rounded, 'Borrar la foto', () async {
+        final String f = l.removeAt(i);
+        try {
+          await _guardar(l);
+          await GymsRepo.instancia.borrarArchivo(f);
+        } catch (e) {
+          if (mounted) avisoClan(context, SesionTemplo.mensajeDe(e), error: true);
+        }
+      }, peligro: true),
+    ]);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final List<String>? l = _fotos;
+    return Scaffold(
+      backgroundColor: TempleColors.negro,
+      floatingActionButton: l != null && l.length < 10
+          ? FloatingActionButton.extended(
+              backgroundColor: TempleColors.violeta,
+              foregroundColor: Colors.white,
+              onPressed: _subiendo ? null : _anadir,
+              icon: _subiendo
+                  ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                  : const Icon(Icons.add_photo_alternate_outlined),
+              label: Text(_subiendo ? 'Subiendo…' : 'Añadir foto'),
+            )
+          : null,
+      body: FondoTemplo(
+        child: Column(
+          children: <Widget>[
+            BarraClan(titulo: 'Fotos del gym', subtitulo: l == null ? null : '${l.length} de 10 · la primera es la portada'),
+            Expanded(
+              child: l == null
+                  ? (_error != null ? errorGym(_error!, _cargar) : cargandoGym())
+                  : l.isEmpty
+                      ? const Center(
+                          child: Padding(
+                            padding: EdgeInsets.all(30),
+                            child: Text('Sube fotos de tu gym: la entrada, las máquinas, el ambiente. Son públicas en la app.',
+                                textAlign: TextAlign.center, style: kSuaveGym),
+                          ),
+                        )
+                      : GridView.builder(
+                          padding: const EdgeInsets.fromLTRB(TempleSpace.borde, 8, TempleSpace.borde, 100),
+                          gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                              crossAxisCount: 2, mainAxisSpacing: 10, crossAxisSpacing: 10, childAspectRatio: 1.2),
+                          itemCount: l.length,
+                          itemBuilder: (_, int i) => GestureDetector(
+                            onTap: () => _opciones(i),
+                            child: Stack(
+                              fit: StackFit.expand,
+                              children: <Widget>[
+                                FotoGym(ruta: l[i]),
+                                if (i == 0)
+                                  Positioned(
+                                    left: 8,
+                                    top: 8,
+                                    child: _pastillaClan('Portada', icono: Icons.star_rounded, color: TempleColors.dorado),
+                                  ),
+                              ],
+                            ),
+                          ),
+                        ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class EquipoGymScreen extends StatefulWidget {
+  const EquipoGymScreen({super.key, required this.gymId, required this.dueno});
+  final String gymId;
+  final bool dueno;
+
+  @override
+  State<EquipoGymScreen> createState() => _EquipoGymScreenState();
+}
+
+class _EquipoGymScreenState extends State<EquipoGymScreen> {
+  DetalleGym? _d;
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    _cargar();
+  }
+
+  Future<void> _cargar() async {
+    try {
+      final DetalleGym d = await GymsRepo.instancia.detalle(widget.gymId);
+      if (mounted) setState(() => _d = d);
+    } catch (e) {
+      if (mounted) setState(() => _error = SesionTemplo.mensajeDe(e));
+    }
+  }
+
+  Future<void> _dejar() async {
+    final DetalleGym? d = _d;
+    if (d == null) return;
+    final bool ok = await confirmarGym(
+      context,
+      'Dejar el equipo de ${d.r.nombre}',
+      d.soyDueno
+          ? 'Dejarás de ser dueño en la app y perderás el Pase que viene con el gym. Para volver necesitarás un código de dueño nuevo.'
+          : 'Dejarás de ser coach y perderás el Pase que viene con el gym. Seguirás como socio si lo eras.',
+      si: 'Dejar el equipo',
+      peligro: true,
+    );
+    if (!ok) return;
+    try {
+      await GymsRepo.instancia.dejarEquipo(d.id);
+      if (mounted) Navigator.of(context).popUntil((Route<dynamic> r) => r.isFirst);
+    } catch (e) {
+      if (mounted) avisoClan(context, SesionTemplo.mensajeDe(e), error: true);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final DetalleGym? d = _d;
+    final String? yo = SesionTemplo.instancia.uid;
+    return Scaffold(
+      backgroundColor: TempleColors.negro,
+      body: FondoTemplo(
+        child: Column(
+          children: <Widget>[
+            BarraClan(titulo: 'El equipo', subtitulo: d?.r.nombre),
+            Expanded(
+              child: d == null
+                  ? (_error != null ? errorGym(_error!, _cargar) : cargandoGym())
+                  : ListView(
+                      padding: const EdgeInsets.fromLTRB(TempleSpace.borde, 8, TempleSpace.borde, 30),
+                      children: <Widget>[
+                        TempleCard(
+                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+                          child: Column(
+                            children: <Widget>[
+                              for (final (ClanPersona, String) e in d.equipo)
+                                FilaPersonaGym(
+                                  persona: e.$1,
+                                  rol: e.$2,
+                                  esYo: e.$1.id == yo,
+                                  valor: '',
+                                  subtitulo: nombreRolGym(e.$2),
+                                  onTap: widget.dueno && e.$2 == 'coach' && e.$1.id != yo
+                                      ? () => mostrarOpcionesClan(context, <OpcionHoja>[
+                                            OpcionHoja(Icons.person_outline_rounded, 'Ver su perfil',
+                                                () => Navigator.of(context).push(MaterialPageRoute<void>(
+                                                    builder: (_) => PerfilClanScreen(id: e.$1.id)))),
+                                            OpcionHoja(Icons.person_remove_outlined, 'Quitar del equipo', () async {
+                                              try {
+                                                await GymsRepo.instancia.quitarDelEquipo(d.id, e.$1.id);
+                                                await _cargar();
+                                              } catch (x) {
+                                                if (mounted) avisoClan(context, SesionTemplo.mensajeDe(x), error: true);
+                                              }
+                                            }, peligro: true),
+                                          ])
+                                      : null,
+                                ),
+                            ],
+                          ),
+                        ),
+                        const SizedBox(height: 10),
+                        Text(
+                          widget.dueno
+                              ? 'Para sumar coaches, compárteles el código de coach del panel. Quedan con el Pase del Templo mientras estén en el equipo. Toca a un coach para quitarlo.'
+                              : 'Dueños y coaches tienen el Pase del Templo mientras estén en el equipo.',
+                          style: kSuaveGym,
+                        ),
+                        const SizedBox(height: 20),
+                        OutlinedButton.icon(
+                          style: _botonClanSecundario().copyWith(
+                            foregroundColor: const WidgetStatePropertyAll<Color>(TempleColors.error),
+                          ),
+                          onPressed: _dejar,
+                          icon: const Icon(Icons.logout_rounded, size: 18),
+                          label: const Text('Dejar el equipo'),
+                        ),
+                      ],
+                    ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// 57.10 MODERADORES, SOLICITUD Y TARJETA DEL DOJO
+// ---------------------------------------------------------------------------
+
+class GymsAdminScreen extends StatefulWidget {
+  const GymsAdminScreen({super.key});
+
+  @override
+  State<GymsAdminScreen> createState() => _GymsAdminScreenState();
+}
+
+class _GymsAdminScreenState extends State<GymsAdminScreen> {
+  Map<String, dynamic>? _m;
+  String? _error;
+  int _vista = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    _cargar();
+  }
+
+  Future<void> _cargar() async {
+    try {
+      final Map<String, dynamic> m = await GymsRepo.instancia.adminLista();
+      if (mounted) {
+        setState(() {
+          _m = m;
+          _error = null;
+        });
+      }
+    } catch (e) {
+      if (mounted) setState(() => _error = SesionTemplo.mensajeDe(e));
+    }
+  }
+
+  Future<void> _mostrarCodigo(String nombre, String codigo) async {
+    final String bonito = formatoCodigoGym(codigo);
+    await showDialog<void>(
+      context: context,
+      builder: (BuildContext c) => AlertDialog(
+        backgroundColor: TempleColors.grafito,
+        title: Text('Código de dueño de $nombre', style: const TextStyle(color: TempleColors.blancoLuna, fontSize: 17)),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: <Widget>[
+            SelectableText(bonito,
+                style: const TextStyle(fontSize: 26, letterSpacing: 3, fontWeight: FontWeight.w700, color: TempleColors.dorado)),
+            const SizedBox(height: 10),
+            const Text(
+                'Sirve una sola vez. Entrégaselo al dueño: en la app va a Clan → Gym → «Tengo un código». '
+                'Si se pierde, genera otro desde esta pantalla.',
+                style: kSuaveGym),
+          ],
+        ),
+        actions: <Widget>[
+          TextButton(
+            onPressed: () async {
+              await Clipboard.setData(ClipboardData(text: bonito));
+              if (c.mounted) Navigator.pop(c);
+            },
+            child: const Text('Copiar'),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: TempleColors.violeta),
+            onPressed: () {
+              Navigator.pop(c);
+              compartirTextoGym(
+                context,
+                'Tu gym $nombre ya está en Temple of Strength. Descarga la app en https://ssguerrerotenjiro-cyber.github.io, '
+                'crea tu cuenta y en Clan → Gym → «Tengo un código» escribe tu código de dueño: $bonito',
+              );
+            },
+            child: const Text('Enviar por WhatsApp'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _crear({Map<String, dynamic>? solicitud}) async {
+    final Map<String, dynamic>? r = await hojaGym<Map<String, dynamic>>(
+        context, (BuildContext c) => _HojaCrearGymAdmin(solicitud: solicitud));
+    if (r == null || !mounted) return;
+    if (solicitud != null) {
+      try {
+        await GymsRepo.instancia.adminSolicitud(textoGym(solicitud['id']), 'creada');
+      } catch (_) {}
+    }
+    await _cargar();
+    if (mounted) await _mostrarCodigo(textoGym(r['nombre']), textoGym(r['codigo_dueno']));
+  }
+
+  void _opcionesGym(Map<String, dynamic> g) {
+    final String id = textoGym(g['id']);
+    final String nombre = textoGym(g['nombre']);
+    final bool activo = g['activo'] != false;
+    final String plan = textoGym(g['plan_templo']);
+    final DateTime? hasta = fechaDeGym(g['aliado_hasta']);
+    Future<void> editar({bool? nuevoActivo, String? nuevoPlan, DateTime? nuevoHasta, bool quitarHasta = false}) async {
+      try {
+        await GymsRepo.instancia.adminEditar(id,
+            activo: nuevoActivo ?? activo, plan: nuevoPlan ?? plan, hasta: quitarHasta ? null : (nuevoHasta ?? hasta));
+        await _cargar();
+      } catch (e) {
+        if (mounted) avisoClan(context, SesionTemplo.mensajeDe(e), error: true);
+      }
+    }
+
+    final DateTime base = hasta != null && hasta.isAfter(hoyGym()) ? hasta : hoyGym();
+    mostrarOpcionesClan(context, <OpcionHoja>[
+      OpcionHoja(Icons.open_in_new_rounded, 'Ver el gym',
+          () => Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => GymScreen(id: id)))),
+      OpcionHoja(Icons.key_rounded, 'Generar un código de dueño nuevo', () async {
+        try {
+          final String c = await GymsRepo.instancia.adminCodigoDueno(id);
+          await _cargar();
+          if (mounted) await _mostrarCodigo(nombre, c);
+        } catch (e) {
+          if (mounted) avisoClan(context, SesionTemplo.mensajeDe(e), error: true);
+        }
+      }),
+      OpcionHoja(Icons.event_available_outlined, 'Pagó un mes más (hasta ${fechaGym(DateTime(base.year, base.month + 1, base.day), conAnio: true)})',
+          () => editar(nuevoHasta: DateTime(base.year, base.month + 1, base.day))),
+      OpcionHoja(Icons.event_repeat_outlined, 'Pagó 3 meses más',
+          () => editar(nuevoHasta: DateTime(base.year, base.month + 3, base.day))),
+      if (hasta != null) OpcionHoja(Icons.event_busy_outlined, 'Quitar la fecha de pago', () => editar(quitarHasta: true)),
+      OpcionHoja(Icons.auto_awesome_rounded, plan == 'fundador' ? 'Pasar a Templo aliado' : 'Marcar como Templo fundador',
+          () => editar(nuevoPlan: plan == 'fundador' ? 'aliado' : 'fundador')),
+      OpcionHoja(activo ? Icons.pause_circle_outline_rounded : Icons.play_circle_outline_rounded,
+          activo ? 'Pausar el gym (el equipo pierde el Pase)' : 'Reactivar el gym', () => editar(nuevoActivo: !activo),
+          peligro: activo),
+    ]);
+  }
+
+  Widget _tarjetaGym(Map<String, dynamic> g) {
+    final GymResumen r = GymResumen.desde(g);
+    final String? codigo = g['codigo_dueno'] as String?;
+    final List<Map<String, dynamic>> duenos = listaGym(g['duenos']);
+    final DateTime? hasta = fechaDeGym(g['aliado_hasta']);
+    final bool vencido = hasta != null && hasta.isBefore(hoyGym());
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 10),
+      child: TempleCard(
+        onTap: () => _opcionesGym(g),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: <Widget>[
+            Row(
+              children: <Widget>[
+                EmblemaGym(gym: r, size: 40),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: <Widget>[
+                      Text(r.nombre, style: kTituloGym),
+                      Text(
+                        '${r.ciudad.isEmpty ? 'Sin ciudad' : r.ciudad} · ${r.nSocios} socios · ${entGym(g['coaches'])} coaches',
+                        style: kSuaveGym,
+                      ),
+                    ],
+                  ),
+                ),
+                if (!r.activo) _pastillaClan('Pausado', color: TempleColors.error),
+              ],
+            ),
+            const SizedBox(height: 8),
+            Text(
+              duenos.isNotEmpty
+                  ? 'Dueño: ${duenos.map((Map<String, dynamic> p) => textoGym(p['usuario'])).join(', ')}'
+                  : 'Sin dueño todavía',
+              style: kTextoGym,
+            ),
+            if (codigo != null)
+              Text('Código de dueño sin usar: ${formatoCodigoGym(codigo)}',
+                  style: const TextStyle(fontSize: 12, color: TempleColors.dorado)),
+            Text(
+              hasta == null ? 'Sin fecha de pago registrada' : '${vencido ? 'Venció' : 'Al día hasta'} el ${fechaGym(hasta, conAnio: true)}',
+              style: TextStyle(fontSize: 12, color: vencido ? TempleColors.error : TempleColors.textoSuave),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _tarjetaSolicitud(Map<String, dynamic> s) {
+    final String contacto = textoGym(s['contacto']);
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 10),
+      child: TempleCard(
+        onTap: () => mostrarOpcionesClan(context, <OpcionHoja>[
+          OpcionHoja(Icons.add_business_outlined, 'Crear este gym', () => _crear(solicitud: s)),
+          if (contacto.replaceAll(RegExp(r'[^0-9]'), '').length >= 7)
+            OpcionHoja(Icons.chat_outlined, 'Escribirle por WhatsApp',
+                () => abrirEnlaceGym(context, 'https://wa.me/${whatsappDeGym(contacto)}')),
+          OpcionHoja(Icons.mark_email_read_outlined, 'Marcar como contactada', () async {
+            await GymsRepo.instancia.adminSolicitud(textoGym(s['id']), 'contactada');
+            await _cargar();
+          }),
+          OpcionHoja(Icons.close_rounded, 'Descartar', () async {
+            await GymsRepo.instancia.adminSolicitud(textoGym(s['id']), 'descartada');
+            await _cargar();
+          }, peligro: true),
+        ]),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: <Widget>[
+            Row(
+              children: <Widget>[
+                Expanded(child: Text(textoGym(s['nombre_gym']), style: kTituloGym)),
+                _pastillaClan(textoGym(s['estado']) == 'contactada' ? 'Contactada' : 'Nueva',
+                    color: textoGym(s['estado']) == 'contactada' ? TempleColors.textoSuave : TempleColors.dorado),
+              ],
+            ),
+            Text('${textoGym(s['ciudad'])} · $contacto', style: kSuaveGym),
+            if (textoGym(s['mensaje']).isNotEmpty) ...<Widget>[
+              const SizedBox(height: 6),
+              Text(textoGym(s['mensaje']), style: kTextoGym),
+            ],
+            Text('De ${textoGym(mapaGym(s['persona'])['usuario'])}', style: const TextStyle(fontSize: 11, color: TempleColors.textoTenue)),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _tarjetaResena(Map<String, dynamic> v) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 10),
+      child: TempleCard(
+        onTap: () => mostrarOpcionesClan(context, <OpcionHoja>[
+          OpcionHoja(Icons.check_rounded, 'Está bien: dejarla visible', () async {
+            await GymsRepo.instancia.adminValoracion(textoGym(v['gym_id']), textoGym(v['id']), 'restaurar');
+            await _cargar();
+          }),
+          OpcionHoja(Icons.visibility_off_outlined, 'Ocultarla', () async {
+            await GymsRepo.instancia.adminValoracion(textoGym(v['gym_id']), textoGym(v['id']), 'ocultar');
+            await _cargar();
+          }),
+          OpcionHoja(Icons.delete_outline_rounded, 'Borrarla', () async {
+            await GymsRepo.instancia.adminValoracion(textoGym(v['gym_id']), textoGym(v['id']), 'borrar');
+            await _cargar();
+          }, peligro: true),
+        ]),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: <Widget>[
+            Text('${textoGym(v['gym'])} · ${textoGym(v['usuario'])}', style: kTituloGym),
+            EstrellasGym(valor: numGym(v['estrellas']), size: 13),
+            const SizedBox(height: 4),
+            Text(textoGym(v['comentario']).isEmpty ? '(sin comentario)' : textoGym(v['comentario']), style: kTextoGym),
+          ],
+        ),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final Map<String, dynamic>? m = _m;
+    final List<Map<String, dynamic>> gyms = listaGym(m?['gyms']);
+    final List<Map<String, dynamic>> sols = listaGym(m?['solicitudes']);
+    final List<Map<String, dynamic>> rep = listaGym(m?['reportadas']);
+    return Scaffold(
+      backgroundColor: TempleColors.negro,
+      floatingActionButton: FloatingActionButton.extended(
+        backgroundColor: TempleColors.violeta,
+        foregroundColor: Colors.white,
+        onPressed: () => _crear(),
+        icon: const Icon(Icons.add_business_outlined),
+        label: const Text('Crear gym'),
+      ),
+      body: FondoTemplo(
+        child: Column(
+          children: <Widget>[
+            const BarraClan(titulo: 'Gimnasios', subtitulo: 'Templos aliados de la app', pase: false),
+            SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              padding: const EdgeInsets.symmetric(horizontal: TempleSpace.borde),
+              child: Row(
+                children: <Widget>[
+                  chipGym('Gyms (${gyms.length})', _vista == 0, () => setState(() => _vista = 0)),
+                  chipGym('Solicitudes (${sols.length})', _vista == 1, () => setState(() => _vista = 1)),
+                  chipGym('Reseñas reportadas (${rep.length})', _vista == 2, () => setState(() => _vista = 2)),
+                ],
+              ),
+            ),
+            Expanded(
+              child: RefreshIndicator(
+                onRefresh: _cargar,
+                child: ListView(
+                  physics: const AlwaysScrollableScrollPhysics(),
+                  padding: const EdgeInsets.fromLTRB(TempleSpace.borde, 4, TempleSpace.borde, 100),
+                  children: <Widget>[
+                    if (_error != null)
+                      errorGym(_error!, _cargar)
+                    else if (m == null)
+                      cargandoGym()
+                    else if (_vista == 0) ...<Widget>[
+                      if (gyms.isEmpty)
+                        const Padding(
+                          padding: EdgeInsets.only(top: 30),
+                          child: Text('Todavía no hay gyms. Crea el primero con el botón de abajo.',
+                              textAlign: TextAlign.center, style: kSuaveGym),
+                        ),
+                      for (final Map<String, dynamic> g in gyms) _tarjetaGym(g),
+                    ] else if (_vista == 1) ...<Widget>[
+                      if (sols.isEmpty)
+                        const Padding(
+                          padding: EdgeInsets.only(top: 30),
+                          child: Text('No hay solicitudes de gyms.', textAlign: TextAlign.center, style: kSuaveGym),
+                        ),
+                      for (final Map<String, dynamic> s in sols) _tarjetaSolicitud(s),
+                    ] else ...<Widget>[
+                      if (rep.isEmpty)
+                        const Padding(
+                          padding: EdgeInsets.only(top: 30),
+                          child: Text('No hay reseñas reportadas.', textAlign: TextAlign.center, style: kSuaveGym),
+                        ),
+                      for (final Map<String, dynamic> v in rep) _tarjetaResena(v),
+                    ],
+                  ],
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _HojaCrearGymAdmin extends StatefulWidget {
+  const _HojaCrearGymAdmin({this.solicitud});
+  final Map<String, dynamic>? solicitud;
+
+  @override
+  State<_HojaCrearGymAdmin> createState() => _HojaCrearGymAdminState();
+}
+
+class _HojaCrearGymAdminState extends State<_HojaCrearGymAdmin> {
+  late final TextEditingController _nombre = TextEditingController(text: textoGym(widget.solicitud?['nombre_gym']));
+  late final TextEditingController _ciudad = TextEditingController(text: textoGym(widget.solicitud?['ciudad']));
+  String _plan = 'aliado';
+  int _meses = 3;
+  bool _enviando = false;
+
+  @override
+  void dispose() {
+    _nombre.dispose();
+    _ciudad.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final DateTime h = hoyGym();
+    final DateTime? hasta = _meses == 0 ? null : DateTime(h.year, h.month + _meses, h.day);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: <Widget>[
+        asaHojaGym('Crear un gym', 'Se genera un código de dueño que sirve una sola vez.'),
+        TextField(
+          controller: _nombre,
+          maxLength: 60,
+          style: const TextStyle(color: TempleColors.texto),
+          onChanged: (_) => setState(() {}),
+          decoration: decoracionGym('Nombre del gym', 'Templo Fitness Chapinero'),
+        ),
+        const SizedBox(height: 6),
+        TextField(
+          controller: _ciudad,
+          maxLength: 60,
+          style: const TextStyle(color: TempleColors.texto),
+          decoration: decoracionGym('Ciudad', 'Bogotá'),
+        ),
+        const SizedBox(height: 6),
+        const Text('Tipo', style: kSuaveGym),
+        const SizedBox(height: 6),
+        Wrap(
+          children: <Widget>[
+            chipGym('Templo aliado', _plan == 'aliado', () => setState(() => _plan = 'aliado')),
+            chipGym('Templo fundador', _plan == 'fundador', () => setState(() => _plan = 'fundador'), icono: Icons.auto_awesome_rounded),
+          ],
+        ),
+        const Text('Pagado (o promoción) por', style: kSuaveGym),
+        const SizedBox(height: 6),
+        Wrap(
+          children: <Widget>[
+            for (final (int, String) m in const <(int, String)>[(1, '1 mes'), (3, '3 meses'), (6, '6 meses'), (12, '1 año'), (0, 'Sin fecha')])
+              chipGym(m.$2, _meses == m.$1, () => setState(() => _meses = m.$1)),
+          ],
+        ),
+        Text(hasta == null ? 'Sin fecha de vencimiento.' : 'Al día hasta el ${fechaGym(hasta, conAnio: true)}.', style: kSuaveGym),
+        const SizedBox(height: 14),
+        FilledButton(
+          style: _botonClanPrincipal(),
+          onPressed: _nombre.text.trim().length < 3 || _enviando
+              ? null
+              : () async {
+                  setState(() => _enviando = true);
+                  try {
+                    final Map<String, dynamic> r =
+                        await GymsRepo.instancia.adminCrear(_nombre.text, _ciudad.text, _plan, hasta);
+                    if (context.mounted) Navigator.of(context).pop(r);
+                  } catch (e) {
+                    if (context.mounted) avisoClan(context, SesionTemplo.mensajeDe(e), error: true);
+                    if (mounted) setState(() => _enviando = false);
+                  }
+                },
+          child: const Text('Crear y ver el código de dueño'),
+        ),
+      ],
+    );
+  }
+}
+
+class SolicitudGymScreen extends StatefulWidget {
+  const SolicitudGymScreen({super.key});
+
+  @override
+  State<SolicitudGymScreen> createState() => _SolicitudGymScreenState();
+}
+
+class _SolicitudGymScreenState extends State<SolicitudGymScreen> {
+  final TextEditingController _nombre = TextEditingController();
+  final TextEditingController _ciudad = TextEditingController();
+  final TextEditingController _contacto = TextEditingController();
+  final TextEditingController _mensaje = TextEditingController();
+  bool _enviando = false;
+  bool _enviada = false;
+
+  @override
+  void dispose() {
+    _nombre.dispose();
+    _ciudad.dispose();
+    _contacto.dispose();
+    _mensaje.dispose();
+    super.dispose();
+  }
+
+  bool get _valida => _nombre.text.trim().length >= 3 && _contacto.text.trim().length >= 5;
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: TempleColors.negro,
+      body: FondoTemplo(
+        child: Column(
+          children: <Widget>[
+            const BarraClan(titulo: 'Tu gym en el templo', subtitulo: 'Templos aliados'),
+            Expanded(
+              child: ListView(
+                padding: EdgeInsets.fromLTRB(TempleSpace.borde, 8, TempleSpace.borde, 30 + MediaQuery.viewInsetsOf(context).bottom),
+                children: <Widget>[
+                  const TempleCard(
+                    destacada: true,
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: <Widget>[
+                        Text('Lo que recibe tu gym', style: kTituloGym),
+                        SizedBox(height: 8),
+                        Text(
+                          '• Perfil con fotos, planes, horario, máquinas, clases y ubicación.\n'
+                          '• Ranking propio: asistencia, XP, Ranked por músculo y récords validados por tus coaches.\n'
+                          '• Registro de entradas: cuántas personas hay ahora y tus horas pico.\n'
+                          '• Control de mensualidades: quién está al día, quién vence pronto, y avisos al socio.\n'
+                          '• Avisos y retos para tu comunidad, y reseñas con estrellas.\n'
+                          '• El Pase del Templo para ti y para tus coaches.',
+                          style: kTextoGym,
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                  if (_enviada)
+                    const TempleCard(
+                      child: Row(
+                        children: <Widget>[
+                          Icon(Icons.check_circle_outline_rounded, color: TempleColors.exito),
+                          SizedBox(width: 12),
+                          Expanded(
+                            child: Text(
+                              '¡Recibido! Te escribiremos pronto. También puedes escribirnos a temple-of-strength@outlook.com.',
+                              style: kTextoGym,
+                            ),
+                          ),
+                        ],
+                      ),
+                    )
+                  else ...<Widget>[
+                    TextField(
+                      controller: _nombre,
+                      maxLength: 60,
+                      style: const TextStyle(color: TempleColors.texto),
+                      onChanged: (_) => setState(() {}),
+                      decoration: decoracionGym('Nombre del gym'),
+                    ),
+                    const SizedBox(height: 6),
+                    TextField(
+                      controller: _ciudad,
+                      maxLength: 60,
+                      style: const TextStyle(color: TempleColors.texto),
+                      decoration: decoracionGym('Ciudad y barrio'),
+                    ),
+                    const SizedBox(height: 6),
+                    TextField(
+                      controller: _contacto,
+                      maxLength: 80,
+                      style: const TextStyle(color: TempleColors.texto),
+                      onChanged: (_) => setState(() {}),
+                      decoration: decoracionGym('WhatsApp o correo para contactarte'),
+                    ),
+                    const SizedBox(height: 6),
+                    TextField(
+                      controller: _mensaje,
+                      maxLength: 400,
+                      maxLines: 4,
+                      style: const TextStyle(color: TempleColors.texto),
+                      decoration: decoracionGym('Mensaje (opcional)', 'Cuántos socios tienen, qué buscan…'),
+                    ),
+                    const SizedBox(height: 10),
+                    FilledButton(
+                      style: _botonClanPrincipal(),
+                      onPressed: !_valida || _enviando
+                          ? null
+                          : () async {
+                              setState(() => _enviando = true);
+                              try {
+                                await GymsRepo.instancia.solicitar(_nombre.text, _ciudad.text, _contacto.text, _mensaje.text);
+                                if (mounted) setState(() => _enviada = true);
+                              } catch (e) {
+                                if (context.mounted) avisoClan(context, SesionTemplo.mensajeDe(e), error: true);
+                              }
+                              if (mounted) setState(() => _enviando = false);
+                            },
+                      child: const Text('Quiero mi gym en la app'),
+                    ),
+                    const SizedBox(height: 8),
+                    const Text('Solo usamos estos datos para contactarte sobre tu gym.',
+                        style: TextStyle(fontSize: 11, color: TempleColors.textoTenue)),
+                  ],
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// En el Dojo: tu gym, cuántos hay ahora y el botón de llegada.
+class TarjetaGymDojo extends StatefulWidget {
+  const TarjetaGymDojo({super.key});
+
+  @override
+  State<TarjetaGymDojo> createState() => _TarjetaGymDojoState();
+}
+
+class _TarjetaGymDojoState extends State<TarjetaGymDojo> {
+  bool _marcando = false;
+
+  @override
+  void initState() {
+    super.initState();
+    if (!GymsRepo.instancia.cargado && SesionTemplo.instancia.uid != null) GymsRepo.instancia.cargarMio();
+  }
+
+  Future<void> _marcar(MiGymInfo g) async {
+    setState(() => _marcando = true);
+    try {
+      final (bool dentro, int ahora) = await GymsRepo.instancia.ingreso(g.gym.id);
+      HapticFeedback.mediumImpact();
+      if (mounted) {
+        avisoClan(context, dentro ? 'Llegaste a ${g.gym.nombre}. Hay $ahora entrenando.' : 'Salida registrada. Buen entrenamiento.');
+      }
+    } catch (e) {
+      if (mounted) avisoClan(context, SesionTemplo.mensajeDe(e), error: true);
+    }
+    if (mounted) setState(() => _marcando = false);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return ListenableBuilder(
+      listenable: GymsRepo.instancia,
+      builder: (BuildContext context, _) {
+        final MiGymInfo? g = GymsRepo.instancia.socio;
+        if (g == null || !g.activo) return const SizedBox.shrink();
+        final DateTime? h = g.pagoHasta;
+        final int? dias = h == null ? null : diasHastaGym(h);
+        final String? alerta = dias == null
+            ? null
+            : (dias < 0 ? 'Tu mensualidad venció' : (dias <= 3 ? 'Tu mensualidad vence ${dias == 0 ? 'hoy' : 'en $dias días'}' : null));
+        return Padding(
+          padding: const EdgeInsets.only(bottom: TempleSpace.l),
+          child: TempleCard(
+            onTap: () => Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => GymScreen(id: g.gym.id))),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: <Widget>[
+                Row(
+                  children: <Widget>[
+                    EmblemaGym(gym: g.gym, size: 42),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: <Widget>[
+                          Text(g.gym.nombre, maxLines: 1, overflow: TextOverflow.ellipsis, style: kTituloGym),
+                          Row(
+                            children: <Widget>[
+                              Icon(Icons.circle, size: 8, color: g.gym.ahora > 0 ? TempleColors.exito : TempleColors.textoTenue),
+                              const SizedBox(width: 6),
+                              Text(
+                                g.dentro
+                                    ? 'Estás en el gym · ${g.gym.ahora} entrenando'
+                                    : '${g.gym.ahora} ${g.gym.ahora == 1 ? 'persona entrenando' : 'personas entrenando'} ahora',
+                                style: kSuaveGym,
+                              ),
+                            ],
+                          ),
+                        ],
+                      ),
+                    ),
+                    FilledButton(
+                      style: _botonClanPrincipal().copyWith(
+                        backgroundColor:
+                            WidgetStatePropertyAll<Color>(g.dentro ? TempleColors.superficieAlta : TempleColors.violeta),
+                        padding: const WidgetStatePropertyAll<EdgeInsetsGeometry>(EdgeInsets.symmetric(horizontal: 14, vertical: 9)),
+                      ),
+                      onPressed: _marcando ? null : () => _marcar(g),
+                      child: Text(g.dentro ? 'Ya salí' : 'Llegué'),
+                    ),
+                  ],
+                ),
+                if (alerta != null) ...<Widget>[
+                  const SizedBox(height: 10),
+                  Row(
+                    children: <Widget>[
+                      Icon(Icons.receipt_long_outlined, size: 16, color: dias! < 0 ? TempleColors.error : TempleColors.alertaSuave),
+                      const SizedBox(width: 6),
+                      Expanded(child: Text('$alerta. Renuévala en la recepción.', style: kSuaveGym)),
+                    ],
+                  ),
+                ],
+              ],
+            ),
+          ),
+        );
+      },
     );
   }
 }
