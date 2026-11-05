@@ -5398,7 +5398,7 @@ const List<_ApartadoTerminos> _terminosTemplo = <_ApartadoTerminos>[
         'Con el Pase no necesitas anuncios para Tenshi, el informe semanal ni las fotos de progreso; los demás '
         'anuncios con recompensa siguen siendo opcionales.',
     'Incluye, entre otras cosas: Tenshi con la mente completa sin límite diario (con uso justo), más memoria, el '
-        'informe semanal, fotos de progreso sin límite, historial completo, videos más largos en el Clan, marcos y '
+        'informe semanal, fotos de progreso sin límite, historial completo, subir videos al Clan (hasta 60 s), marcos y '
         'estilos de nombre exclusivos, los 5 enlaces a redes, piezas de temporada y una ofrenda de mon cada mes. La '
         'pantalla del Pase muestra siempre la lista vigente.',
     'Los precios se muestran en la app y en la tienda antes de pagar, con los impuestos que correspondan. El cobro lo '
@@ -35850,11 +35850,21 @@ class MediosClan {
     }
     final String ext = _extension(archivo, video: video);
     final String ruta = '$yo/$publicacionId/$indice.$ext';
-    await supa.storage.from(bucket).uploadBinary(
-          ruta,
-          bytes,
-          fileOptions: FileOptions(contentType: _tipoMime(ext), upsert: false),
-        );
+    try {
+      await supa.storage.from(bucket).uploadBinary(
+            ruta,
+            bytes,
+            fileOptions: FileOptions(contentType: _tipoMime(ext), upsert: false),
+          );
+    } on StorageException catch (e) {
+      // El servidor solo acepta videos de cuentas con el Pase activo.
+      final String m = e.message.toLowerCase();
+      if (video && (e.statusCode == '403' || m.contains('row-level security') || m.contains('unauthorized'))) {
+        throw const AuthFailure('Subir videos al Clan es una ventaja del Pase del Templo. '
+            'Si ya lo tienes, cierra y vuelve a abrir la app.');
+      }
+      rethrow;
+    }
     return ClanMedio(ruta: ruta, tipo: video ? 'video' : 'foto');
   }
 }
@@ -37516,32 +37526,36 @@ class _PublicarScreenState extends State<PublicarScreen> {
     }
   }
 
+  /// Subir videos es una ventaja del Pase: el servidor también lo exige.
+  Future<void> _muroVideos() => mostrarMuroPase(
+        context,
+        titulo: 'Videos con el Pase',
+        texto: 'Subir videos al Clan es una ventaja del Pase del Templo: hasta '
+            '${LimitesPase.videoPase} segundos, una serie completa de principio a fin. '
+            'Las fotos siguen siendo gratis para todos.',
+        icono: Icons.videocam_outlined,
+      );
+
   Future<void> _video({required bool grabar}) async {
+    if (!LimitesPase.pase) {
+      await _muroVideos();
+      return;
+    }
     if (_archivos.isNotEmpty) {
       avisoClan(context, 'Un video va solo en su publicación. Quita las fotos primero.');
       return;
     }
     try {
-      final int limite = LimitesPase.pase ? LimitesPase.videoPase : LimitesPase.videoGratis;
+      const int limite = LimitesPase.videoPase;
       final XFile? f = await _picker.pickVideo(
         source: grabar ? ImageSource.camera : ImageSource.gallery,
-        maxDuration: Duration(seconds: limite),
+        maxDuration: const Duration(seconds: limite),
       );
       if (f == null) return;
       final Duration? dura = await duracionVideo(f);
       if (dura != null && dura.inMilliseconds > (limite + 1) * 1000) {
         if (!mounted) return;
-        if (LimitesPase.pase) {
-          avisoClan(context, 'El video dura más de $limite s. Recórtalo y vuelve a intentarlo.', error: true);
-        } else {
-          await mostrarMuroPase(
-            context,
-            titulo: 'Videos de hasta ${LimitesPase.videoPase} s',
-            texto: 'Gratis subes videos de hasta ${LimitesPase.videoGratis} segundos. Con el Pase, hasta '
-                '${LimitesPase.videoPase}: una serie completa de principio a fin.',
-            icono: Icons.videocam_outlined,
-          );
-        }
+        avisoClan(context, 'El video dura más de $limite s. Recórtalo y vuelve a intentarlo.', error: true);
         return;
       }
       final int peso = await f.length();
@@ -37567,11 +37581,13 @@ class _PublicarScreenState extends State<PublicarScreen> {
   }
 
   void _elegirVideo() {
+    if (!LimitesPase.pase) {
+      _muroVideos();
+      return;
+    }
     mostrarOpcionesClan(context, <OpcionHoja>[
       OpcionHoja(Icons.video_library_outlined, 'Elegir de la galería', () => _video(grabar: false)),
-      OpcionHoja(
-          Icons.videocam_outlined,
-          'Grabar ahora (máximo ${LimitesPase.pase ? LimitesPase.videoPase : LimitesPase.videoGratis} s)',
+      OpcionHoja(Icons.videocam_outlined, 'Grabar ahora (máximo ${LimitesPase.videoPase} s)',
           () => _video(grabar: true)),
     ]);
   }
@@ -37856,6 +37872,7 @@ class _PublicarScreenState extends State<PublicarScreen> {
                       _BotonMedio(
                         icono: Icons.videocam_outlined,
                         texto: 'Video',
+                        candado: !LimitesPase.pase,
                         onTap: _publicando ? null : _elegirVideo,
                       ),
                     ],
@@ -37871,10 +37888,13 @@ class _PublicarScreenState extends State<PublicarScreen> {
 }
 
 class _BotonMedio extends StatelessWidget {
-  const _BotonMedio({required this.icono, required this.texto, required this.onTap});
+  const _BotonMedio({required this.icono, required this.texto, required this.onTap, this.candado = false});
   final IconData icono;
   final String texto;
   final VoidCallback? onTap;
+
+  /// Ventaja del Pase: se ve el candado dorado y al tocar se abre el Pase.
+  final bool candado;
 
   @override
   Widget build(BuildContext context) {
@@ -37891,7 +37911,16 @@ class _BotonMedio extends StatelessWidget {
                   size: 22,
                   color: onTap == null ? TempleColors.textoTenue : TempleColors.violetaClaro),
               const SizedBox(height: 4),
-              Text(texto, style: const TextStyle(fontSize: 11.5, color: TempleColors.textoSuave)),
+              Row(
+                mainAxisSize: MainAxisSize.min,
+                children: <Widget>[
+                  Text(texto, style: const TextStyle(fontSize: 11.5, color: TempleColors.textoSuave)),
+                  if (candado) ...<Widget>[
+                    const SizedBox(width: 4),
+                    const Icon(Icons.lock_outline_rounded, size: 11, color: Color(0xFFE8B65A)),
+                  ],
+                ],
+              ),
             ],
           ),
         ),
@@ -52933,7 +52962,7 @@ class LimitesPase {
   static const int recuerdosPase = 40;
   static const int fotosMes = 4;
   static const int diasHistorial = 90;
-  static const int videoGratis = 15;
+  /// Subir videos al Clan es solo con el Pase (1.4.1): ocupan mucho espacio.
   static const int videoPase = 60;
   static const int monOfrenda = 300;
   static const int diasEntreCiclos = 30;
@@ -53807,7 +53836,7 @@ const List<_ModuloComparado> comparacionPase = <_ModuloComparado>[
   ]),
   _ModuloComparado('Clan', Icons.groups_outlined, <_FilaComparada>[
     _FilaComparada('Publicar, comentar y reaccionar', 'Sin límite', 'Sin límite'),
-    _FilaComparada('Videos', 'Hasta 15 s', 'Hasta 60 s'),
+    _FilaComparada('Subir videos', '—', 'Hasta 60 s'),
     _FilaComparada('Marcos de perfil', 'De nivel, tienda y logro', '+ 2 marcos exclusivos'),
     _FilaComparada('Insignia 金', '—', 'Junto a tu nombre'),
     _FilaComparada('Nombre con color', '—', '4 estilos'),
