@@ -21,7 +21,9 @@ dependencies:
   url_launcher: any
   google_mobile_ads: any
   audioplayers: any
-  flutter_local_notifications: any
+  # La 23.0.0 (6 nov 2026) exige compilar contra Android 37, que el Gradle
+  # actual aún no admite. Se queda en la 22 o anterior hasta actualizar Gradle.
+  flutter_local_notifications: '<23.0.0'
   timezone: any
   crypto: any
 
