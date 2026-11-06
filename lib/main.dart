@@ -73548,10 +73548,9 @@ class MarcoWeb extends StatelessWidget {
   /// Por debajo de este ancho (celulares y tabletas en vertical), pantalla completa.
   static const double _anchoMinimo = 700;
 
-  /// Desde este ancho aparece el panel lateral con el QR.
-  static const double _anchoPanel = 1000;
-  static const double _panel = 360;
-  static const double _separacion = 48;
+  /// Desde este ancho aparece el panel lateral con el QR (más angosto
+  /// hasta 1200 px).
+  static const double _anchoPanel = 860;
   static const double _margen = 16;
 
   @override
@@ -73562,8 +73561,11 @@ class MarcoWeb extends StatelessWidget {
     if (s.width < _anchoMinimo || s.height < 520) return child;
 
     final bool panel = s.width >= _anchoPanel;
+    final bool amplio = s.width >= 1200;
+    final double anchoPanel = amplio ? 360 : 300;
+    final double separacion = amplio ? 48 : 28;
     final double altoPx = s.height - 2 * _margen;
-    final double libre = s.width - 2 * _margen - (panel ? _panel + _separacion : 0);
+    final double libre = s.width - 2 * _margen - (panel ? anchoPanel + separacion : 0);
     // En pantallas altas todo se ve más grande, sin pasarse del ancho libre.
     final double escala = math.max(1.0, math.min((altoPx / 800).clamp(1.0, 1.3).toDouble(), libre / 420));
     final double anchoLogico = (libre / escala).clamp(400.0, 600.0).toDouble();
@@ -73611,13 +73613,13 @@ class MarcoWeb extends StatelessWidget {
               children: <Widget>[
                 if (panel) ...<Widget>[
                   SizedBox(
-                    width: _panel,
+                    width: anchoPanel,
                     height: altoPx,
                     child: const Center(
                       child: FittedBox(fit: BoxFit.scaleDown, child: _PanelBienvenidaWeb()),
                     ),
                   ),
-                  const SizedBox(width: _separacion),
+                  SizedBox(width: separacion),
                 ],
                 app,
               ],
@@ -73746,7 +73748,7 @@ class _QrCompactoWeb extends StatelessWidget {
   }
 }
 
-/// Luna creciente y montañas al fondo del marco web.
+/// Halo y montañas al fondo de la versión de computador.
 class _PaisajeWebPainter extends CustomPainter {
   const _PaisajeWebPainter();
 
@@ -73766,16 +73768,6 @@ class _PaisajeWebPainter extends CustomPainter {
           Colors.transparent,
         ]).createShader(Rect.fromCircle(center: centro, radius: w * 0.45)),
     );
-
-    // Luna creciente arriba a la izquierda.
-    final double r = math.min(w, h) * 0.13;
-    final Offset c = Offset(w * 0.12, h * 0.18);
-    final Path luna = Path.combine(
-      PathOperation.difference,
-      Path()..addOval(Rect.fromCircle(center: c, radius: r)),
-      Path()..addOval(Rect.fromCircle(center: c + Offset(r * 0.3, -r * 0.1), radius: r * 0.9)),
-    );
-    canvas.drawPath(luna, Paint()..color = TempleColors.moradoProfundo.withValues(alpha: 0.85));
 
     // Montañas.
     final Path lejos = Path()..moveTo(0, h);
