@@ -54,6 +54,16 @@ jobs:
             "$VERSION" "${{ github.run_number }}" "${{ github.sha }}" "$(date -u +%FT%TZ)" "$WASM" > build/web/version.json
           du -sh build/web
 
+      - name: Compilar vista de prueba
+        # Solo fuera de main: abre los módulos sin cuenta para revisar los temas
+        # con capturas (60.5). Nunca se publica.
+        if: github.ref != 'refs/heads/main'
+        run: |
+          mv build/web build/web_publicable
+          flutter build web --release --dart-define=VISTA_PRUEBA=true --base-href /prueba/ --no-web-resources-cdn
+          mv build/web build/prueba
+          mv build/web_publicable build/web
+
       - name: Probar en navegadores
         id: probar
         timeout-minutes: 20
@@ -76,6 +86,7 @@ jobs:
           mkdir -p rama
           cp -r build/web rama/app
           cp -r salida rama/pruebas 2>/dev/null || true
+          cp -r build/prueba rama/prueba 2>/dev/null || true
           echo '${{ steps.probar.outcome }}' > rama/pruebas/estado.txt 2>/dev/null || true
           cd rama
           git init -q -b web-build

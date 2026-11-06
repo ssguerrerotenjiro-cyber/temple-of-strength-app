@@ -93,6 +93,12 @@ import 'package:crypto/crypto.dart' show sha256;
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  await TemaTemplo.instancia.cargar();
+  if (vistaPrueba) {
+    final String? tema = parametroPrueba('tema');
+    if (tema != null) TemaTemplo.instancia.probar(tema);
+    if (parametroPrueba('pantalla') == 'apariencia') TemaTemplo.instancia.reabrirAlMontar();
+  }
   await Supabase.initialize(
     url: ConfigSupabase.url,
     anonKey: ConfigSupabase.anonKey,
@@ -104,33 +110,37 @@ Future<void> main() async {
 // 1. TOKENS
 // ===========================================================================
 
+/// Colores del tema activo (60). Son ColorTema: constantes para el
+/// compilador, pero se leen de la paleta elegida al pintar. Para colores que
+/// no deben cambiar con el tema, usar ColoresTradicion.
 class TempleColors {
   const TempleColors._();
 
-  static const Color negro = Color(0xFF06050A);
-  static const Color grafito = Color(0xFF100E18);
-  static const Color superficie = Color(0xFF15121F);
-  static const Color superficieAlta = Color(0xFF1D1829);
-  static const Color borde = Color(0xFF29223A);
-  static const Color bordeVivo = Color(0xFF3D3157);
+  static const Color negro = ColorTema(0);
+  static const Color grafito = ColorTema(1);
+  static const Color superficie = ColorTema(2);
+  static const Color superficieAlta = ColorTema(3);
+  static const Color borde = ColorTema(4);
+  static const Color bordeVivo = ColorTema(5);
 
-  static const Color moradoProfundo = Color(0xFF2B1B52);
-  static const Color violeta = Color(0xFF8B5CF6);
-  static const Color violetaClaro = Color(0xFFB79CFF);
-  static const Color dorado = Color(0xFFD9A441);
+  static const Color moradoProfundo = ColorTema(6);
+  static const Color violeta = ColorTema(7);
+  static const Color violetaClaro = ColorTema(8);
+  static const Color dorado = ColorTema(9);
 
-  static const Color blancoLuna = Color(0xFFF4F1FA);
-  static const Color texto = Color(0xFFE7E3F2);
-  static const Color textoSuave = Color(0xFF9A93B0);
-  static const Color textoTenue = Color(0xFF645D7A);
+  static const Color blancoLuna = ColorTema(10);
+  static const Color texto = ColorTema(11);
+  static const Color textoSuave = ColorTema(12);
+  static const Color textoTenue = ColorTema(13);
 
-  static const Color exito = Color(0xFF5BD6A0); static const Color alertaSuave = Color(0xFFE2A03F);
-  static const Color error = Color(0xFFE05C6E);
+  static const Color exito = ColorTema(14);
+  static const Color alertaSuave = ColorTema(15);
+  static const Color error = ColorTema(16);
 
   static const LinearGradient fondo = LinearGradient(
     begin: Alignment.topCenter,
     end: Alignment.bottomCenter,
-    colors: <Color>[Color(0xFF120D22), Color(0xFF09070F), Color(0xFF06050A)],
+    colors: <Color>[ColorTema(17), ColorTema(18), ColorTema(19)],
     stops: <double>[0, 0.55, 1],
   );
 }
@@ -168,29 +178,19 @@ class TempleApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return MaterialApp(
-      title: 'Temple of Strength',
-      debugShowCheckedModeBanner: false,
-      theme: ThemeData(
-        useMaterial3: true,
-        brightness: Brightness.dark,
-        scaffoldBackgroundColor: TempleColors.negro,
-        colorScheme: const ColorScheme.dark(
-          primary: TempleColors.violeta,
-          secondary: TempleColors.violetaClaro,
-          surface: TempleColors.superficie,
-          error: TempleColors.error,
-        ),
-        textSelectionTheme: const TextSelectionThemeData(
-          cursorColor: TempleColors.violetaClaro,
-          selectionColor: Color(0x448B5CF6),
-          selectionHandleColor: TempleColors.violeta,
-        ),
+    // Al cambiar de tema la app se vuelve a montar con otra llave (60).
+    return ListenableBuilder(
+      listenable: TemaTemplo.instancia,
+      builder: (BuildContext context, _) => MaterialApp(
+        key: ValueKey<int>(TemaTemplo.instancia.version),
+        title: 'Temple of Strength',
+        debugShowCheckedModeBanner: false,
+        theme: TemaTemplo.instancia.temaMaterial(),
+        scrollBehavior: const DesplazamientoTemplo(),
+        // En la web, en pantallas anchas, la app va en una ventana grande (58.4).
+        builder: (BuildContext context, Widget? child) => MarcoWeb(child: child ?? const SizedBox.shrink()),
+        home: const PuertaTemplo(),
       ),
-      scrollBehavior: const DesplazamientoTemplo(),
-      // En la web, en pantallas anchas, la app va dentro de un teléfono (58.4).
-      builder: (BuildContext context, Widget? child) => MarcoWeb(child: child ?? const SizedBox.shrink()),
-      home: const PuertaTemplo(),
     );
   }
 }
@@ -1000,27 +1000,24 @@ class _PaisajePainter extends CustomPainter {
     final double w = size.width;
     final double h = size.height;
     final double horizonte = h * 0.76;
+    // Colores del paisaje según el tema (60): de día en Claro.
+    final PaisajePaleta pp = TemaTemplo.paleta.paisaje;
 
     // Cielo.
     canvas.drawRect(
       Offset.zero & size,
       Paint()
-        ..shader = const LinearGradient(
+        ..shader = LinearGradient(
           begin: Alignment.topCenter,
           end: Alignment.bottomCenter,
-          colors: <Color>[
-            Color(0xFF1B0F35),
-            Color(0xFF150C28),
-            Color(0xFF0A0616),
-            Color(0xFF06050A),
-          ],
-          stops: <double>[0, 0.38, 0.72, 1],
+          colors: pp.cielo,
+          stops: const <double>[0, 0.38, 0.72, 1],
         ).createShader(Offset.zero & size),
     );
 
     // Estrellas.
     final math.Random rnd = math.Random(7);
-    for (int i = 0; i < 34; i++) {
+    for (int i = 0; i < (pp.estrellas ? 34 : 0); i++) {
       final double x = rnd.nextDouble() * w;
       final double y = rnd.nextDouble() * h * 0.55;
       final double parpadeo =
@@ -1049,7 +1046,7 @@ class _PaisajePainter extends CustomPainter {
     canvas.drawCircle(
       luna,
       rl,
-      Paint()..color = const Color(0xFFE8DCFF).withValues(alpha: 0.9),
+      Paint()..color = pp.luna.withValues(alpha: 0.9),
     );
 
     // Fuji.
@@ -1058,7 +1055,7 @@ class _PaisajePainter extends CustomPainter {
       ..cubicTo(w * 0.10, h * 0.60, w * 0.24, h * 0.30, w * 0.40, h * 0.28)
       ..cubicTo(w * 0.56, h * 0.30, w * 0.70, h * 0.60, w * 0.86, horizonte)
       ..close();
-    canvas.drawPath(fuji, Paint()..color = const Color(0xFF1E1236));
+    canvas.drawPath(fuji, Paint()..color = pp.fuji);
     // Nieve.
     canvas.drawPath(
       Path()
@@ -1068,7 +1065,7 @@ class _PaisajePainter extends CustomPainter {
         ..cubicTo(w * 0.44, h * 0.345, w * 0.42, h * 0.385, w * 0.40, h * 0.355)
         ..cubicTo(w * 0.38, h * 0.385, w * 0.36, h * 0.345, w * 0.325, h * 0.365)
         ..close(),
-      Paint()..color = const Color(0xFF3A2A5E).withValues(alpha: 0.85),
+      Paint()..color = pp.nieve.withValues(alpha: 0.85),
     );
 
     // Colinas traseras.
@@ -1077,7 +1074,7 @@ class _PaisajePainter extends CustomPainter {
         ..moveTo(w * 0.55, horizonte)
         ..cubicTo(w * 0.68, h * 0.60, w * 0.82, h * 0.54, w * 1.05, horizonte)
         ..close(),
-      Paint()..color = const Color(0xFF17102B),
+      Paint()..color = pp.colinas,
     );
 
     // Bambú a la izquierda.
@@ -1085,7 +1082,7 @@ class _PaisajePainter extends CustomPainter {
       final double x = w * (0.03 + i * 0.045);
       final double alto = h * (0.52 + (i % 2) * 0.10);
       final Paint canya = Paint()
-        ..color = const Color(0xFF120B22)
+        ..color = pp.bambu
         ..style = PaintingStyle.stroke
         ..strokeWidth = w * 0.011
         ..strokeCap = StrokeCap.round;
@@ -1111,8 +1108,8 @@ class _PaisajePainter extends CustomPainter {
           begin: Alignment.topCenter,
           end: Alignment.bottomCenter,
           colors: <Color>[
-            const Color(0xFF170E2C).withValues(alpha: 0.96),
-            const Color(0xFF06040C),
+            pp.aguaArriba.withValues(alpha: 0.96),
+            pp.aguaAbajo,
           ],
         ).createShader(Rect.fromLTRB(0, horizonte, w, h)),
     );
@@ -1166,7 +1163,7 @@ class _PaisajePainter extends CustomPainter {
   }
 
   void _casaTradicional(Canvas canvas, Offset base, double ancho) {
-    final Paint tinta = Paint()..color = const Color(0xFF0E0820);
+    final Paint tinta = Paint()..color = TemaTemplo.paleta.paisaje.tinta;
     final double alto = ancho * 0.52;
 
     // Cuerpo.
@@ -1203,7 +1200,7 @@ class _PaisajePainter extends CustomPainter {
 
   void _torii(Canvas canvas, Offset base, double alto) {
     final double ancho = alto * 0.80;
-    final Color c = const Color(0xFF080413);
+    final Color c = TemaTemplo.paleta.paisaje.frente;
     final double izq = base.dx - ancho / 2;
     final double der = base.dx + ancho / 2;
     final double top = base.dy - alto;
@@ -1692,7 +1689,7 @@ class _LoginScreenState extends State<LoginScreen>
     final bool tecladoAbierto = alturaTeclado > 0;
 
     return AnnotatedRegion<SystemUiOverlayStyle>(
-      value: SystemUiOverlayStyle.light,
+      value: TemaTemplo.estiloBarras,
       child: Scaffold(
         backgroundColor: TempleColors.negro,
         resizeToAvoidBottomInset: false,
@@ -2045,11 +2042,16 @@ class MainShell extends StatefulWidget {
 }
 
 class _MainShellState extends State<MainShell> {
-  late int _indice = widget.indiceInicial;
+  late int _indice = TemaTemplo.instancia.tomarModulo() ?? widget.indiceInicial;
 
   @override
   void initState() {
     super.initState();
+    if (TemaTemplo.instancia.tomarReapertura()) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) abrirApariencia(context, modulo: _indice);
+      });
+    }
     PaseTemplo.instancia.cargar();
     SonidosTemplo.instancia.cargar();
     Moderacion.instancia.comprobar();
@@ -2574,7 +2576,7 @@ class _EscenaPainter extends CustomPainter {
       Paint()
         ..shader = RadialGradient(
           colors: <Color>[
-            TempleColors.violetaClaro.withValues(alpha: 0.30),
+            ColoresTradicion.violetaClaro.withValues(alpha: 0.30),
             Colors.transparent,
           ],
         ).createShader(Rect.fromCircle(center: luna, radius: rl * 3.4)),
@@ -2623,7 +2625,7 @@ class _EscenaPainter extends CustomPainter {
         Offset(luna.dx - 16 + d, y),
         Offset(luna.dx + 16 + d, y),
         Paint()
-          ..color = TempleColors.violetaClaro
+          ..color = ColoresTradicion.violetaClaro
               .withValues(alpha: 0.16 - i * 0.03)
           ..strokeWidth = 1.4
           ..strokeCap = StrokeCap.round,
@@ -2642,7 +2644,7 @@ class _EscenaPainter extends CustomPainter {
           const Radius.circular(6),
         ),
         Paint()
-          ..color = TempleColors.violetaClaro.withValues(alpha: 0.055)
+          ..color = ColoresTradicion.violetaClaro.withValues(alpha: 0.055)
           ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 9),
       );
     }
@@ -4124,10 +4126,19 @@ class PuertaTemplo extends StatefulWidget {
 }
 
 class _PuertaTemploState extends State<PuertaTemplo> {
-  late final Future<PerfilServidor?> _carga = SesionTemplo.instancia.restaurar();
+  late final Future<PerfilServidor?> _carga =
+      vistaPrueba ? Future<PerfilServidor?>.value() : SesionTemplo.instancia.restaurar();
 
   @override
   Widget build(BuildContext context) {
+    if (vistaPrueba) {
+      // Solo en compilaciones de prueba (60.5): módulos sin cuenta.
+      if (parametroPrueba('pantalla') == 'login') return const LoginScreen();
+      return MainShell(
+        perfil: PerfilUsuario.nuevo(nombre: 'Kenji', espiritu: espiritusDelTemplo.values.first.nombre),
+        indiceInicial: int.tryParse(parametroPrueba('modulo') ?? '') ?? 0,
+      );
+    }
     return FutureBuilder<PerfilServidor?>(
       future: _carga,
       builder: (BuildContext context, AsyncSnapshot<PerfilServidor?> s) {
@@ -11813,7 +11824,7 @@ class _EscenaVivaPainter extends CustomPainter {
       Paint()
         ..shader = RadialGradient(
           colors: <Color>[
-            TempleColors.violetaClaro.withValues(alpha: 0.10 + 0.26 * vida),
+            ColoresTradicion.violetaClaro.withValues(alpha: 0.10 + 0.26 * vida),
             Colors.transparent,
           ],
         ).createShader(
@@ -11868,7 +11879,7 @@ class _EscenaVivaPainter extends CustomPainter {
         Offset(luna.dx - 16 + d, y),
         Offset(luna.dx + 16 + d, y),
         Paint()
-          ..color = TempleColors.violetaClaro
+          ..color = ColoresTradicion.violetaClaro
               .withValues(alpha: (0.06 + 0.12 * vida) - i * 0.02)
           ..strokeWidth = 1.4
           ..strokeCap = StrokeCap.round,
@@ -14588,9 +14599,9 @@ class _SelloPainter extends CustomPainter {
             ..shader = SweepGradient(
               colors: <Color>[
                 paleta.tinta,
-                TempleColors.dorado,
+                ColoresTradicion.dorado,
                 paleta.tinta,
-                TempleColors.dorado,
+                ColoresTradicion.dorado,
                 paleta.tinta,
               ],
             ).createShader(Rect.fromCircle(center: c, radius: r))
@@ -14601,7 +14612,7 @@ class _SelloPainter extends CustomPainter {
           c,
           r * 1.06,
           Paint()
-            ..color = TempleColors.dorado.withValues(alpha: 0.22)
+            ..color = ColoresTradicion.dorado.withValues(alpha: 0.22)
             ..style = PaintingStyle.stroke
             ..strokeWidth = r * 0.02,
         );
@@ -16781,7 +16792,7 @@ class _MonPainter extends CustomPainter {
         Rect.fromCenter(center: c, width: r * 0.62, height: r * 0.62),
         Radius.circular(r * 0.06),
       ),
-      Paint()..color = TempleColors.negro,
+      Paint()..color = ColoresTradicion.negro,
     );
   }
 
@@ -16874,7 +16885,7 @@ extension DatosRareza on RarezaPieza {
       case RarezaPieza.rara:
         return TempleColors.violetaClaro;
       case RarezaPieza.epica:
-        return const Color(0xFF5BD6A0);
+        return TempleColors.exito;
       case RarezaPieza.legendaria:
         return TempleColors.dorado;
     }
@@ -17463,7 +17474,7 @@ class _LienzoPainter extends CustomPainter {
           end: Alignment.bottomCenter,
           colors: <Color>[
             Colors.transparent,
-            TempleColors.negro.withValues(alpha: 0.60),
+            ColoresTradicion.negro.withValues(alpha: 0.60),
           ],
         ).createShader(Offset.zero & size),
     );
@@ -21666,7 +21677,7 @@ class _Carta extends StatelessWidget {
     final Color acento = mensaje.dorado
         ? TempleColors.dorado
         : mensaje.categoria == CategoriaMensaje.cuerpo
-            ? const Color(0xFF5BD6A0)
+            ? TempleColors.exito
             : TempleColors.violetaClaro;
     final bool sinLeer = !mensaje.leido;
 
@@ -22731,7 +22742,7 @@ class _ConCiclo extends StatelessWidget {
                     height: 44,
                     decoration: BoxDecoration(
                       color: (s.esDescarga
-                              ? const Color(0xFF5BD6A0)
+                              ? TempleColors.exito
                               : TempleColors.violeta)
                           .withValues(alpha: 0.14),
                       borderRadius: BorderRadius.circular(TempleRadius.chip),
@@ -22741,7 +22752,7 @@ class _ConCiclo extends StatelessWidget {
                         s.esDescarga ? TempleGlyph.gota : TempleGlyph.llama,
                         size: 22,
                         color: s.esDescarga
-                            ? const Color(0xFF5BD6A0)
+                            ? TempleColors.exito
                             : TempleColors.violetaClaro,
                       ),
                     ),
@@ -23026,7 +23037,7 @@ class _Sendero extends StatelessWidget {
           final bool pasada = i + 1 < ciclo.semanaActual;
           final bool actual = i + 1 == ciclo.semanaActual;
           final Color c = s.esDescarga
-              ? const Color(0xFF5BD6A0)
+              ? TempleColors.exito
               : TempleColors.violeta;
 
           return Expanded(
@@ -23500,7 +23511,7 @@ class _FuegoScreenState extends State<FuegoScreen>
                               fontSize: 12.5,
                               height: 1.4,
                               color: r.semanaCumplida
-                                  ? const Color(0xFF5BD6A0)
+                                  ? TempleColors.exito
                                   : TempleColors.textoSuave,
                             ),
                           ),
@@ -23773,7 +23784,7 @@ class _FuegoScreenState extends State<FuegoScreen>
                                         : Icons.remove_circle_outline_rounded,
                                     size: 17,
                                     color: s.cumplida
-                                        ? const Color(0xFF5BD6A0)
+                                        ? TempleColors.exito
                                         : TempleColors.textoTenue,
                                   ),
                                   const SizedBox(width: 12),
@@ -24398,7 +24409,7 @@ class SemanaScreen extends StatelessWidget {
                               fontSize: 12.5,
                               height: 1.4,
                               color: racha.semanaCumplida
-                                  ? const Color(0xFF5BD6A0)
+                                  ? TempleColors.exito
                                   : TempleColors.textoSuave,
                             ),
                           ),
@@ -24517,7 +24528,7 @@ class SemanaScreen extends StatelessWidget {
                             : Icons.trending_down_rounded,
                         size: 20,
                         color: difVolumen >= 0
-                            ? const Color(0xFF5BD6A0)
+                            ? TempleColors.exito
                             : TempleColors.alertaSuave,
                       ),
                       const SizedBox(width: 13),
@@ -24595,7 +24606,7 @@ class SemanaScreen extends StatelessWidget {
                                             .remove_circle_outline_rounded,
                                     size: 17,
                                     color: s.cumplida
-                                        ? const Color(0xFF5BD6A0)
+                                        ? TempleColors.exito
                                         : TempleColors.textoTenue,
                                   ),
                                   const SizedBox(width: 12),
@@ -25387,7 +25398,7 @@ class _GuiaNutricionVista extends StatelessWidget {
                     pct: plato[1],
                   ),
                   _LeyendaPlato(
-                    color: const Color(0xFF5BD6A0),
+                    color: TempleColors.exito,
                     texto: 'Verdura',
                     pct: plato[2],
                   ),
@@ -27024,7 +27035,7 @@ class _CasaPainter extends CustomPainter {
           end: Alignment.bottomCenter,
           colors: <Color>[
             Colors.transparent,
-            TempleColors.negro.withValues(alpha: 0.55),
+            ColoresTradicion.negro.withValues(alpha: 0.55),
           ],
         ).createShader(Offset.zero & size),
     );
@@ -29440,7 +29451,7 @@ class _RackPainter extends CustomPainter {
         w * 0.30,
         Paint()
           ..shader = RadialGradient(colors: <Color>[
-            TempleColors.dorado.withValues(alpha: 0.10),
+            ColoresTradicion.dorado.withValues(alpha: 0.10),
             Colors.transparent,
           ]).createShader(
               Rect.fromCircle(center: Offset(w / 2, barraY), radius: w * 0.30)),
@@ -30750,7 +30761,7 @@ class HabitantePainter extends CustomPainter {
           c.translate(math.cos(a) * s * 0.34, -s * 0.16 + math.sin(a) * s * 0.14),
           s * 0.014,
           Paint()
-            ..color = TempleColors.dorado.withValues(
+            ..color = ColoresTradicion.dorado.withValues(
                 alpha: 0.4 + 0.4 * math.sin(t * 2 * math.pi * 3 + i)),
         );
       }
@@ -33944,8 +33955,8 @@ class _AvatarTenshiPainter extends CustomPainter {
           begin: Alignment.topLeft,
           end: Alignment.bottomRight,
           colors: <Color>[
-            Color.lerp(TempleColors.blancoLuna, acento, 0.18)!,
-            Color.lerp(acento, TempleColors.negro, 0.35)!,
+            Color.lerp(ColoresTradicion.blancoLuna, acento, 0.18)!,
+            Color.lerp(acento, ColoresTradicion.negro, 0.35)!,
           ],
         ).createShader(Rect.fromCircle(center: c, radius: r)),
     );
@@ -33955,7 +33966,7 @@ class _AvatarTenshiPainter extends CustomPainter {
       Paint()
         ..style = PaintingStyle.stroke
         ..strokeWidth = 1.1
-        ..color = Color.lerp(TempleColors.blancoLuna, acento, 0.45)!
+        ..color = Color.lerp(ColoresTradicion.blancoLuna, acento, 0.45)!
             .withValues(alpha: 0.9),
     );
   }
@@ -33970,7 +33981,7 @@ class _AvatarTenshiPainter extends CustomPainter {
       ..style = PaintingStyle.stroke
       ..strokeWidth = math.max(1.0, r * 0.055)
       ..strokeCap = StrokeCap.round
-      ..color = Color.lerp(TempleColors.blancoLuna, acento, 0.30)!
+      ..color = Color.lerp(ColoresTradicion.blancoLuna, acento, 0.30)!
           .withValues(alpha: 0.92);
 
     final double izq = o.dx - a / 2;
@@ -41034,6 +41045,7 @@ Future<void> mostrarMenuTemplo(
     OpcionHoja(Icons.cloud_outlined, 'Mi progreso en la nube', () => mostrarEstadoNube(context)),
     OpcionHoja(Icons.notifications_none_rounded, 'Recordatorios', () => abrirRecordatorios(context)),
     OpcionHoja(Icons.music_note_outlined, 'Sonidos del templo', () => abrirAjustesSonido(context)),
+    OpcionHoja(Icons.palette_outlined, 'Apariencia', () => abrirApariencia(context)),
     if (Moderacion.instancia.soyModerador)
       OpcionHoja(Icons.shield_outlined, 'Moderación', () {
         Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => const ModeracionScreen()));
@@ -43005,12 +43017,12 @@ class _SiluetaPainter extends CustomPainter {
     canvas.save();
     canvas.translate(100, 432);
     canvas.scale(1, 0.16);
-    _glow(canvas, Offset.zero, 80, TempleColors.violeta, 0.35 + 0.1 * pulso);
-    canvas.drawCircle(Offset.zero, 70, _avTrazo(_al(TempleColors.violetaClaro, 0.45), 3));
+    _glow(canvas, Offset.zero, 80, ColoresTradicion.violeta, 0.35 + 0.1 * pulso);
+    canvas.drawCircle(Offset.zero, 70, _avTrazo(_al(ColoresTradicion.violetaClaro, 0.45), 3));
     for (int i = 0; i < 24; i++) {
       final double a = t * _tau * 0.25 + i * _tau / 24;
       canvas.drawArc(Rect.fromCircle(center: Offset.zero, radius: 80), a, 0.08, false,
-          _avTrazo(_al(TempleColors.violetaClaro, i % 4 == 0 ? 0.7 : 0.3), 5)..strokeCap = StrokeCap.butt);
+          _avTrazo(_al(ColoresTradicion.violetaClaro, i % 4 == 0 ? 0.7 : 0.3), 5)..strokeCap = StrokeCap.butt);
     }
     canvas.restore();
 
@@ -43022,7 +43034,7 @@ class _SiluetaPainter extends CustomPainter {
     canvas.drawPath(
       _FormasCuerpo.contorno,
       Paint()
-        ..color = _al(TempleColors.violeta, 0.22 + 0.06 * pulso)
+        ..color = _al(ColoresTradicion.violeta, 0.22 + 0.06 * pulso)
         ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 8),
     );
     final Shader degradado = ui.Gradient.linear(
@@ -43058,7 +43070,7 @@ class _SiluetaPainter extends CustomPainter {
     if (!espalda) {
       for (final double s in <double>[-1, 1]) {
         canvas.drawArc(Rect.fromCircle(center: Offset(100 + 6.5 * s, 38), radius: 3.2), 0.15 * math.pi, 0.7 * math.pi,
-            false, _avTrazo(_al(TempleColors.violetaClaro, 0.55), 1.4));
+            false, _avTrazo(_al(ColoresTradicion.violetaClaro, 0.55), 1.4));
       }
     }
 
@@ -43067,8 +43079,8 @@ class _SiluetaPainter extends CustomPainter {
     formas.forEach((GrupoMuscular g, Path p) {
       final _LuzSilueta l = luces[g]!;
       Color col = RangosRanked.color(l.rango);
-      if (l.rango < 0) col = TempleColors.bordeVivo;
-      if (l.dormido) col = Color.lerp(col, TempleColors.textoTenue, 0.6)!;
+      if (l.rango < 0) col = ColoresTradicion.bordeVivo;
+      if (l.dormido) col = Color.lerp(col, ColoresTradicion.textoTenue, 0.6)!;
       final bool elegido = seleccion.contains(g);
       final Offset centro = _FormasCuerpo.centros[g] ?? p.getBounds().center;
       final List<Offset> lados =
@@ -43114,7 +43126,7 @@ class _SiluetaPainter extends CustomPainter {
       canvas.restore();
       canvas.drawPath(
           p,
-          _avTrazo(l.rango < 0 ? _al(TempleColors.violetaClaro, 0.25) : _al(Color.lerp(col, Colors.black, 0.5)!, 0.9), 1));
+          _avTrazo(l.rango < 0 ? _al(ColoresTradicion.violetaClaro, 0.25) : _al(Color.lerp(col, Colors.black, 0.5)!, 0.9), 1));
 
       if (elegido) {
         canvas.drawPath(p, _avTrazo(_al(Colors.white, 0.8 + 0.2 * pulso), 1.8 + 0.8 * pulso));
@@ -43123,7 +43135,7 @@ class _SiluetaPainter extends CustomPainter {
         canvas.drawPath(p, _avTrazo(_al(Colors.white, 0.35 * (1 - fo)), 1.2 + 14 * fo));
       }
       if (g == bendicion && !elegido) {
-        canvas.drawPath(p, _avTrazo(_al(TempleColors.dorado, 0.4 + 0.5 * pulso), 1.4));
+        canvas.drawPath(p, _avTrazo(_al(ColoresTradicion.dorado, 0.4 + 0.5 * pulso), 1.4));
       }
       // A punto de ascender: dos chispas doradas que lo rondan.
       if (l.aPunto) {
@@ -43155,7 +43167,7 @@ class _SiluetaPainter extends CustomPainter {
     });
 
     // -- Detalles: línea alba del abdomen y columna ---------------------------
-    final Paint linea = _avTrazo(_al(TempleColors.negro, 0.35), 1);
+    final Paint linea = _avTrazo(_al(ColoresTradicion.negro, 0.35), 1);
     if (!espalda) {
       canvas.drawLine(const Offset(100, 142), const Offset(100, 226), linea);
       for (final double y in <double>[162, 184, 206]) {
@@ -43173,7 +43185,7 @@ class _SiluetaPainter extends CustomPainter {
       Rect.fromLTWH(0, fy - 14, 200, 28),
       Paint()
         ..shader = ui.Gradient.linear(Offset(0, fy - 14), Offset(0, fy + 14),
-            <Color>[_al(TempleColors.violetaClaro, 0), _al(const Color(0xFFD9CCFF), 0.25), _al(TempleColors.violetaClaro, 0)],
+            <Color>[_al(ColoresTradicion.violetaClaro, 0), _al(const Color(0xFFD9CCFF), 0.25), _al(ColoresTradicion.violetaClaro, 0)],
             const <double>[0, 0.5, 1]),
     );
     canvas.restore();
@@ -43300,7 +43312,7 @@ class _EmblemaPainter extends CustomPainter {
         Paint()
           ..style = PaintingStyle.stroke
           ..strokeWidth = r * 0.06
-          ..color = TempleColors.bordeVivo,
+          ..color = ColoresTradicion.bordeVivo,
       );
       return;
     }
@@ -50589,8 +50601,11 @@ class TecnicaEjercicioScreen extends StatelessWidget {
                   Container(
                     decoration: BoxDecoration(
                       borderRadius: BorderRadius.circular(TempleRadius.tarjeta),
-                      gradient: const RadialGradient(
-                        colors: <Color>[Color(0xFF241A3D), TempleColors.grafito],
+                      gradient: RadialGradient(
+                        colors: <Color>[
+                          if (TemaTemplo.esTradicional) const Color(0xFF241A3D) else TempleColors.superficieAlta,
+                          TempleColors.grafito,
+                        ],
                         radius: 0.9,
                       ),
                       border: Border.all(color: TempleColors.borde),
@@ -52110,7 +52125,7 @@ class _GuerreroPainter extends CustomPainter {
 
   void _pintar(Canvas c) {
     final _RopaGuerrero ropa = _RopaGuerrero.de(aspecto);
-    final Color aura = cuerpo < 0 ? TempleColors.violeta : RangosRanked.color(cuerpo);
+    final Color aura = cuerpo < 0 ? ColoresTradicion.violeta : RangosRanked.color(cuerpo);
     final double resp = math.sin(t * _tau);
     final double peso = math.sin(t * _tau + 1.2) * 0.6;
     final double fuerza = 0.35 + 0.65 * math.max(0, cuerpo + 1) / (RangosRanked.maximo + 1);
@@ -52277,19 +52292,19 @@ class _GuerreroPainter extends CustomPainter {
             ..lineTo(100, yHom + 17)
             ..lineTo(107, yHom - 3)
             ..close(),
-          Paint()..color = TempleColors.blancoLuna,
+          Paint()..color = ColoresTradicion.blancoLuna,
         );
         c.drawPath(
           Path()
             ..moveTo(91, yHom - 3)
             ..quadraticBezierTo(95, yHom + 25, 96, yCad + 2),
-          _avTrazo(TempleColors.violeta, 2.2),
+          _avTrazo(ColoresTradicion.violeta, 2.2),
         );
         c.drawPath(
           Path()
             ..moveTo(109, yHom - 3)
             ..quadraticBezierTo(105, yHom + 25, 104, yCad + 2),
-          _avTrazo(TempleColors.violeta, 2.2),
+          _avTrazo(ColoresTradicion.violeta, 2.2),
         );
         for (final double s in <double>[-1, 1]) {
           final Offset m = Offset(100 + s * pecho * 0.55, yPecho - 6);
@@ -52371,7 +52386,7 @@ class _GuerreroPainter extends CustomPainter {
       } else {
         // Moño alto del kimono.
         _avCirculo(c, cab.translate(0, -14), 4.6, _AvCol.pelo);
-        _avLinea(c, cab.translate(-5, -14), cab.translate(5, -14), 1.6, TempleColors.violeta);
+        _avLinea(c, cab.translate(-5, -14), cab.translate(5, -14), 1.6, ColoresTradicion.violeta);
       }
     }
     // Ojos con parpadeo y cejas decididas.
@@ -52409,7 +52424,7 @@ class _GuerreroPainter extends CustomPainter {
       } else {
         _avCirculo(c, h, rBrazo + 0.9, ropa.top);
         if (aspecto == AspectoGuerrero.kimono) {
-          _avLinea(c, codo.translate(-s, 6), codo.translate(s * 7, 4), 1.6, TempleColors.violeta);
+          _avLinea(c, codo.translate(-s, 6), codo.translate(s * 7, 4), 1.6, ColoresTradicion.violeta);
         }
       }
     }
@@ -53230,7 +53245,7 @@ class _EmblemaPasePainter extends CustomPainter {
       Paint()
         ..shader = RadialGradient(colors: <Color>[
           _oro.withValues(alpha: fuerza),
-          TempleColors.violeta.withValues(alpha: fuerza * 0.35),
+          ColoresTradicion.violeta.withValues(alpha: fuerza * 0.35),
           Colors.transparent,
         ], stops: const <double>[0, 0.55, 1])
             .createShader(Rect.fromCircle(center: c, radius: r * 1.45)),
@@ -53758,10 +53773,12 @@ class _AlertaPase extends StatelessWidget {
             padding: const EdgeInsets.fromLTRB(22, 24, 22, 14),
             decoration: BoxDecoration(
               borderRadius: BorderRadius.circular(28),
-              gradient: const LinearGradient(
+              gradient: LinearGradient(
                 begin: Alignment.topCenter,
                 end: Alignment.bottomCenter,
-                colors: <Color>[Color(0xFF221540), Color(0xFF110B20)],
+                colors: TemaTemplo.esTradicional
+                    ? const <Color>[Color(0xFF221540), Color(0xFF110B20)]
+                    : const <Color>[TempleColors.superficieAlta, TempleColors.grafito],
               ),
               border: Border.all(color: const Color(0xFFE8B65A).withValues(alpha: 0.45)),
               boxShadow: <BoxShadow>[
@@ -54052,7 +54069,9 @@ class _PaseTemploScreenState extends State<PaseTemploScreen>
                     gradient: LinearGradient(
                       begin: Alignment.topCenter,
                       end: Alignment.bottomCenter,
-                      colors: <Color>[Color(0xFF1C1036), Color(0xFF0C0718), TempleColors.negro],
+                      colors: TemaTemplo.esTradicional
+                          ? const <Color>[Color(0xFF1C1036), Color(0xFF0C0718), TempleColors.negro]
+                          : const <Color>[TempleColors.superficieAlta, TempleColors.grafito, TempleColors.negro],
                       stops: <double>[0, 0.45, 1],
                     ),
                   ),
@@ -54152,7 +54171,8 @@ class _PaseTemploScreenState extends State<PaseTemploScreen>
         padding: const EdgeInsets.all(16),
         decoration: BoxDecoration(
           borderRadius: BorderRadius.circular(TempleRadius.tarjeta),
-          color: const Color(0xFF1C1430).withValues(alpha: 0.92),
+          color: (TemaTemplo.esTradicional ? const Color(0xFF1C1430) : TempleColors.superficieAlta)
+              .withValues(alpha: 0.92),
           border: Border.all(color: const Color(0xFFE8B65A).withValues(alpha: 0.5)),
         ),
         child: Row(
@@ -54307,10 +54327,12 @@ class _PaseTemploScreenState extends State<PaseTemploScreen>
                   child: Container(
                     decoration: BoxDecoration(
                       borderRadius: BorderRadius.circular(TempleRadius.tarjeta),
-                      gradient: const LinearGradient(
+                      gradient: LinearGradient(
                         begin: Alignment.topCenter,
                         end: Alignment.bottomCenter,
-                        colors: <Color>[Color(0xFF241A3D), Color(0xFF130E22)],
+                        colors: TemaTemplo.esTradicional
+                            ? const <Color>[Color(0xFF241A3D), Color(0xFF130E22)]
+                            : const <Color>[TempleColors.superficieAlta, TempleColors.superficie],
                       ),
                       border: Border.all(
                           color: i == _pagina ? const Color(0xFFE8B65A).withValues(alpha: 0.45) : TempleColors.borde),
@@ -54517,7 +54539,9 @@ class _TarjetaPlanPase extends StatelessWidget {
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
         decoration: BoxDecoration(
           borderRadius: BorderRadius.circular(TempleRadius.tarjeta),
-          color: elegido ? const Color(0xFF2A1E12).withValues(alpha: 0.9) : TempleColors.superficie.withValues(alpha: 0.9),
+          color: elegido
+              ? (TemaTemplo.paleta.claro ? const Color(0xFFFBF1DE) : const Color(0xFF2A1E12)).withValues(alpha: 0.9)
+              : TempleColors.superficie.withValues(alpha: 0.9),
           border: Border.all(
               color: elegido ? const Color(0xFFE8B65A) : TempleColors.borde, width: elegido ? 1.6 : 1),
           boxShadow: elegido
@@ -54659,7 +54683,7 @@ class _CieloPasePainter extends CustomPainter {
         w * 0.5,
         Paint()
           ..shader = RadialGradient(colors: <Color>[
-            (i == 1 ? const Color(0xFFE8B65A) : TempleColors.violeta).withValues(alpha: 0.10),
+            (i == 1 ? const Color(0xFFE8B65A) : ColoresTradicion.violeta).withValues(alpha: 0.10),
             Colors.transparent,
           ]).createShader(Rect.fromCircle(center: p, radius: w * 0.5)),
       );
@@ -54738,7 +54762,7 @@ class _MiniPasePainter extends CustomPainter {
       c.drawRRect(
         RRect.fromRectAndRadius(r, const Radius.circular(11)),
         Paint()
-          ..color = (propia ? TempleColors.violeta : const Color(0xFF2E2448)).withValues(alpha: 0.9 * v),
+          ..color = (propia ? ColoresTradicion.violeta : const Color(0xFF2E2448)).withValues(alpha: 0.9 * v),
       );
       for (int k = 0; k < 3; k++) {
         final double lx = r.left + 10 + k * (r.width - 20) / 3;
@@ -54780,7 +54804,7 @@ class _MiniPasePainter extends CustomPainter {
     }
     for (int k = 1; k < 4; k++) {
       final double y = s.height * k / 4;
-      c.drawLine(Offset(0, y), Offset(s.width, y), Paint()..color = TempleColors.borde.withValues(alpha: 0.6));
+      c.drawLine(Offset(0, y), Offset(s.width, y), Paint()..color = ColoresTradicion.borde.withValues(alpha: 0.6));
     }
     if (ultimo == null) return;
     area
@@ -56182,7 +56206,8 @@ class _TshCupo extends StatelessWidget {
                   padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
                   decoration: BoxDecoration(
                     borderRadius: BorderRadius.circular(TempleRadius.campo),
-                    color: const Color(0xFF231A10).withValues(alpha: 0.9),
+                    color: (TemaTemplo.paleta.claro ? const Color(0xFFFBF1DE) : const Color(0xFF231A10))
+                        .withValues(alpha: 0.9),
                     border: Border.all(color: const Color(0xFFE8B65A).withValues(alpha: 0.45)),
                   ),
                   child: Row(
@@ -56570,7 +56595,8 @@ class PronosticoRanked extends StatelessWidget {
       padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
         borderRadius: BorderRadius.circular(TempleRadius.tarjeta),
-        color: const Color(0xFF1C1430).withValues(alpha: 0.9),
+        color: (TemaTemplo.esTradicional ? const Color(0xFF1C1430) : TempleColors.superficieAlta)
+            .withValues(alpha: 0.9),
         border: Border.all(color: const Color(0xFFE8B65A).withValues(alpha: 0.35)),
       ),
       child: Row(
@@ -73507,7 +73533,7 @@ class _QrPainter extends CustomPainter {
     final int n = filas.length;
     final double m = size.width / n;
     final Paint p = Paint()
-      ..color = TempleColors.negro
+      ..color = ColoresTradicion.negro
       ..isAntiAlias = false;
     for (int y = 0; y < n; y++) {
       final String f = filas[y];
@@ -73995,4 +74021,912 @@ mixin TickerDecorativo<T extends StatefulWidget> on State<T> implements TickerPr
     _modoTicker = null;
     super.dispose();
   }
+}
+
+// ===========================================================================
+// 60. TEMAS DE COLOR
+//
+// Cada persona escoge la tonalidad del templo: Tradicional (la noche morada
+// de siempre), Oscuro (grafito neutro), Claro (papel y tinta), Sakura, Jade,
+// Océano y Carmesí, o Automático (claro u oscuro según el teléfono).
+//
+// Cómo funciona: los colores de TempleColors son ColorTema, constantes para
+// el compilador pero que leen sus canales de la paleta vigente al pintar.
+// Así los ~2.700 usos del código cambian de tema sin tocarlos. Al cambiar de
+// tema la app se vuelve a montar entera (vuelve al mismo módulo y reabre
+// Apariencia), porque Flutter guarda en caché el texto ya dibujado.
+//
+// Las escenas e ilustraciones (jardín, taller, casa, guerrero, emblemas,
+// Tenshi, sellos…) usan ColoresTradicion y no cambian. El paisaje de fondo sí
+// se adapta: de día en Claro y con el tono de cada paleta en las demás.
+// ===========================================================================
+
+// ---------------------------------------------------------------------------
+// 60.1 COLOR VIVO
+// ---------------------------------------------------------------------------
+
+/// Color del tema activo. Para el compilador es constante, pero sus canales
+/// se leen de la paleta vigente en el momento de pintar.
+class ColorTema extends Color {
+  const ColorTema(this.indice, [this.alfa]) : super(0xFF000000);
+
+  /// Posición en [PaletaTemplo.colores] (ver TempleColors).
+  final int indice;
+
+  /// Opacidad fija (0–255) para variantes translúcidas, o null para la de la paleta.
+  final int? alfa;
+
+  Color get _c => TemaTemplo.paleta.colores[indice];
+
+  @override
+  double get a => alfa == null ? _c.a : alfa! / 255.0;
+
+  @override
+  double get r => _c.r;
+
+  @override
+  double get g => _c.g;
+
+  @override
+  double get b => _c.b;
+
+  @override
+  ui.ColorSpace get colorSpace => _c.colorSpace;
+}
+
+/// La paleta original, fija. La usan las ilustraciones y escenas, que se ven
+/// igual en todos los temas.
+class ColoresTradicion {
+  const ColoresTradicion._();
+
+  static const Color negro = Color(0xFF06050A);
+  static const Color grafito = Color(0xFF100E18);
+  static const Color superficie = Color(0xFF15121F);
+  static const Color superficieAlta = Color(0xFF1D1829);
+  static const Color borde = Color(0xFF29223A);
+  static const Color bordeVivo = Color(0xFF3D3157);
+  static const Color moradoProfundo = Color(0xFF2B1B52);
+  static const Color violeta = Color(0xFF8B5CF6);
+  static const Color violetaClaro = Color(0xFFB79CFF);
+  static const Color dorado = Color(0xFFD9A441);
+  static const Color blancoLuna = Color(0xFFF4F1FA);
+  static const Color texto = Color(0xFFE7E3F2);
+  static const Color textoSuave = Color(0xFF9A93B0);
+  static const Color textoTenue = Color(0xFF645D7A);
+  static const Color exito = Color(0xFF5BD6A0);
+  static const Color alertaSuave = Color(0xFFE2A03F);
+  static const Color error = Color(0xFFE05C6E);
+  static const LinearGradient fondo = LinearGradient(
+    begin: Alignment.topCenter,
+    end: Alignment.bottomCenter,
+    colors: <Color>[Color(0xFF120D22), Color(0xFF09070F), Color(0xFF06050A)],
+    stops: <double>[0, 0.55, 1],
+  );
+}
+
+// ---------------------------------------------------------------------------
+// 60.2 PALETAS
+// ---------------------------------------------------------------------------
+
+/// Colores del paisaje de fondo (cielo nocturno, Fuji, bambú, casa, agua y
+/// torii), para que el fondo acompañe al tema.
+class PaisajePaleta {
+  const PaisajePaleta({
+    required this.cielo,
+    required this.luna,
+    required this.fuji,
+    required this.nieve,
+    required this.colinas,
+    required this.bambu,
+    required this.aguaArriba,
+    required this.aguaAbajo,
+    required this.tinta,
+    required this.frente,
+    required this.estrellas,
+  });
+
+  /// Cuatro tonos de arriba abajo.
+  final List<Color> cielo;
+  final Color luna;
+  final Color fuji;
+  final Color nieve;
+  final Color colinas;
+  final Color bambu;
+  final Color aguaArriba;
+  final Color aguaAbajo;
+
+  /// Casa tradicional.
+  final Color tinta;
+
+  /// Torii y siluetas del frente.
+  final Color frente;
+
+  /// Si se dibujan estrellas (de día no).
+  final bool estrellas;
+}
+
+class PaletaTemplo {
+  PaletaTemplo({
+    required this.id,
+    required this.nombre,
+    required this.descripcion,
+    required this.claro,
+    required Color negro,
+    required Color grafito,
+    required Color superficie,
+    required Color superficieAlta,
+    required Color borde,
+    required Color bordeVivo,
+    required Color moradoProfundo,
+    required Color violeta,
+    required Color violetaClaro,
+    required Color dorado,
+    required Color blancoLuna,
+    required Color texto,
+    required Color textoSuave,
+    required Color textoTenue,
+    required Color exito,
+    required Color alertaSuave,
+    required Color error,
+    required List<Color> fondo,
+    required this.paisaje,
+  }) : colores = <Color>[
+          negro, grafito, superficie, superficieAlta, borde, bordeVivo, moradoProfundo, violeta, violetaClaro,
+          dorado, blancoLuna, texto, textoSuave, textoTenue, exito, alertaSuave, error,
+          fondo[0], fondo[1], fondo[2],
+        ];
+
+  final String id;
+  final String nombre;
+  final String descripcion;
+
+  /// Tema de fondo claro: texto oscuro y barra de estado con iconos oscuros.
+  final bool claro;
+
+  /// Por índice, en el orden de TempleColors.
+  final List<Color> colores;
+  final PaisajePaleta paisaje;
+
+  Color get fondoApp => colores[0];
+  Color get tarjeta => colores[2];
+  Color get bordeTarjeta => colores[4];
+  Color get acento => colores[7];
+  Color get acentoClaro => colores[8];
+  Color get titulo => colores[10];
+  Color get textoSecundario => colores[12];
+  List<Color> get degradado => <Color>[colores[17], colores[18], colores[19]];
+}
+
+class PaletasTemplo {
+  const PaletasTemplo._();
+
+  static final PaletaTemplo tradicional = PaletaTemplo(
+    id: 'tradicional',
+    nombre: 'Tradicional',
+    descripcion: 'La noche morada del templo. La de siempre.',
+    claro: false,
+    negro: ColoresTradicion.negro,
+    grafito: ColoresTradicion.grafito,
+    superficie: ColoresTradicion.superficie,
+    superficieAlta: ColoresTradicion.superficieAlta,
+    borde: ColoresTradicion.borde,
+    bordeVivo: ColoresTradicion.bordeVivo,
+    moradoProfundo: ColoresTradicion.moradoProfundo,
+    violeta: ColoresTradicion.violeta,
+    violetaClaro: ColoresTradicion.violetaClaro,
+    dorado: ColoresTradicion.dorado,
+    blancoLuna: ColoresTradicion.blancoLuna,
+    texto: ColoresTradicion.texto,
+    textoSuave: ColoresTradicion.textoSuave,
+    textoTenue: ColoresTradicion.textoTenue,
+    exito: ColoresTradicion.exito,
+    alertaSuave: ColoresTradicion.alertaSuave,
+    error: ColoresTradicion.error,
+    fondo: const <Color>[Color(0xFF120D22), Color(0xFF09070F), Color(0xFF06050A)],
+    paisaje: const PaisajePaleta(
+      cielo: <Color>[Color(0xFF1B0F35), Color(0xFF150C28), Color(0xFF0A0616), Color(0xFF06050A)],
+      luna: Color(0xFFE8DCFF),
+      fuji: Color(0xFF1E1236),
+      nieve: Color(0xFF3A2A5E),
+      colinas: Color(0xFF17102B),
+      bambu: Color(0xFF120B22),
+      aguaArriba: Color(0xFF170E2C),
+      aguaAbajo: Color(0xFF06040C),
+      tinta: Color(0xFF0E0820),
+      frente: Color(0xFF080413),
+      estrellas: true,
+    ),
+  );
+
+  static final PaletaTemplo oscuro = PaletaTemplo(
+    id: 'oscuro',
+    nombre: 'Oscuro',
+    descripcion: 'Grafito neutro, sin tinte. Sobrio y descansado.',
+    claro: false,
+    negro: const Color(0xFF0B0B0D),
+    grafito: const Color(0xFF121214),
+    superficie: const Color(0xFF18181B),
+    superficieAlta: const Color(0xFF202024),
+    borde: const Color(0xFF2C2C31),
+    bordeVivo: const Color(0xFF3D3D44),
+    moradoProfundo: const Color(0xFF2A2440),
+    violeta: const Color(0xFF8B5CF6),
+    violetaClaro: const Color(0xFFB9A4F7),
+    dorado: ColoresTradicion.dorado,
+    blancoLuna: const Color(0xFFF4F4F6),
+    texto: const Color(0xFFE4E4E8),
+    textoSuave: const Color(0xFF9A9AA4),
+    textoTenue: const Color(0xFF66666F),
+    exito: ColoresTradicion.exito,
+    alertaSuave: ColoresTradicion.alertaSuave,
+    error: ColoresTradicion.error,
+    fondo: const <Color>[Color(0xFF17171B), Color(0xFF0E0E10), Color(0xFF0B0B0D)],
+    paisaje: const PaisajePaleta(
+      cielo: <Color>[Color(0xFF1C1C22), Color(0xFF151519), Color(0xFF0D0D10), Color(0xFF0B0B0D)],
+      luna: Color(0xFFE9E9EE),
+      fuji: Color(0xFF202026),
+      nieve: Color(0xFF3B3B45),
+      colinas: Color(0xFF18181D),
+      bambu: Color(0xFF131317),
+      aguaArriba: Color(0xFF17171C),
+      aguaAbajo: Color(0xFF08080A),
+      tinta: Color(0xFF0F0F12),
+      frente: Color(0xFF09090B),
+      estrellas: true,
+    ),
+  );
+
+  static final PaletaTemplo claro = PaletaTemplo(
+    id: 'claro',
+    nombre: 'Claro',
+    descripcion: 'Papel de arroz y tinta. Para entrenar de día.',
+    claro: true,
+    negro: const Color(0xFFF6F3FA),
+    grafito: const Color(0xFFEEE8F6),
+    superficie: const Color(0xFFFFFFFF),
+    superficieAlta: const Color(0xFFF3EEFA),
+    borde: const Color(0xFFE2D9EF),
+    bordeVivo: const Color(0xFFC9BBE4),
+    moradoProfundo: const Color(0xFFE9DFFC),
+    violeta: const Color(0xFF6D3FE0),
+    violetaClaro: const Color(0xFF5932C4),
+    dorado: const Color(0xFFA2721A),
+    blancoLuna: const Color(0xFF1A1526),
+    texto: const Color(0xFF2A2437),
+    textoSuave: const Color(0xFF5E5671),
+    textoTenue: const Color(0xFF8C849F),
+    exito: const Color(0xFF17875A),
+    alertaSuave: const Color(0xFFA2650A),
+    error: const Color(0xFFC0394C),
+    fondo: const <Color>[Color(0xFFFBF9FE), Color(0xFFF6F3FA), Color(0xFFF1ECF7)],
+    paisaje: const PaisajePaleta(
+      cielo: <Color>[Color(0xFFE9E0F7), Color(0xFFEFE8F9), Color(0xFFF4EFFA), Color(0xFFF6F3FA)],
+      luna: Color(0xFFFFFFFF),
+      fuji: Color(0xFFCDBFE6),
+      nieve: Color(0xFFFFFFFF),
+      colinas: Color(0xFFDCD1EE),
+      bambu: Color(0xFFD3C6EA),
+      aguaArriba: Color(0xFFE6DDF4),
+      aguaAbajo: Color(0xFFF3EFF8),
+      tinta: Color(0xFFBCAEDC),
+      frente: Color(0xFFAB9AD2),
+      estrellas: false,
+    ),
+  );
+
+  static final PaletaTemplo sakura = PaletaTemplo(
+    id: 'sakura',
+    nombre: 'Sakura',
+    descripcion: 'Flor de cerezo sobre la noche.',
+    claro: false,
+    negro: const Color(0xFF0A0609),
+    grafito: const Color(0xFF130B11),
+    superficie: const Color(0xFF1A1017),
+    superficieAlta: const Color(0xFF23161F),
+    borde: const Color(0xFF33212D),
+    bordeVivo: const Color(0xFF4B2E41),
+    moradoProfundo: const Color(0xFF45203A),
+    violeta: const Color(0xFFD9508A),
+    violetaClaro: const Color(0xFFF4A6C6),
+    dorado: ColoresTradicion.dorado,
+    blancoLuna: const Color(0xFFFBF1F6),
+    texto: const Color(0xFFF0E3EA),
+    textoSuave: const Color(0xFFB0949F),
+    textoTenue: const Color(0xFF7A5E6A),
+    exito: ColoresTradicion.exito,
+    alertaSuave: ColoresTradicion.alertaSuave,
+    error: ColoresTradicion.error,
+    fondo: const <Color>[Color(0xFF1F0C17), Color(0xFF0E070B), Color(0xFF0A0609)],
+    paisaje: const PaisajePaleta(
+      cielo: <Color>[Color(0xFF351024), Color(0xFF280C1C), Color(0xFF140610), Color(0xFF0A0609)],
+      luna: Color(0xFFFFE3EE),
+      fuji: Color(0xFF2E1226),
+      nieve: Color(0xFF5E2A47),
+      colinas: Color(0xFF2A0F20),
+      bambu: Color(0xFF1E0A17),
+      aguaArriba: Color(0xFF2A0E1E),
+      aguaAbajo: Color(0xFF0A0408),
+      tinta: Color(0xFF1C0814),
+      frente: Color(0xFF10040B),
+      estrellas: true,
+    ),
+  );
+
+  static final PaletaTemplo jade = PaletaTemplo(
+    id: 'jade',
+    nombre: 'Jade',
+    descripcion: 'Verde de bambú y piedra mojada.',
+    claro: false,
+    negro: const Color(0xFF050A09),
+    grafito: const Color(0xFF0B1311),
+    superficie: const Color(0xFF0F1A17),
+    superficieAlta: const Color(0xFF15231F),
+    borde: const Color(0xFF1F332D),
+    bordeVivo: const Color(0xFF2D4A41),
+    moradoProfundo: const Color(0xFF12392E),
+    violeta: const Color(0xFF1E9E74),
+    violetaClaro: const Color(0xFF7FDDBB),
+    dorado: ColoresTradicion.dorado,
+    blancoLuna: const Color(0xFFEEF8F4),
+    texto: const Color(0xFFDCEDE7),
+    textoSuave: const Color(0xFF8EA89F),
+    textoTenue: const Color(0xFF58726A),
+    exito: const Color(0xFF6FE3A8),
+    alertaSuave: ColoresTradicion.alertaSuave,
+    error: ColoresTradicion.error,
+    fondo: const <Color>[Color(0xFF0A1F19), Color(0xFF07100D), Color(0xFF050A09)],
+    paisaje: const PaisajePaleta(
+      cielo: <Color>[Color(0xFF0E2E27), Color(0xFF0B241E), Color(0xFF061411), Color(0xFF050A09)],
+      luna: Color(0xFFDFF7EE),
+      fuji: Color(0xFF0F2A23),
+      nieve: Color(0xFF2A5A4C),
+      colinas: Color(0xFF0C221C),
+      bambu: Color(0xFF081812),
+      aguaArriba: Color(0xFF0C241E),
+      aguaAbajo: Color(0xFF030807),
+      tinta: Color(0xFF071612),
+      frente: Color(0xFF030C0A),
+      estrellas: true,
+    ),
+  );
+
+  static final PaletaTemplo oceano = PaletaTemplo(
+    id: 'oceano',
+    nombre: 'Océano',
+    descripcion: 'Azul profundo de la marea nocturna.',
+    claro: false,
+    negro: const Color(0xFF04070D),
+    grafito: const Color(0xFF0A111D),
+    superficie: const Color(0xFF0E1726),
+    superficieAlta: const Color(0xFF141F33),
+    borde: const Color(0xFF1E2B44),
+    bordeVivo: const Color(0xFF2B3D60),
+    moradoProfundo: const Color(0xFF142856),
+    violeta: const Color(0xFF3D7BEF),
+    violetaClaro: const Color(0xFF9BBCFF),
+    dorado: ColoresTradicion.dorado,
+    blancoLuna: const Color(0xFFF0F5FF),
+    texto: const Color(0xFFDFE7F5),
+    textoSuave: const Color(0xFF8F9CB5),
+    textoTenue: const Color(0xFF5A6680),
+    exito: ColoresTradicion.exito,
+    alertaSuave: ColoresTradicion.alertaSuave,
+    error: ColoresTradicion.error,
+    fondo: const <Color>[Color(0xFF0A1530), Color(0xFF060B16), Color(0xFF04070D)],
+    paisaje: const PaisajePaleta(
+      cielo: <Color>[Color(0xFF0F1F45), Color(0xFF0C1838), Color(0xFF060D1E), Color(0xFF04070D)],
+      luna: Color(0xFFDCE8FF),
+      fuji: Color(0xFF12224A),
+      nieve: Color(0xFF2E4677),
+      colinas: Color(0xFF0E1A3A),
+      bambu: Color(0xFF0A1430),
+      aguaArriba: Color(0xFF0E1B3C),
+      aguaAbajo: Color(0xFF03060E),
+      tinta: Color(0xFF08122A),
+      frente: Color(0xFF040A18),
+      estrellas: true,
+    ),
+  );
+
+  static final PaletaTemplo carmesi = PaletaTemplo(
+    id: 'carmesi',
+    nombre: 'Carmesí',
+    descripcion: 'Rojo samurái, laca y fuego.',
+    claro: false,
+    negro: const Color(0xFF0B0506),
+    grafito: const Color(0xFF150A0C),
+    superficie: const Color(0xFF1C0F12),
+    superficieAlta: const Color(0xFF261519),
+    borde: const Color(0xFF391F25),
+    bordeVivo: const Color(0xFF532B34),
+    moradoProfundo: const Color(0xFF4A1620),
+    violeta: const Color(0xFFD23F4C),
+    violetaClaro: const Color(0xFFF2A0A6),
+    dorado: ColoresTradicion.dorado,
+    blancoLuna: const Color(0xFFFBF0F1),
+    texto: const Color(0xFFF0E1E3),
+    textoSuave: const Color(0xFFB0959A),
+    textoTenue: const Color(0xFF7A5E63),
+    exito: ColoresTradicion.exito,
+    alertaSuave: ColoresTradicion.alertaSuave,
+    error: const Color(0xFFFF7A7A),
+    fondo: const <Color>[Color(0xFF220A0F), Color(0xFF10070A), Color(0xFF0B0506)],
+    paisaje: const PaisajePaleta(
+      cielo: <Color>[Color(0xFF3A0D14), Color(0xFF2C0A10), Color(0xFF150509), Color(0xFF0B0506)],
+      luna: Color(0xFFFFE1DF),
+      fuji: Color(0xFF33101A),
+      nieve: Color(0xFF63283A),
+      colinas: Color(0xFF2C0D15),
+      bambu: Color(0xFF1F080E),
+      aguaArriba: Color(0xFF2D0C14),
+      aguaAbajo: Color(0xFF0B0305),
+      tinta: Color(0xFF1D070C),
+      frente: Color(0xFF100306),
+      estrellas: true,
+    ),
+  );
+
+  /// En el orden en que se muestran.
+  static List<PaletaTemplo> get todas =>
+      <PaletaTemplo>[tradicional, oscuro, claro, sakura, jade, oceano, carmesi];
+
+  static PaletaTemplo porId(String id) =>
+      todas.firstWhere((PaletaTemplo p) => p.id == id, orElse: () => tradicional);
+}
+
+// ---------------------------------------------------------------------------
+// 60.3 TEMA ELEGIDO
+// ---------------------------------------------------------------------------
+
+/// Tema elegido por la persona. Se guarda en el dispositivo (en la web, en el
+/// navegador, con la misma clave que lee la página de descarga).
+class TemaTemplo extends ChangeNotifier with WidgetsBindingObserver {
+  TemaTemplo._();
+  static final TemaTemplo instancia = TemaTemplo._();
+
+  static const String _clave = 'tema_templo';
+  static const String automatico = 'automatico';
+
+  /// Paleta con la que se pinta ahora (la lee ColorTema).
+  static PaletaTemplo paleta = PaletasTemplo.tradicional;
+
+  /// Lo que eligió la persona: un id de paleta o [automatico].
+  String eleccion = 'tradicional';
+
+  /// Sube en cada cambio: es la llave con la que se vuelve a montar la app.
+  int version = 0;
+
+  int? _moduloPendiente;
+  bool _reabrirApariencia = false;
+  bool _observando = false;
+
+  static SystemUiOverlayStyle get estiloBarras =>
+      paleta.claro ? SystemUiOverlayStyle.dark : SystemUiOverlayStyle.light;
+
+  Future<void> cargar() async {
+    try {
+      final SharedPreferences sp = await SharedPreferences.getInstance();
+      eleccion = sp.getString(_clave) ?? 'tradicional';
+    } catch (_) {
+      eleccion = 'tradicional';
+    }
+    paleta = _resolver(eleccion);
+    if (!_observando) {
+      WidgetsBinding.instance.addObserver(this);
+      _observando = true;
+    }
+  }
+
+  PaletaTemplo _resolver(String id) {
+    if (id != automatico) return PaletasTemplo.porId(id);
+    final Brightness b = WidgetsBinding.instance.platformDispatcher.platformBrightness;
+    return b == Brightness.light ? PaletasTemplo.claro : PaletasTemplo.tradicional;
+  }
+
+  /// Cambia el tema y vuelve a montar la app. [modulo] es el módulo al que
+  /// volver; si [reabrir], se abre otra vez Apariencia.
+  Future<void> cambiar(String id, {int? modulo, bool reabrir = true}) async {
+    eleccion = id;
+    final PaletaTemplo nueva = _resolver(id);
+    try {
+      final SharedPreferences sp = await SharedPreferences.getInstance();
+      await sp.setString(_clave, id);
+    } catch (_) {}
+    if (identical(nueva, paleta)) {
+      notifyListeners();
+      return;
+    }
+    paleta = nueva;
+    _moduloPendiente = modulo;
+    _reabrirApariencia = reabrir;
+    version++;
+    notifyListeners();
+  }
+
+  /// Para la vista de prueba: aplica una paleta sin guardarla.
+  void probar(String id) {
+    paleta = PaletasTemplo.porId(id);
+    eleccion = id;
+  }
+
+  @override
+  void didChangePlatformBrightness() {
+    if (eleccion != automatico) return;
+    final PaletaTemplo nueva = _resolver(automatico);
+    if (identical(nueva, paleta)) return;
+    paleta = nueva;
+    version++;
+    notifyListeners();
+  }
+
+  /// Vista de prueba: abrir Apariencia al montar.
+  void reabrirAlMontar() => _reabrirApariencia = true;
+
+  /// Si se pinta con la paleta tradicional (para los pocos fondos que la
+  /// conservan tal cual).
+  static bool get esTradicional => identical(paleta, PaletasTemplo.tradicional);
+
+  int? tomarModulo() {
+    final int? m = _moduloPendiente;
+    _moduloPendiente = null;
+    return m;
+  }
+
+  bool tomarReapertura() {
+    final bool r = _reabrirApariencia;
+    _reabrirApariencia = false;
+    return r;
+  }
+
+  ThemeData temaMaterial() {
+    final bool claro = paleta.claro;
+    final ColorScheme esquema = claro
+        ? const ColorScheme.light(
+            primary: TempleColors.violeta,
+            secondary: TempleColors.violetaClaro,
+            surface: TempleColors.superficie,
+            error: TempleColors.error,
+            onSurface: TempleColors.texto,
+          )
+        : const ColorScheme.dark(
+            primary: TempleColors.violeta,
+            secondary: TempleColors.violetaClaro,
+            surface: TempleColors.superficie,
+            error: TempleColors.error,
+          );
+    return ThemeData(
+      useMaterial3: true,
+      brightness: claro ? Brightness.light : Brightness.dark,
+      scaffoldBackgroundColor: TempleColors.negro,
+      colorScheme: esquema,
+      textSelectionTheme: TextSelectionThemeData(
+        cursorColor: TempleColors.violetaClaro,
+        selectionColor: paleta.acento.withValues(alpha: 0.27),
+        selectionHandleColor: TempleColors.violeta,
+      ),
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// 60.4 PANTALLA «APARIENCIA»
+// ---------------------------------------------------------------------------
+
+/// Abre Apariencia. [modulo] es el módulo al que volver después de cambiar
+/// de tema; si no se da, se toma del módulo desde el que se abre.
+Future<void> abrirApariencia(BuildContext context, {int? modulo}) {
+  final int? m = modulo ?? context.dependOnInheritedWidgetOfExactType<TempleShellScope>()?.indice;
+  return Navigator.of(context).push(
+    MaterialPageRoute<void>(builder: (_) => AparienciaScreen(modulo: m)),
+  );
+}
+
+class AparienciaScreen extends StatelessWidget {
+  const AparienciaScreen({super.key, this.modulo});
+
+  /// Módulo al que vuelve la app al cambiar de tema.
+  final int? modulo;
+
+  void _elegir(BuildContext context, String id) {
+    if (id == TemaTemplo.instancia.eleccion) return;
+    HapticFeedback.selectionClick();
+    TemaTemplo.instancia.cambiar(id, modulo: modulo);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final String elegido = TemaTemplo.instancia.eleccion;
+    final double ancho = MediaQuery.sizeOf(context).width;
+    final int columnas = ancho >= 520 ? 3 : 2;
+    return Scaffold(
+      backgroundColor: TempleColors.negro,
+      body: SafeArea(
+        child: CustomScrollView(
+          slivers: <Widget>[
+            SliverToBoxAdapter(
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(8, 8, 20, 4),
+                child: Row(
+                  children: <Widget>[
+                    IconButton(
+                      onPressed: () => Navigator.of(context).maybePop(),
+                      icon: const Icon(Icons.arrow_back_rounded, color: TempleColors.texto),
+                      tooltip: 'Volver',
+                    ),
+                    const SizedBox(width: 4),
+                    const Text('Apariencia',
+                        style: TextStyle(fontSize: 22, fontWeight: FontWeight.w800, color: TempleColors.blancoLuna)),
+                  ],
+                ),
+              ),
+            ),
+            const SliverToBoxAdapter(
+              child: Padding(
+                padding: EdgeInsets.fromLTRB(22, 4, 22, 16),
+                child: Text(
+                  'Escoge la tonalidad del templo. Las escenas e ilustraciones (el jardín, el taller, la casa, '
+                  'tu guerrero) conservan sus colores.',
+                  style: TextStyle(fontSize: 13.5, height: 1.5, color: TempleColors.textoSuave),
+                ),
+              ),
+            ),
+            SliverToBoxAdapter(
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(18, 0, 18, 14),
+                child: _OpcionAutomatica(
+                  elegido: elegido == TemaTemplo.automatico,
+                  onTap: () => _elegir(context, TemaTemplo.automatico),
+                ),
+              ),
+            ),
+            SliverPadding(
+              padding: const EdgeInsets.fromLTRB(18, 0, 18, 28),
+              sliver: SliverGrid(
+                gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+                  crossAxisCount: columnas,
+                  mainAxisSpacing: 14,
+                  crossAxisSpacing: 14,
+                  childAspectRatio: 0.74,
+                ),
+                delegate: SliverChildBuilderDelegate(
+                  (BuildContext c, int i) {
+                    final PaletaTemplo p = PaletasTemplo.todas[i];
+                    return _TarjetaTema(
+                      paleta: p,
+                      elegido: elegido == p.id,
+                      onTap: () => _elegir(context, p.id),
+                    );
+                  },
+                  childCount: PaletasTemplo.todas.length,
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _OpcionAutomatica extends StatelessWidget {
+  const _OpcionAutomatica({required this.elegido, required this.onTap});
+  final bool elegido;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: TempleColors.superficie,
+      borderRadius: BorderRadius.circular(TempleRadius.tarjeta),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(TempleRadius.tarjeta),
+        onTap: onTap,
+        child: Container(
+          padding: const EdgeInsets.all(14),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(TempleRadius.tarjeta),
+            border: Border.all(
+              color: elegido ? TempleColors.violeta : TempleColors.borde,
+              width: elegido ? 1.6 : 1,
+            ),
+          ),
+          child: Row(
+            children: <Widget>[
+              Container(
+                width: 44,
+                height: 44,
+                decoration: const BoxDecoration(
+                  shape: BoxShape.circle,
+                  gradient: LinearGradient(
+                    begin: Alignment.topLeft,
+                    end: Alignment.bottomRight,
+                    stops: <double>[0.5, 0.5],
+                    colors: <Color>[Color(0xFFF6F3FA), Color(0xFF15121F)],
+                  ),
+                ),
+                child: const Icon(Icons.brightness_6_outlined, size: 20, color: Color(0xFF8B5CF6)),
+              ),
+              const SizedBox(width: 14),
+              const Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: <Widget>[
+                    Text('Automático',
+                        style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: TempleColors.blancoLuna)),
+                    SizedBox(height: 3),
+                    Text('Claro u oscuro según tu teléfono o computador.',
+                        style: TextStyle(fontSize: 12.5, height: 1.35, color: TempleColors.textoSuave)),
+                  ],
+                ),
+              ),
+              if (elegido) const Icon(Icons.check_circle_rounded, color: TempleColors.violeta),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Tarjeta con una vista previa dibujada con los colores de su propia paleta.
+class _TarjetaTema extends StatelessWidget {
+  const _TarjetaTema({required this.paleta, required this.elegido, required this.onTap});
+  final PaletaTemplo paleta;
+  final bool elegido;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final PaletaTemplo p = paleta;
+    return Semantics(
+      button: true,
+      selected: elegido,
+      label: 'Tema ${p.nombre}',
+      child: GestureDetector(
+        onTap: onTap,
+        child: AnimatedContainer(
+          duration: TempleMotion.rapido,
+          decoration: BoxDecoration(
+            color: TempleColors.superficie,
+            borderRadius: BorderRadius.circular(TempleRadius.tarjeta),
+            border: Border.all(
+              color: elegido ? TempleColors.violeta : TempleColors.borde,
+              width: elegido ? 2 : 1,
+            ),
+          ),
+          padding: const EdgeInsets.all(8),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: <Widget>[
+              Expanded(
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(14),
+                  child: DecoratedBox(
+                    decoration: BoxDecoration(
+                      gradient: LinearGradient(
+                        begin: Alignment.topCenter,
+                        end: Alignment.bottomCenter,
+                        colors: p.degradado,
+                      ),
+                    ),
+                    child: Padding(
+                      padding: const EdgeInsets.all(10),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: <Widget>[
+                          Row(
+                            children: <Widget>[
+                              Container(
+                                width: 18,
+                                height: 18,
+                                decoration: BoxDecoration(shape: BoxShape.circle, color: p.acento),
+                              ),
+                              const SizedBox(width: 6),
+                              Expanded(
+                                child: Container(
+                                  height: 7,
+                                  decoration: BoxDecoration(
+                                      color: p.titulo.withValues(alpha: 0.85), borderRadius: BorderRadius.circular(4)),
+                                ),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 10),
+                          Expanded(
+                            child: Container(
+                              width: double.infinity,
+                              padding: const EdgeInsets.all(8),
+                              decoration: BoxDecoration(
+                                color: p.tarjeta,
+                                borderRadius: BorderRadius.circular(10),
+                                border: Border.all(color: p.bordeTarjeta),
+                              ),
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: <Widget>[
+                                  Container(
+                                    height: 6,
+                                    width: 54,
+                                    decoration: BoxDecoration(
+                                        color: p.titulo, borderRadius: BorderRadius.circular(3)),
+                                  ),
+                                  const SizedBox(height: 6),
+                                  Container(
+                                    height: 5,
+                                    width: 80,
+                                    decoration: BoxDecoration(
+                                        color: p.textoSecundario.withValues(alpha: 0.7),
+                                        borderRadius: BorderRadius.circular(3)),
+                                  ),
+                                  const Spacer(),
+                                  ClipRRect(
+                                    borderRadius: BorderRadius.circular(3),
+                                    child: LinearProgressIndicator(
+                                      value: 0.62,
+                                      minHeight: 5,
+                                      backgroundColor: p.bordeTarjeta,
+                                      color: p.acento,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ),
+                          const SizedBox(height: 8),
+                          Container(
+                            height: 22,
+                            alignment: Alignment.center,
+                            decoration: BoxDecoration(color: p.acento, borderRadius: BorderRadius.circular(11)),
+                            child: Container(
+                              width: 34,
+                              height: 5,
+                              decoration: BoxDecoration(
+                                  color: Colors.white.withValues(alpha: 0.9), borderRadius: BorderRadius.circular(3)),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 8),
+              Row(
+                children: <Widget>[
+                  Expanded(
+                    child: Text(p.nombre,
+                        style: const TextStyle(
+                            fontSize: 14.5, fontWeight: FontWeight.w700, color: TempleColors.blancoLuna)),
+                  ),
+                  if (elegido) const Icon(Icons.check_circle_rounded, size: 18, color: TempleColors.violeta),
+                ],
+              ),
+              const SizedBox(height: 2),
+              Text(p.descripcion,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(fontSize: 11.5, height: 1.35, color: TempleColors.textoSuave)),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// 60.5 VISTA DE PRUEBA (solo compilaciones de prueba, nunca se publica)
+//
+// Con --dart-define=VISTA_PRUEBA=true la web abre los módulos sin cuenta, con
+// datos vacíos, para revisar cada tema con capturas:
+//   ?tema=claro&modulo=2           un módulo (0 Dojo … 4 Ranked)
+//   ?tema=sakura&pantalla=apariencia
+//   ?pantalla=login
+// ---------------------------------------------------------------------------
+
+const bool vistaPrueba = bool.fromEnvironment('VISTA_PRUEBA');
+
+String? parametroPrueba(String clave) {
+  if (!vistaPrueba || !kIsWeb) return null;
+  return Uri.base.queryParameters[clave];
 }
