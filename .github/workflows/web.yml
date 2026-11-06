@@ -39,11 +39,19 @@ jobs:
       - name: Compilar
         id: compilar
         run: |
-          flutter build web --release --base-href /app/ --no-web-resources-cdn
+          # WebAssembly corre el código más rápido en Chrome, Edge, Firefox y
+          # Safari reciente; los navegadores viejos reciben la versión en
+          # JavaScript sola. Si algún paquete no es compatible, se compila solo JS.
+          WASM=true
+          if ! flutter build web --release --wasm --base-href /app/ --no-web-resources-cdn; then
+            echo "::warning::No se pudo compilar con WebAssembly; se publica solo JavaScript."
+            WASM=false
+            flutter build web --release --base-href /app/ --no-web-resources-cdn
+          fi
           VERSION=$(grep '^version:' pubspec.yaml | sed 's/version: *//; s/+.*//')
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-          printf '{"version":"%s","compilacion":%s,"commit":"%s","fecha":"%s"}\n' \
-            "$VERSION" "${{ github.run_number }}" "${{ github.sha }}" "$(date -u +%FT%TZ)" > build/web/version.json
+          printf '{"version":"%s","compilacion":%s,"commit":"%s","fecha":"%s","wasm":%s}\n' \
+            "$VERSION" "${{ github.run_number }}" "${{ github.sha }}" "$(date -u +%FT%TZ)" "$WASM" > build/web/version.json
           du -sh build/web
 
       - name: Probar en navegadores
@@ -60,6 +68,7 @@ jobs:
           (cd sitio && nohup python3 -m http.server 8123 >/dev/null 2>&1 &)
           sleep 2
           python3 ci/probar_web.py http://127.0.0.1:8123/app/ salida
+          python3 ci/medir_web.py http://127.0.0.1:8123/app/ salida/rendimiento.json 8 || echo "::warning::No se pudo medir el rendimiento."
 
       - name: Guardar en la rama web-build
         if: always() && steps.compilar.outcome == 'success'

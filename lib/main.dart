@@ -19,7 +19,8 @@ import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:flutter/foundation.dart' show kIsWeb, kDebugMode, defaultTargetPlatform, TargetPlatform, debugPrint, ChangeNotifier, compute;
+import 'package:flutter/foundation.dart' show kIsWeb, kDebugMode, defaultTargetPlatform, TargetPlatform, debugPrint, ChangeNotifier, compute, ValueListenable;
+import 'package:flutter/scheduler.dart' show Ticker, TickerCallback, TickerProvider;
 import 'package:flutter/rendering.dart' show RenderRepaintBoundary;
 import 'dart:typed_data' show Uint8List, Float64List, ByteData;
 
@@ -952,7 +953,10 @@ class DojoBackground extends StatefulWidget {
 }
 
 class _DojoBackgroundState extends State<DojoBackground>
-    with SingleTickerProviderStateMixin {
+    with TickerDecorativo {
+  @override
+  int get cuadrosWeb => Rendimiento.cuadrosLentos;
+
   late final AnimationController _c = AnimationController(
     vsync: this,
     duration: const Duration(seconds: 46),
@@ -1243,7 +1247,7 @@ class PetalField extends StatefulWidget {
 }
 
 class _PetalFieldState extends State<PetalField>
-    with SingleTickerProviderStateMixin {
+    with TickerDecorativo {
   late final AnimationController _c = AnimationController(
     vsync: this,
     duration: const Duration(seconds: 18),
@@ -2175,13 +2179,12 @@ class TempleNavBar extends StatelessWidget {
   Widget build(BuildContext context) {
     final double seguro = MediaQuery.paddingOf(context).bottom;
 
-    return ClipRect(
-      child: BackdropFilter(
-        filter: ImageFilter.blur(sigmaX: 18, sigmaY: 18),
-        child: Container(
+    // En la web el desenfoque del fondo se recalculaba en cada cuadro: ahí va
+    // un color casi opaco, que se ve igual y cuesta casi nada (59).
+    final Widget barra = Container(
           padding: EdgeInsets.only(bottom: seguro),
           decoration: BoxDecoration(
-            color: TempleColors.negro.withValues(alpha: 0.82),
+            color: TempleColors.negro.withValues(alpha: Rendimiento.ligero ? 0.96 : 0.82),
             border: Border(
               top: BorderSide(
                 color: TempleColors.borde.withValues(alpha: 0.9),
@@ -2203,7 +2206,12 @@ class TempleNavBar extends StatelessWidget {
               }),
             ),
           ),
-        ),
+        );
+    if (Rendimiento.ligero) return barra;
+    return ClipRect(
+      child: BackdropFilter(
+        filter: ImageFilter.blur(sigmaX: 18, sigmaY: 18),
+        child: barra,
       ),
     );
   }
@@ -2441,7 +2449,10 @@ class EscenaDelDia extends StatefulWidget {
 }
 
 class _EscenaDelDiaState extends State<EscenaDelDia>
-    with SingleTickerProviderStateMixin {
+    with TickerDecorativo {
+  @override
+  int get cuadrosWeb => Rendimiento.cuadrosLentos;
+
   late final AnimationController _deriva = AnimationController(
     vsync: this,
     duration: const Duration(seconds: 30),
@@ -11650,7 +11661,10 @@ class EscenaViva extends StatefulWidget {
 }
 
 class _EscenaVivaState extends State<EscenaViva>
-    with SingleTickerProviderStateMixin {
+    with TickerDecorativo {
+  @override
+  int get cuadrosWeb => Rendimiento.cuadrosLentos;
+
   late final AnimationController _c = AnimationController(
     vsync: this,
     duration: const Duration(seconds: 30),
@@ -14450,7 +14464,8 @@ class MarcoVivo extends StatefulWidget {
   State<MarcoVivo> createState() => _MarcoVivoState();
 }
 
-class _MarcoVivoState extends State<MarcoVivo> with SingleTickerProviderStateMixin {
+class _MarcoVivoState extends State<MarcoVivo>
+    with TickerDecorativo {
   late final AnimationController _c = AnimationController(vsync: this, duration: const Duration(seconds: 6));
 
   @override
@@ -17306,7 +17321,10 @@ class VinetaPerfil extends StatefulWidget {
 }
 
 class _VinetaPerfilState extends State<VinetaPerfil>
-    with SingleTickerProviderStateMixin {
+    with TickerDecorativo {
+  @override
+  int get cuadrosWeb => Rendimiento.cuadrosLentos;
+
   late final AnimationController _c = AnimationController(
     vsync: this,
     duration: const Duration(seconds: 34),
@@ -23339,7 +23357,7 @@ class FuegoScreen extends StatefulWidget {
 }
 
 class _FuegoScreenState extends State<FuegoScreen>
-    with SingleTickerProviderStateMixin {
+    with TickerDecorativo {
   late final AnimationController _c = AnimationController(
     vsync: this,
     duration: const Duration(seconds: 3),
@@ -26910,7 +26928,10 @@ class EscenaCasa extends StatefulWidget {
 }
 
 class _EscenaCasaState extends State<EscenaCasa>
-    with SingleTickerProviderStateMixin {
+    with TickerDecorativo {
+  @override
+  int get cuadrosWeb => Rendimiento.cuadrosLentos;
+
   late final AnimationController _c = AnimationController(
     vsync: this,
     duration: const Duration(seconds: 40),
@@ -28527,7 +28548,7 @@ class SalaNueveScreen extends StatefulWidget {
 }
 
 class _SalaNueveScreenState extends State<SalaNueveScreen>
-    with SingleTickerProviderStateMixin {
+    with TickerDecorativo {
   late final AnimationController _c = AnimationController(
     vsync: this,
     duration: const Duration(seconds: 6),
@@ -29438,7 +29459,10 @@ class JardinScreen extends StatefulWidget {
 }
 
 class _JardinScreenState extends State<JardinScreen>
-    with SingleTickerProviderStateMixin {
+    with TickerDecorativo {
+  @override
+  int get cuadrosWeb => Rendimiento.cuadrosLentos;
+
   late final AnimationController _c = AnimationController(
     vsync: this,
     duration: const Duration(seconds: 22),
@@ -30162,7 +30186,7 @@ class HogueraScreen extends StatefulWidget {
 }
 
 class _HogueraScreenState extends State<HogueraScreen>
-    with SingleTickerProviderStateMixin {
+    with TickerDecorativo {
   late final AnimationController _c = AnimationController(
     vsync: this,
     duration: const Duration(seconds: 3),
@@ -30975,7 +30999,7 @@ class HabitanteScreen extends StatefulWidget {
 }
 
 class _HabitanteScreenState extends State<HabitanteScreen>
-    with SingleTickerProviderStateMixin {
+    with TickerDecorativo {
   late final AnimationController _c = AnimationController(
     vsync: this,
     duration: const Duration(seconds: 5),
@@ -33699,7 +33723,7 @@ class AvatarTenshi extends StatefulWidget {
 }
 
 class _AvatarTenshiState extends State<AvatarTenshi>
-    with SingleTickerProviderStateMixin {
+    with TickerDecorativo {
   late final AnimationController _c = AnimationController(
     vsync: this,
     duration: const Duration(seconds: 12),
@@ -42817,7 +42841,8 @@ class SiluetaRanked extends StatefulWidget {
   State<SiluetaRanked> createState() => _SiluetaRankedState();
 }
 
-class _SiluetaRankedState extends State<SiluetaRanked> with SingleTickerProviderStateMixin {
+class _SiluetaRankedState extends State<SiluetaRanked>
+    with TickerDecorativo {
   // Reloj de 4 s en bucle (no de ida y vuelta): la respiración, el escaneo y
   // las brasas avanzan sin frenar en los extremos.
   late final AnimationController _c =
@@ -43164,7 +43189,8 @@ class EmblemaRanked extends StatefulWidget {
   State<EmblemaRanked> createState() => _EmblemaRankedState();
 }
 
-class _EmblemaRankedState extends State<EmblemaRanked> with SingleTickerProviderStateMixin {
+class _EmblemaRankedState extends State<EmblemaRanked>
+    with TickerDecorativo {
   late final AnimationController _c =
       AnimationController(vsync: this, duration: const Duration(seconds: 9));
 
@@ -47287,7 +47313,8 @@ class CompararFotosScreen extends StatefulWidget {
   State<CompararFotosScreen> createState() => _CompararFotosScreenState();
 }
 
-class _CompararFotosScreenState extends State<CompararFotosScreen> with SingleTickerProviderStateMixin {
+class _CompararFotosScreenState extends State<CompararFotosScreen>
+    with TickerDecorativo {
   late FotoProgreso _antes = widget.fotos.last;
   late FotoProgreso _despues = widget.fotos.first;
   double _corte = 0.5;
@@ -49544,7 +49571,8 @@ class AvatarEjercicio extends StatefulWidget {
   State<AvatarEjercicio> createState() => _AvatarEjercicioState();
 }
 
-class _AvatarEjercicioState extends State<AvatarEjercicio> with SingleTickerProviderStateMixin {
+class _AvatarEjercicioState extends State<AvatarEjercicio>
+    with TickerDecorativo {
   late final AnimationController _c = AnimationController(vsync: this, duration: _duracion);
 
   Duration get _duracion => Duration(milliseconds: (3200 / widget.velocidad.clamp(0.25, 2.0)).round());
@@ -51955,7 +51983,8 @@ class GuerreroRanked extends StatefulWidget {
   State<GuerreroRanked> createState() => _GuerreroRankedState();
 }
 
-class _GuerreroRankedState extends State<GuerreroRanked> with SingleTickerProviderStateMixin {
+class _GuerreroRankedState extends State<GuerreroRanked>
+    with TickerDecorativo {
   late final AnimationController _c =
       AnimationController(vsync: this, duration: const Duration(milliseconds: 4000));
 
@@ -52508,7 +52537,8 @@ class _Celebracion extends StatefulWidget {
   State<_Celebracion> createState() => _CelebracionState();
 }
 
-class _CelebracionState extends State<_Celebracion> with TickerProviderStateMixin {
+class _CelebracionState extends State<_Celebracion>
+    with TickerDecorativo {
   late final AnimationController _entrada =
       AnimationController(vsync: this, duration: const Duration(milliseconds: 1600));
   late final AnimationController _giro = AnimationController(vsync: this, duration: const Duration(seconds: 9));
@@ -53113,7 +53143,8 @@ class EmblemaPase extends StatefulWidget {
   State<EmblemaPase> createState() => _EmblemaPaseState();
 }
 
-class _EmblemaPaseState extends State<EmblemaPase> with SingleTickerProviderStateMixin {
+class _EmblemaPaseState extends State<EmblemaPase>
+    with TickerDecorativo {
   late final AnimationController _c = AnimationController(vsync: this, duration: const Duration(milliseconds: 3200));
 
   @override
@@ -53343,7 +53374,8 @@ class BotonOro extends StatefulWidget {
   State<BotonOro> createState() => _BotonOroState();
 }
 
-class _BotonOroState extends State<BotonOro> with SingleTickerProviderStateMixin {
+class _BotonOroState extends State<BotonOro>
+    with TickerDecorativo {
   late final AnimationController _c = AnimationController(vsync: this, duration: const Duration(milliseconds: 2600));
 
   @override
@@ -53864,7 +53896,11 @@ class PaseTemploScreen extends StatefulWidget {
   State<PaseTemploScreen> createState() => _PaseTemploScreenState();
 }
 
-class _PaseTemploScreenState extends State<PaseTemploScreen> with SingleTickerProviderStateMixin {
+class _PaseTemploScreenState extends State<PaseTemploScreen>
+    with TickerDecorativo {
+  @override
+  int get cuadrosWeb => Rendimiento.cuadrosLentos;
+
   late final AnimationController _cielo = AnimationController(vsync: this, duration: const Duration(seconds: 24));
   final PageController _vitrina = PageController(viewportFraction: 0.84);
   PlanPase _plan = PlanPase.anual;
@@ -54627,7 +54663,8 @@ class _MiniAnimada extends StatefulWidget {
   State<_MiniAnimada> createState() => _MiniAnimadaState();
 }
 
-class _MiniAnimadaState extends State<_MiniAnimada> with SingleTickerProviderStateMixin {
+class _MiniAnimadaState extends State<_MiniAnimada>
+    with TickerDecorativo {
   late final AnimationController _c = AnimationController(vsync: this, duration: const Duration(seconds: 5))..repeat();
 
   @override
@@ -58692,7 +58729,8 @@ class TarjetaMetaDojo extends StatefulWidget {
   State<TarjetaMetaDojo> createState() => _TarjetaMetaDojoState();
 }
 
-class _TarjetaMetaDojoState extends State<TarjetaMetaDojo> with SingleTickerProviderStateMixin {
+class _TarjetaMetaDojoState extends State<TarjetaMetaDojo>
+    with TickerDecorativo {
   late final AnimationController _brillo = AnimationController(vsync: this, duration: const Duration(seconds: 4))
     ..repeat();
 
@@ -59698,7 +59736,8 @@ class PetalosSakura extends StatefulWidget {
   State<PetalosSakura> createState() => _PetalosSakuraState();
 }
 
-class _PetalosSakuraState extends State<PetalosSakura> with SingleTickerProviderStateMixin {
+class _PetalosSakuraState extends State<PetalosSakura>
+    with TickerDecorativo {
   late final AnimationController _c = AnimationController(vsync: this, duration: const Duration(seconds: 60))
     ..addListener(_avanzar);
 
@@ -73489,11 +73528,9 @@ class MarcoWeb extends StatelessWidget {
       height: alto + 2.4,
       decoration: BoxDecoration(
         borderRadius: BorderRadius.circular(38),
+        // Sin sombras borrosas: en la web se volvían a dibujar en cada cuadro.
+        // El halo del fondo hace ese papel.
         border: Border.all(color: TempleColors.bordeVivo, width: 1.2),
-        boxShadow: <BoxShadow>[
-          BoxShadow(color: TempleColors.violeta.withValues(alpha: 0.16), blurRadius: 80, spreadRadius: 6),
-          const BoxShadow(color: Color(0xB3000000), blurRadius: 34, offset: Offset(0, 20)),
-        ],
       ),
       child: ClipRRect(
         borderRadius: BorderRadius.circular(37),
@@ -73678,4 +73715,166 @@ class DesplazamientoTemplo extends MaterialScrollBehavior {
         ui.PointerDeviceKind.mouse,
         ui.PointerDeviceKind.trackpad,
       };
+}
+
+// ===========================================================================
+// 59. RENDIMIENTO EN LA WEB
+//
+// En el navegador, Flutter vuelve a dibujar la pantalla entera en cada
+// cuadro. Las animaciones decorativas que se repiten sin parar (el cielo,
+// los pétalos, las escenas de la Casa y el Dojo, el guerrero de Ranked, el
+// brillo del botón del Pase…) obligaban a dibujar 60 veces por segundo
+// aunque no pasara nada importante.
+//
+// En la web esas animaciones avanzan al ritmo de un reloj decorativo de 24
+// cuadros por segundo (12 para los cielos y escenas lentas) y se dibujan
+// todas en el mismo cuadro. Lo que responde al dedo (botones, desplazamiento,
+// transiciones, el teclado) sigue a 60. En la app instalada no cambia nada.
+// ===========================================================================
+
+class Rendimiento {
+  const Rendimiento._();
+
+  /// Modo ligero: en la web.
+  static bool get ligero => kIsWeb;
+
+  /// Latidos por segundo del reloj de la decoración en la web.
+  static const int cuadrosDecoracion = 24;
+
+  /// Ritmo de los cielos y escenas lentas (bucles de 20 segundos o más).
+  static const int cuadrosLentos = 12;
+}
+
+/// Reloj único de la decoración en la web: junta todas las animaciones
+/// lentas para que se dibujen en el mismo cuadro, nunca más de
+/// [Rendimiento.cuadrosDecoracion] veces por segundo.
+class _RelojDecorativo {
+  _RelojDecorativo._();
+  static final _RelojDecorativo instancia = _RelojDecorativo._();
+
+  static const int _periodoUs = 1000000 ~/ Rendimiento.cuadrosDecoracion;
+  final Set<_TickerLento> _esperando = <_TickerLento>{};
+  final Stopwatch _reloj = Stopwatch()..start();
+  Timer? _timer;
+
+  int get ahora => _reloj.elapsedMicroseconds;
+
+  void esperar(_TickerLento t) {
+    _esperando.add(t);
+    _timer ??= Timer(Duration(microseconds: _periodoUs - (ahora % _periodoUs)), _latido);
+  }
+
+  void soltar(_TickerLento t) {
+    _esperando.remove(t);
+    if (_esperando.isEmpty) {
+      _timer?.cancel();
+      _timer = null;
+    }
+  }
+
+  void _latido() {
+    _timer = null;
+    final int t = ahora;
+    final List<_TickerLento> listos = _esperando.where((_TickerLento x) => x._listoEn <= t).toList();
+    _esperando.removeAll(listos);
+    for (final _TickerLento x in listos) {
+      x._programarYa();
+    }
+    if (_esperando.isNotEmpty) {
+      _timer = Timer(Duration(microseconds: _periodoUs - (ahora % _periodoUs)), _latido);
+    }
+  }
+}
+
+/// Ticker que, en vez de pedir un cuadro cada vez que la pantalla refresca,
+/// espera el latido del reloj decorativo. El tiempo de la animación sigue
+/// siendo el real: solo se dibujan menos cuadros.
+class _TickerLento extends Ticker {
+  _TickerLento(super.onTick, {required this.intervaloUs, super.debugLabel});
+
+  final int intervaloUs;
+  int _listoEn = 0;
+
+  @override
+  void scheduleTick({bool rescheduling = false}) {
+    if (!rescheduling) {
+      // El primer cuadro (al empezar o al volver a la pantalla) va ya.
+      _RelojDecorativo.instancia.soltar(this);
+      super.scheduleTick();
+      return;
+    }
+    // Margen de 3 ms para no perder un latido por redondeo.
+    _listoEn = _RelojDecorativo.instancia.ahora + intervaloUs - 3000;
+    _RelojDecorativo.instancia.esperar(this);
+  }
+
+  void _programarYa() {
+    if (shouldScheduleTick) super.scheduleTick(rescheduling: true);
+  }
+
+  @override
+  void unscheduleTick() {
+    _RelojDecorativo.instancia.soltar(this);
+    if (scheduled) super.unscheduleTick();
+  }
+
+  @override
+  void dispose() {
+    _RelojDecorativo.instancia.soltar(this);
+    super.dispose();
+  }
+}
+
+/// Para las animaciones decorativas: hace lo mismo que
+/// SingleTickerProviderStateMixin (y admite varios controladores), y en la
+/// web las pone al ritmo del reloj decorativo. Se pausan solas cuando su
+/// pantalla queda tapada, igual que antes.
+mixin TickerDecorativo<T extends StatefulWidget> on State<T> implements TickerProvider {
+  Set<Ticker>? _tickersDecorativos;
+  ValueListenable<bool>? _modoTicker;
+
+  /// Cuadros por segundo de esta decoración en la web.
+  int get cuadrosWeb => Rendimiento.cuadrosDecoracion;
+
+  @override
+  Ticker createTicker(TickerCallback onTick) {
+    _escucharModoTicker();
+    final String etiqueta = 'decorativo ${widget.runtimeType}';
+    final int cuadros = cuadrosWeb.clamp(1, Rendimiento.cuadrosDecoracion);
+    final Ticker t = Rendimiento.ligero
+        ? _TickerLento(onTick, intervaloUs: 1000000 ~/ cuadros, debugLabel: etiqueta)
+        : Ticker(onTick, debugLabel: etiqueta);
+    t.muted = !(_modoTicker?.value ?? true);
+    (_tickersDecorativos ??= <Ticker>{}).add(t);
+    return t;
+  }
+
+  void _escucharModoTicker() {
+    final ValueListenable<bool> nuevo = TickerMode.getNotifier(context);
+    if (identical(nuevo, _modoTicker)) return;
+    _modoTicker?.removeListener(_aplicarModoTicker);
+    nuevo.addListener(_aplicarModoTicker);
+    _modoTicker = nuevo;
+  }
+
+  void _aplicarModoTicker() {
+    final bool activo = _modoTicker?.value ?? true;
+    for (final Ticker t in _tickersDecorativos ?? const <Ticker>{}) {
+      t.muted = !activo;
+    }
+  }
+
+  @override
+  void activate() {
+    super.activate();
+    _escucharModoTicker();
+    _aplicarModoTicker();
+  }
+
+  @override
+  void dispose() {
+    _modoTicker?.removeListener(_aplicarModoTicker);
+    _modoTicker = null;
+    super.dispose();
+  }
 }
