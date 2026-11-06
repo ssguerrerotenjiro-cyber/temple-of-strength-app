@@ -48,10 +48,14 @@ jobs:
 
       - name: Probar en navegadores
         id: probar
+        timeout-minutes: 20
         run: |
           python3 -m pip install --quiet playwright
-          python3 -m playwright install --with-deps chromium
-          python3 -m playwright install --with-deps webkit || echo "::warning::WebKit no se pudo instalar; se prueba solo en Chromium."
+          # Chrome ya viene en el servidor de GitHub. Instalar WebKit con sus
+          # dependencias tardó más de media hora, así que se intenta sin ellas y
+          # con tiempo límite: si no queda listo, esa prueba se omite.
+          if ! command -v google-chrome >/dev/null; then timeout 600 python3 -m playwright install chromium; fi
+          timeout 300 python3 -m playwright install webkit || echo "::warning::WebKit no se instaló; se prueba en Chrome."
           mkdir -p sitio && cp -r build/web sitio/app
           (cd sitio && nohup python3 -m http.server 8123 >/dev/null 2>&1 &)
           sleep 2

@@ -24,10 +24,17 @@ def dispositivo(p, nombre):
 
 
 def probar(p, caso, motor, opciones, obligatorio=True):
-    try:
-        navegador = getattr(p, motor).launch()
-    except Exception as e:  # WebKit puede no estar instalado
-        return {'caso': caso, 'ok': None, 'obligatorio': False, 'motivo': f'Sin {motor}: {e}'[:300]}
+    navegador = None
+    # En GitHub ya viene Chrome instalado: se usa ese y, si no está, el de Playwright.
+    for canal in (('chrome', None) if motor == 'chromium' else (None,)):
+        try:
+            navegador = getattr(p, motor).launch(**({'channel': canal} if canal else {}))
+            break
+        except Exception as e:  # WebKit o Chrome pueden no estar instalados
+            falla = e
+    if navegador is None:
+        return {'caso': caso, 'ok': None if not obligatorio else False, 'obligatorio': obligatorio,
+                'motivo': f'Sin {motor}: {falla}'[:300]}
     contexto = navegador.new_context(locale='es-CO', **opciones)
     pagina = contexto.new_page()
     errores, consola = [], []
