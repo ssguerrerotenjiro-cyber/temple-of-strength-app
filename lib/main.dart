@@ -11755,7 +11755,7 @@ class _EscenaVivaState extends State<EscenaViva>
                       fontSize: 19,
                       height: 1.4,
                       letterSpacing: 3,
-                      color: TempleColors.blancoLuna,
+                      color: ColoresTradicion.blancoLuna,
                       shadows: <Shadow>[
                         Shadow(color: Colors.black87, blurRadius: 12),
                       ],
@@ -11767,7 +11767,7 @@ class _EscenaVivaState extends State<EscenaViva>
                     textAlign: TextAlign.center,
                     style: TextStyle(
                       fontSize: 12.5,
-                      color: TempleColors.texto.withValues(alpha: 0.82),
+                      color: ColoresTradicion.texto.withValues(alpha: 0.82),
                       shadows: const <Shadow>[
                         Shadow(color: Colors.black87, blurRadius: 10),
                       ],
@@ -27871,7 +27871,7 @@ class _CasaScreenState extends State<CasaScreen> {
                         style: const TextStyle(
                           fontSize: 21,
                           fontWeight: FontWeight.w600,
-                          color: TempleColors.blancoLuna,
+                          color: ColoresTradicion.blancoLuna,
                           shadows: <Shadow>[
                             Shadow(color: Colors.black87, blurRadius: 12),
                           ],
@@ -27882,7 +27882,7 @@ class _CasaScreenState extends State<CasaScreen> {
                         estado.estacion.nota,
                         style: TextStyle(
                           fontSize: 12,
-                          color: TempleColors.texto.withValues(alpha: 0.85),
+                          color: ColoresTradicion.texto.withValues(alpha: 0.85),
                           shadows: const <Shadow>[
                             Shadow(color: Colors.black87, blurRadius: 10),
                           ],
@@ -27965,7 +27965,7 @@ class _Sello2 extends StatelessWidget {
   Widget build(BuildContext context) => Container(
         padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 6),
         decoration: BoxDecoration(
-          color: TempleColors.negro.withValues(alpha: 0.45),
+          color: ColoresTradicion.negro.withValues(alpha: 0.45),
           borderRadius: BorderRadius.circular(999),
           border:
               Border.all(color: Colors.white.withValues(alpha: 0.16)),
@@ -27976,12 +27976,12 @@ class _Sello2 extends StatelessWidget {
             if (texto.isNotEmpty) ...<Widget>[
               Text(texto,
                   style: const TextStyle(
-                      fontSize: 13, color: TempleColors.blancoLuna)),
+                      fontSize: 13, color: ColoresTradicion.blancoLuna)),
               const SizedBox(width: 7),
             ],
             Text(nota,
                 style: const TextStyle(
-                    fontSize: 11, color: TempleColors.texto)),
+                    fontSize: 11, color: ColoresTradicion.texto)),
           ],
         ),
       );
@@ -33955,8 +33955,8 @@ class _AvatarTenshiPainter extends CustomPainter {
           begin: Alignment.topLeft,
           end: Alignment.bottomRight,
           colors: <Color>[
-            Color.lerp(ColoresTradicion.blancoLuna, acento, 0.18)!,
-            Color.lerp(acento, ColoresTradicion.negro, 0.35)!,
+            Color.lerp(TempleColors.blancoLuna, acento, 0.18)!,
+            Color.lerp(acento, TempleColors.negro, 0.35)!,
           ],
         ).createShader(Rect.fromCircle(center: c, radius: r)),
     );
@@ -33966,7 +33966,7 @@ class _AvatarTenshiPainter extends CustomPainter {
       Paint()
         ..style = PaintingStyle.stroke
         ..strokeWidth = 1.1
-        ..color = Color.lerp(ColoresTradicion.blancoLuna, acento, 0.45)!
+        ..color = Color.lerp(TempleColors.blancoLuna, acento, 0.45)!
             .withValues(alpha: 0.9),
     );
   }
@@ -33981,7 +33981,7 @@ class _AvatarTenshiPainter extends CustomPainter {
       ..style = PaintingStyle.stroke
       ..strokeWidth = math.max(1.0, r * 0.055)
       ..strokeCap = StrokeCap.round
-      ..color = Color.lerp(ColoresTradicion.blancoLuna, acento, 0.30)!
+      ..color = Color.lerp(TempleColors.blancoLuna, acento, 0.30)!
           .withValues(alpha: 0.92);
 
     final double izq = o.dx - a / 2;
@@ -40995,7 +40995,7 @@ class BotonMenuTemplo extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final Widget icono = Icon(Icons.more_vert_rounded,
-        color: sobreImagen ? TempleColors.blancoLuna : TempleColors.textoSuave);
+        color: sobreImagen ? ColoresTradicion.blancoLuna : TempleColors.textoSuave);
     // El Pase va siempre al lado de los ajustes, en todos los módulos.
     return Row(
       mainAxisSize: MainAxisSize.min,
@@ -41015,8 +41015,8 @@ class BotonMenuTemplo extends StatelessWidget {
       },
       style: sobreImagen
           ? IconButton.styleFrom(
-              backgroundColor: TempleColors.negro.withValues(alpha: 0.45),
-              side: BorderSide(color: TempleColors.blancoLuna.withValues(alpha: 0.18)),
+              backgroundColor: ColoresTradicion.negro.withValues(alpha: 0.45),
+              side: BorderSide(color: ColoresTradicion.blancoLuna.withValues(alpha: 0.18)),
             )
           : null,
       icon: icono,

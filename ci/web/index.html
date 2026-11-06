@@ -23,23 +23,50 @@
 
   <title>Temple of Strength · versión web</title>
 
+  <script>
+    // Tema guardado (el mismo que eligen la app y la página): colorea la
+    // pantalla de carga antes de que llegue la app.
+    (function () {
+      var T = {
+        tradicional: ['#06050A', '#1B1233', '#9A93B0', '#F4F1FA', '#8B5CF6', '#1D1829'],
+        oscuro: ['#0B0B0D', '#1C1C22', '#9A9AA4', '#F4F4F6', '#8B5CF6', '#202024'],
+        claro: ['#F6F3FA', '#E9E0F7', '#5E5671', '#1A1526', '#6D3FE0', '#E2D9EF'],
+        sakura: ['#0A0609', '#351024', '#B0949F', '#FBF1F6', '#D9508A', '#23161F'],
+        jade: ['#050A09', '#0E2E27', '#8EA89F', '#EEF8F4', '#1E9E74', '#15231F'],
+        oceano: ['#04070D', '#0F1F45', '#8F9CB5', '#F0F5FF', '#3D7BEF', '#141F33'],
+        carmesi: ['#0B0506', '#3A0D14', '#B0959A', '#FBF0F1', '#D23F4C', '#261519']
+      };
+      try {
+        var v = JSON.parse(localStorage.getItem('flutter.tema_templo') || '"tradicional"');
+        if (v === 'automatico') {
+          v = window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches ? 'claro' : 'tradicional';
+        }
+        var c = T[v] || T.tradicional, r = document.documentElement.style;
+        r.setProperty('--fondo', c[0]); r.setProperty('--cielo', c[1]); r.setProperty('--suave', c[2]);
+        r.setProperty('--titulo', c[3]); r.setProperty('--acento', c[4]); r.setProperty('--pista', c[5]);
+        var m = document.querySelector('meta[name="theme-color"]');
+        if (m) m.setAttribute('content', c[0]);
+      } catch (e) { /* sin almacenamiento: tradicional */ }
+    })();
+  </script>
+
   <style>
-    html, body { margin: 0; height: 100%; background: #06050A; }
+    html, body { margin: 0; height: 100%; background: var(--fondo, #06050A); }
     body { overscroll-behavior: none; -webkit-tap-highlight-color: transparent; }
 
     /* Pantalla de carga: se ve mientras llega la app y se desvanece sola. */
     #carga {
       position: fixed; inset: 0; z-index: 20;
       display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 18px;
-      background: radial-gradient(120% 70% at 80% 0%, #1b1233 0%, #09070F 55%, #06050A 100%);
-      color: #9A93B0; font: 500 14px/1.4 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+      background: radial-gradient(120% 70% at 80% 0%, var(--cielo, #1b1233) 0%, var(--fondo, #06050A) 70%);
+      color: var(--suave, #9A93B0); font: 500 14px/1.4 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
       transition: opacity .5s ease;
     }
     #carga.fuera { opacity: 0; pointer-events: none; }
     #carga img { width: 112px; height: 112px; animation: flotar 3.2s ease-in-out infinite; filter: drop-shadow(0 0 26px rgba(139, 92, 246, .45)); }
-    #carga .nombre { color: #F4F1FA; font-size: 19px; font-weight: 700; letter-spacing: .5px; }
-    #carga .barra { width: 148px; height: 3px; border-radius: 3px; background: #1D1829; overflow: hidden; }
-    #carga .barra i { display: block; width: 40%; height: 100%; border-radius: 3px; background: #8B5CF6; animation: avanzar 1.3s ease-in-out infinite; }
+    #carga .nombre { color: var(--titulo, #F4F1FA); font-size: 19px; font-weight: 700; letter-spacing: .5px; }
+    #carga .barra { width: 148px; height: 3px; border-radius: 3px; background: var(--pista, #1D1829); overflow: hidden; }
+    #carga .barra i { display: block; width: 40%; height: 100%; border-radius: 3px; background: var(--acento, #8B5CF6); animation: avanzar 1.3s ease-in-out infinite; }
     @keyframes flotar { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-7px); } }
     @keyframes avanzar { 0% { transform: translateX(-110%); } 100% { transform: translateX(260%); } }
     @media (prefers-reduced-motion: reduce) { #carga img, #carga .barra i { animation: none; } }
