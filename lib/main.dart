@@ -54063,7 +54063,7 @@ class _PaseTemploScreenState extends State<PaseTemploScreen>
           backgroundColor: TempleColors.negro,
           body: Stack(
             children: <Widget>[
-              const Positioned.fill(
+              Positioned.fill(
                 child: DecoratedBox(
                   decoration: BoxDecoration(
                     gradient: LinearGradient(
@@ -54072,7 +54072,7 @@ class _PaseTemploScreenState extends State<PaseTemploScreen>
                       colors: TemaTemplo.esTradicional
                           ? const <Color>[Color(0xFF1C1036), Color(0xFF0C0718), TempleColors.negro]
                           : const <Color>[TempleColors.superficieAlta, TempleColors.grafito, TempleColors.negro],
-                      stops: <double>[0, 0.45, 1],
+                      stops: const <double>[0, 0.45, 1],
                     ),
                   ),
                 ),
