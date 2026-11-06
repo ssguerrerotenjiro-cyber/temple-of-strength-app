@@ -1248,6 +1248,8 @@ class PetalField extends StatefulWidget {
 
 class _PetalFieldState extends State<PetalField>
     with TickerDecorativo {
+  @override
+  int get cuadrosWeb => Rendimiento.cuadrosLentos;
   late final AnimationController _c = AnimationController(
     vsync: this,
     duration: const Duration(seconds: 18),
@@ -14466,6 +14468,8 @@ class MarcoVivo extends StatefulWidget {
 
 class _MarcoVivoState extends State<MarcoVivo>
     with TickerDecorativo {
+  @override
+  int get cuadrosWeb => Rendimiento.cuadrosLentos;
   late final AnimationController _c = AnimationController(vsync: this, duration: const Duration(seconds: 6));
 
   @override
@@ -23358,6 +23362,8 @@ class FuegoScreen extends StatefulWidget {
 
 class _FuegoScreenState extends State<FuegoScreen>
     with TickerDecorativo {
+  @override
+  int get cuadrosWeb => Rendimiento.cuadrosLentos;
   late final AnimationController _c = AnimationController(
     vsync: this,
     duration: const Duration(seconds: 3),
@@ -28549,6 +28555,8 @@ class SalaNueveScreen extends StatefulWidget {
 
 class _SalaNueveScreenState extends State<SalaNueveScreen>
     with TickerDecorativo {
+  @override
+  int get cuadrosWeb => Rendimiento.cuadrosLentos;
   late final AnimationController _c = AnimationController(
     vsync: this,
     duration: const Duration(seconds: 6),
@@ -30187,6 +30195,8 @@ class HogueraScreen extends StatefulWidget {
 
 class _HogueraScreenState extends State<HogueraScreen>
     with TickerDecorativo {
+  @override
+  int get cuadrosWeb => Rendimiento.cuadrosLentos;
   late final AnimationController _c = AnimationController(
     vsync: this,
     duration: const Duration(seconds: 3),
@@ -31000,6 +31010,8 @@ class HabitanteScreen extends StatefulWidget {
 
 class _HabitanteScreenState extends State<HabitanteScreen>
     with TickerDecorativo {
+  @override
+  int get cuadrosWeb => Rendimiento.cuadrosLentos;
   late final AnimationController _c = AnimationController(
     vsync: this,
     duration: const Duration(seconds: 5),
@@ -33724,6 +33736,8 @@ class AvatarTenshi extends StatefulWidget {
 
 class _AvatarTenshiState extends State<AvatarTenshi>
     with TickerDecorativo {
+  @override
+  int get cuadrosWeb => Rendimiento.cuadrosLentos;
   late final AnimationController _c = AnimationController(
     vsync: this,
     duration: const Duration(seconds: 12),
@@ -43191,6 +43205,8 @@ class EmblemaRanked extends StatefulWidget {
 
 class _EmblemaRankedState extends State<EmblemaRanked>
     with TickerDecorativo {
+  @override
+  int get cuadrosWeb => Rendimiento.cuadrosLentos;
   late final AnimationController _c =
       AnimationController(vsync: this, duration: const Duration(seconds: 9));
 
@@ -54665,6 +54681,8 @@ class _MiniAnimada extends StatefulWidget {
 
 class _MiniAnimadaState extends State<_MiniAnimada>
     with TickerDecorativo {
+  @override
+  int get cuadrosWeb => Rendimiento.cuadrosLentos;
   late final AnimationController _c = AnimationController(vsync: this, duration: const Duration(seconds: 5))..repeat();
 
   @override
@@ -58731,6 +58749,8 @@ class TarjetaMetaDojo extends StatefulWidget {
 
 class _TarjetaMetaDojoState extends State<TarjetaMetaDojo>
     with TickerDecorativo {
+  @override
+  int get cuadrosWeb => Rendimiento.cuadrosLentos;
   late final AnimationController _brillo = AnimationController(vsync: this, duration: const Duration(seconds: 4))
     ..repeat();
 
@@ -59738,6 +59758,8 @@ class PetalosSakura extends StatefulWidget {
 
 class _PetalosSakuraState extends State<PetalosSakura>
     with TickerDecorativo {
+  @override
+  int get cuadrosWeb => Rendimiento.cuadrosLentos;
   late final AnimationController _c = AnimationController(vsync: this, duration: const Duration(seconds: 60))
     ..addListener(_avanzar);
 
@@ -73726,8 +73748,8 @@ class DesplazamientoTemplo extends MaterialScrollBehavior {
 // brillo del botón del Pase…) obligaban a dibujar 60 veces por segundo
 // aunque no pasara nada importante.
 //
-// En la web esas animaciones avanzan al ritmo de un reloj decorativo de 24
-// cuadros por segundo (12 para los cielos y escenas lentas) y se dibujan
+// En la web esas animaciones avanzan al ritmo de un reloj decorativo: 12
+// cuadros por segundo la decoración ambiental y 24 lo que se mueve rápido,
 // todas en el mismo cuadro. Lo que responde al dedo (botones, desplazamiento,
 // transiciones, el teclado) sigue a 60. En la app instalada no cambia nada.
 // ===========================================================================
@@ -73741,7 +73763,9 @@ class Rendimiento {
   /// Latidos por segundo del reloj de la decoración en la web.
   static const int cuadrosDecoracion = 24;
 
-  /// Ritmo de los cielos y escenas lentas (bucles de 20 segundos o más).
+  /// Ritmo de la decoración ambiental: cielos, escenas, pétalos, avatares
+  /// en reposo. Como el anime «a dos cuadros». Lo rápido (celebraciones,
+  /// brillo del Pase, guerrero de Ranked, ejercicio) va a 24.
   static const int cuadrosLentos = 12;
 }
 
@@ -73831,7 +73855,7 @@ class _TickerLento extends Ticker {
 /// pantalla queda tapada, igual que antes.
 mixin TickerDecorativo<T extends StatefulWidget> on State<T> implements TickerProvider {
   Set<Ticker>? _tickersDecorativos;
-  ValueListenable<bool>? _modoTicker;
+  ValueListenable<TickerModeData>? _modoTicker;
 
   /// Cuadros por segundo de esta decoración en la web.
   int get cuadrosWeb => Rendimiento.cuadrosDecoracion;
@@ -73844,13 +73868,13 @@ mixin TickerDecorativo<T extends StatefulWidget> on State<T> implements TickerPr
     final Ticker t = Rendimiento.ligero
         ? _TickerLento(onTick, intervaloUs: 1000000 ~/ cuadros, debugLabel: etiqueta)
         : Ticker(onTick, debugLabel: etiqueta);
-    t.muted = !(_modoTicker?.value ?? true);
+    t.muted = !(_modoTicker?.value.enabled ?? true);
     (_tickersDecorativos ??= <Ticker>{}).add(t);
     return t;
   }
 
   void _escucharModoTicker() {
-    final ValueListenable<bool> nuevo = TickerMode.getNotifier(context);
+    final ValueListenable<TickerModeData> nuevo = TickerMode.getValuesNotifier(context);
     if (identical(nuevo, _modoTicker)) return;
     _modoTicker?.removeListener(_aplicarModoTicker);
     nuevo.addListener(_aplicarModoTicker);
@@ -73858,7 +73882,7 @@ mixin TickerDecorativo<T extends StatefulWidget> on State<T> implements TickerPr
   }
 
   void _aplicarModoTicker() {
-    final bool activo = _modoTicker?.value ?? true;
+    final bool activo = _modoTicker?.value.enabled ?? true;
     for (final Ticker t in _tickersDecorativos ?? const <Ticker>{}) {
       t.muted = !activo;
     }
