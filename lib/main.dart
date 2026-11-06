@@ -53604,7 +53604,17 @@ extension DatosEstiloNombre on EstiloNombre {
         EstiloNombre.luna => 'Luz de luna',
       };
 
-  List<Color> get colores => switch (this) {
+  List<Color> get colores => TemaTemplo.esClaro ? coloresSobreClaro : coloresSobreOscuro;
+
+  /// Sobre papel claro: los mismos tonos, más hondos, para que se lean.
+  List<Color> get coloresSobreClaro => switch (this) {
+        EstiloNombre.oro => const <Color>[Color(0xFFC08A2A), Color(0xFF9A6812), Color(0xFF7A4E08)],
+        EstiloNombre.aurora => const <Color>[Color(0xFF14966A), Color(0xFF1B7FB8), Color(0xFF6D3FE0)],
+        EstiloNombre.sakura => const <Color>[Color(0xFFD9508A), Color(0xFFB8336E), Color(0xFF962658)],
+        EstiloNombre.luna => const <Color>[Color(0xFF7A68C0), Color(0xFF5B3FD0), Color(0xFF3F2A9A)],
+      };
+
+  List<Color> get coloresSobreOscuro => switch (this) {
         EstiloNombre.oro => const <Color>[Color(0xFFFFF4CC), Color(0xFFE8B65A), Color(0xFFB8862A)],
         EstiloNombre.aurora => const <Color>[Color(0xFF5BE3A8), Color(0xFF6FD3FF), Color(0xFFB79CFF)],
         EstiloNombre.sakura => const <Color>[Color(0xFFFFE2F2), Color(0xFFF6A8D6), Color(0xFFE07AB8)],
@@ -54145,7 +54155,11 @@ class _PaseTemploScreenState extends State<PaseTemploScreen>
         ShaderMask(
           blendMode: BlendMode.srcIn,
           shaderCallback: (Rect r) =>
-              const LinearGradient(colors: <Color>[Color(0xFFFFF4CC), Color(0xFFE8B65A), Color(0xFFFFF4CC)]).createShader(r),
+              LinearGradient(
+                      colors: TemaTemplo.esClaro
+                          ? const <Color>[Color(0xFFB8862A), Color(0xFF8A5A12), Color(0xFFB8862A)]
+                          : const <Color>[Color(0xFFFFF4CC), Color(0xFFE8B65A), Color(0xFFFFF4CC)])
+                  .createShader(r),
           child: const Text('El Pase del Templo',
               textAlign: TextAlign.center,
               style: TextStyle(fontSize: 28, fontWeight: FontWeight.w700, letterSpacing: 0.6, color: Colors.white)),
@@ -74565,6 +74579,9 @@ class TemaTemplo extends ChangeNotifier with WidgetsBindingObserver {
   /// Si se pinta con la paleta tradicional (para los pocos fondos que la
   /// conservan tal cual).
   static bool get esTradicional => identical(paleta, PaletasTemplo.tradicional);
+
+  /// Si el tema tiene fondo claro (los degradados dorados y de nombre se oscurecen).
+  static bool get esClaro => paleta.claro;
 
   int? tomarModulo() {
     final int? m = _moduloPendiente;
