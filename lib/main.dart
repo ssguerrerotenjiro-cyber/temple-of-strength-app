@@ -1274,6 +1274,8 @@ class _PetalFieldState extends State<PetalField>
 
   @override
   Widget build(BuildContext context) {
+    // En la web no hay pétalos: la experiencia completa vive en la app (59).
+    if (Rendimiento.ligero) return const SizedBox.shrink();
     return IgnorePointer(
       child: RepaintBoundary(
         child: AnimatedBuilder(
@@ -47331,6 +47333,8 @@ class CompararFotosScreen extends StatefulWidget {
 
 class _CompararFotosScreenState extends State<CompararFotosScreen>
     with TickerDecorativo {
+  @override
+  bool get animarEnWeb => true;
   late FotoProgreso _antes = widget.fotos.last;
   late FotoProgreso _despues = widget.fotos.first;
   double _corte = 0.5;
@@ -49589,6 +49593,8 @@ class AvatarEjercicio extends StatefulWidget {
 
 class _AvatarEjercicioState extends State<AvatarEjercicio>
     with TickerDecorativo {
+  @override
+  bool get animarEnWeb => true;
   late final AnimationController _c = AnimationController(vsync: this, duration: _duracion);
 
   Duration get _duracion => Duration(milliseconds: (3200 / widget.velocidad.clamp(0.25, 2.0)).round());
@@ -52555,6 +52561,8 @@ class _Celebracion extends StatefulWidget {
 
 class _CelebracionState extends State<_Celebracion>
     with TickerDecorativo {
+  @override
+  bool get animarEnWeb => true;
   late final AnimationController _entrada =
       AnimationController(vsync: this, duration: const Duration(milliseconds: 1600));
   late final AnimationController _giro = AnimationController(vsync: this, duration: const Duration(seconds: 9));
@@ -59792,7 +59800,10 @@ class _PetalosSakuraState extends State<PetalosSakura>
   }
 
   @override
-  Widget build(BuildContext context) => IgnorePointer(
+  Widget build(BuildContext context) => Rendimiento.ligero
+      // En la web no hay pétalos: la experiencia completa vive en la app (59).
+      ? const SizedBox.shrink()
+      : IgnorePointer(
         child: RepaintBoundary(
           child: CustomPaint(
             painter: _SakuraPainter(_t, widget.cantidad),
@@ -73216,8 +73227,8 @@ class _TarjetaGymDojoState extends State<TarjetaGymDojo> {
 // existen en la app instalada: los recordatorios del teléfono y las
 // recompensas por anuncio. En la web se ven igual, y al tocarlas se
 // recomienda descargar la app (en iPhone se avisa que llega a la App Store).
-// En pantallas anchas la app se muestra dentro de un marco de teléfono, con
-// un panel de bienvenida y el código QR de descarga.
+// En pantallas anchas la app se muestra grande, con un panel que invita a
+// descargar la app para la experiencia completa y el código QR de descarga.
 // ===========================================================================
 
 // ---------------------------------------------------------------------------
@@ -73521,48 +73532,68 @@ class _QrPainter extends CustomPainter {
 }
 
 // ---------------------------------------------------------------------------
-// 58.4 MARCO PARA PANTALLAS ANCHAS
+// 58.4 PANTALLAS ANCHAS (COMPUTADOR Y TABLETA HORIZONTAL)
 //
-// En el celular la app ocupa toda la pantalla. En un computador o una tableta
-// se muestra dentro de un teléfono centrado; si hay espacio, al lado aparece
-// la bienvenida con el QR de descarga.
+// En el celular la app ocupa toda la pantalla. Desde 700 px de ancho se
+// muestra en una ventana grande que llena el alto de la página y, en
+// pantallas altas, se ve más grande (hasta 1,3 veces). Al lado va el panel
+// con el QR y la invitación a descargar la app para la experiencia
+// completa; en ventanas medianas, un QR compacto en la esquina.
 // ---------------------------------------------------------------------------
 
 class MarcoWeb extends StatelessWidget {
   const MarcoWeb({super.key, required this.child});
   final Widget child;
 
-  static const double _anchoMinimo = 640;
-  static const double _anchoPanel = 1060;
+  /// Por debajo de este ancho (celulares y tabletas en vertical), pantalla completa.
+  static const double _anchoMinimo = 700;
+
+  /// Desde este ancho aparece el panel lateral con el QR.
+  static const double _anchoPanel = 1000;
+  static const double _panel = 360;
+  static const double _separacion = 48;
+  static const double _margen = 16;
 
   @override
   Widget build(BuildContext context) {
     if (!kIsWeb) return child;
     final MediaQueryData mq = MediaQuery.of(context);
     final Size s = mq.size;
-    if (s.width < _anchoMinimo || s.height < 540) return child;
-    final double alto = math.min(s.height - 40, 920.0);
-    final double ancho = (alto * 0.47).clamp(360.0, 430.0).toDouble();
-    final bool panel = s.width >= _anchoPanel;
+    if (s.width < _anchoMinimo || s.height < 520) return child;
 
-    final Widget telefono = Container(
-      width: ancho + 2.4,
-      height: alto + 2.4,
+    final bool panel = s.width >= _anchoPanel;
+    final double altoPx = s.height - 2 * _margen;
+    final double libre = s.width - 2 * _margen - (panel ? _panel + _separacion : 0);
+    // En pantallas altas todo se ve más grande, sin pasarse del ancho libre.
+    final double escala = math.max(1.0, math.min((altoPx / 800).clamp(1.0, 1.3).toDouble(), libre / 420));
+    final double anchoLogico = (libre / escala).clamp(400.0, 600.0).toDouble();
+    final double altoLogico = altoPx / escala;
+    final double anchoPx = anchoLogico * escala;
+    final bool qrCompacto = !panel && (s.width - anchoPx) / 2 >= 180;
+
+    final Widget app = Container(
+      width: anchoPx + 2,
+      height: altoPx + 2,
       decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(38),
-        // Sin sombras borrosas: en la web se volvían a dibujar en cada cuadro.
-        // El halo del fondo hace ese papel.
-        border: Border.all(color: TempleColors.bordeVivo, width: 1.2),
+        borderRadius: BorderRadius.circular(26),
+        border: Border.all(color: TempleColors.bordeVivo),
       ),
       child: ClipRRect(
-        borderRadius: BorderRadius.circular(37),
-        child: MediaQuery(
-          data: mq.copyWith(
-            size: Size(ancho, alto),
-            padding: EdgeInsets.zero,
-            viewPadding: EdgeInsets.zero,
+        borderRadius: BorderRadius.circular(25),
+        child: FittedBox(
+          fit: BoxFit.fill,
+          child: SizedBox(
+            width: anchoLogico,
+            height: altoLogico,
+            child: MediaQuery(
+              data: mq.copyWith(
+                size: Size(anchoLogico, altoLogico),
+                padding: EdgeInsets.zero,
+                viewPadding: EdgeInsets.zero,
+              ),
+              child: child,
+            ),
           ),
-          child: child,
         ),
       ),
     );
@@ -73579,13 +73610,20 @@ class MarcoWeb extends StatelessWidget {
               mainAxisSize: MainAxisSize.min,
               children: <Widget>[
                 if (panel) ...<Widget>[
-                  const _PanelBienvenidaWeb(),
-                  const SizedBox(width: 64),
+                  SizedBox(
+                    width: _panel,
+                    height: altoPx,
+                    child: const Center(
+                      child: FittedBox(fit: BoxFit.scaleDown, child: _PanelBienvenidaWeb()),
+                    ),
+                  ),
+                  const SizedBox(width: _separacion),
                 ],
-                telefono,
+                app,
               ],
             ),
           ),
+          if (qrCompacto) const Positioned(left: 20, bottom: 20, child: _QrCompactoWeb()),
         ],
       ),
     );
@@ -73603,50 +73641,65 @@ class _PanelBienvenidaWeb extends StatelessWidget {
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.start,
         children: <Widget>[
-          const ToriiMoonLogo(size: 86),
-          const SizedBox(height: 20),
+          const ToriiMoonLogo(size: 76),
+          const SizedBox(height: 18),
           const Text(
             'Temple of Strength',
             style: TextStyle(
-                fontSize: 36, height: 1.1, fontWeight: FontWeight.w800, letterSpacing: -0.6, color: TempleColors.blancoLuna),
+                fontSize: 34, height: 1.1, fontWeight: FontWeight.w800, letterSpacing: -0.6, color: TempleColors.blancoLuna),
           ),
-          const SizedBox(height: 12),
-          const Text(
-            'Entrena, sube de rango en cada músculo y construye tu propio templo. Con Tenshi, tu coach con IA, '
-            'y tu gym en el Clan.',
-            style: TextStyle(fontSize: 15.5, height: 1.55, color: TempleColors.textoSuave),
-          ),
-          const SizedBox(height: 28),
+          const SizedBox(height: 8),
+          const Text('Estás en la versión web.', style: TextStyle(fontSize: 14, color: TempleColors.textoSuave)),
+          const SizedBox(height: 22),
           Container(
-            padding: const EdgeInsets.all(16),
+            padding: const EdgeInsets.all(20),
             decoration: BoxDecoration(
-              color: TempleColors.superficie.withValues(alpha: 0.92),
+              color: TempleColors.superficie.withValues(alpha: 0.94),
               borderRadius: BorderRadius.circular(TempleRadius.tarjeta),
-              border: Border.all(color: TempleColors.borde),
+              border: Border.all(color: TempleColors.violeta.withValues(alpha: 0.45)),
             ),
-            child: const Row(
+            child: const Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: <Widget>[
-                QrDescarga(size: 112),
-                SizedBox(width: 16),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: <Widget>[
-                      Text('Llévala en tu celular',
-                          style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: TempleColors.blancoLuna)),
-                      SizedBox(height: 6),
-                      Text(
-                        'Escanea para descargar la app para Android. En iPhone, abre esta página en Safari y '
-                        'agrégala a tu pantalla de inicio.',
-                        style: TextStyle(fontSize: 12.5, height: 1.45, color: TempleColors.textoSuave),
+                Text(
+                  'Para disfrutar la experiencia completa y todas las funciones, descarga la app',
+                  style: TextStyle(fontSize: 18, height: 1.3, fontWeight: FontWeight.w700, color: TempleColors.blancoLuna),
+                ),
+                SizedBox(height: 10),
+                Text(
+                  'En la app tienes recordatorios a la hora de entrenar, recompensas, el templo con todas sus '
+                  'animaciones y más fluidez. Entras con la misma cuenta y sigues donde ibas.',
+                  style: TextStyle(fontSize: 13, height: 1.5, color: TempleColors.textoSuave),
+                ),
+                SizedBox(height: 18),
+                Row(
+                  children: <Widget>[
+                    QrDescarga(size: 132),
+                    SizedBox(width: 16),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: <Widget>[
+                          Text('Escanea con tu Android',
+                              style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: TempleColors.blancoLuna)),
+                          SizedBox(height: 6),
+                          Text('y descárgala gratis.',
+                              style: TextStyle(fontSize: 13, height: 1.4, color: TempleColors.textoSuave)),
+                          SizedBox(height: 10),
+                          Text(
+                            'iPhone: llega pronto a la App Store. Mientras tanto, ábrela en Safari y agrégala a tu '
+                            'pantalla de inicio.',
+                            style: TextStyle(fontSize: 11.5, height: 1.45, color: TempleColors.textoTenue),
+                          ),
+                        ],
                       ),
-                    ],
-                  ),
+                    ),
+                  ],
                 ),
               ],
             ),
           ),
-          const SizedBox(height: 18),
+          const SizedBox(height: 16),
           const Row(
             children: <Widget>[
               Icon(Icons.sync_rounded, size: 16, color: TempleColors.textoTenue),
@@ -73656,6 +73709,36 @@ class _PanelBienvenidaWeb extends StatelessWidget {
                     style: TextStyle(fontSize: 12.5, color: TempleColors.textoTenue)),
               ),
             ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// QR en la esquina para ventanas medianas, donde no cabe el panel.
+class _QrCompactoWeb extends StatelessWidget {
+  const _QrCompactoWeb();
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: 168,
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: TempleColors.superficie.withValues(alpha: 0.94),
+        borderRadius: BorderRadius.circular(TempleRadius.tarjeta),
+        border: Border.all(color: TempleColors.violeta.withValues(alpha: 0.45)),
+      ),
+      child: const Column(
+        mainAxisSize: MainAxisSize.min,
+        children: <Widget>[
+          QrDescarga(size: 110),
+          SizedBox(height: 10),
+          Text(
+            'Todas las funciones y la experiencia completa en la app. Escanea y descárgala.',
+            textAlign: TextAlign.center,
+            style: TextStyle(fontSize: 11.5, height: 1.4, color: TempleColors.texto),
           ),
         ],
       ),
@@ -73748,9 +73831,12 @@ class DesplazamientoTemplo extends MaterialScrollBehavior {
 // brillo del botón del Pase…) obligaban a dibujar 60 veces por segundo
 // aunque no pasara nada importante.
 //
-// En la web esas animaciones avanzan al ritmo de un reloj decorativo: 12
-// cuadros por segundo la decoración ambiental y 24 lo que se mueve rápido,
-// todas en el mismo cuadro. Lo que responde al dedo (botones, desplazamiento,
+// Desde la 1.5.2 la web es más sobria: la decoración queda quieta (el mismo
+// cuadro que con «reducir movimiento») y no hay pétalos, para que vaya
+// fluida en cualquier navegador y la experiencia completa quede en la app.
+// Solo se animan las que cumplen una función (demostración de ejercicios,
+// línea de tiempo de fotos, celebración), al ritmo de un reloj de 24
+// cuadros por segundo. Lo que responde al dedo (botones, desplazamiento,
 // transiciones, el teclado) sigue a 60. En la app instalada no cambia nada.
 // ===========================================================================
 
@@ -73849,6 +73935,15 @@ class _TickerLento extends Ticker {
   }
 }
 
+/// Ticker que nunca pide cuadros: la animación queda en su primer cuadro,
+/// igual que con «reducir movimiento». Para la decoración en la web.
+class _TickerQuieto extends Ticker {
+  _TickerQuieto(super.onTick, {super.debugLabel});
+
+  @override
+  void scheduleTick({bool rescheduling = false}) {}
+}
+
 /// Para las animaciones decorativas: hace lo mismo que
 /// SingleTickerProviderStateMixin (y admite varios controladores), y en la
 /// web las pone al ritmo del reloj decorativo. Se pausan solas cuando su
@@ -73857,17 +73952,24 @@ mixin TickerDecorativo<T extends StatefulWidget> on State<T> implements TickerPr
   Set<Ticker>? _tickersDecorativos;
   ValueListenable<TickerModeData>? _modoTicker;
 
-  /// Cuadros por segundo de esta decoración en la web.
+  /// Cuadros por segundo de esta animación en la web, si se anima.
   int get cuadrosWeb => Rendimiento.cuadrosDecoracion;
+
+  /// En la web la decoración queda quieta: el mismo cuadro que se ve con
+  /// «reducir movimiento». Solo se animan las que cumplen una función
+  /// (demostración de ejercicios, línea de tiempo de fotos, celebración).
+  bool get animarEnWeb => false;
 
   @override
   Ticker createTicker(TickerCallback onTick) {
     _escucharModoTicker();
     final String etiqueta = 'decorativo ${widget.runtimeType}';
     final int cuadros = cuadrosWeb.clamp(1, Rendimiento.cuadrosDecoracion);
-    final Ticker t = Rendimiento.ligero
-        ? _TickerLento(onTick, intervaloUs: 1000000 ~/ cuadros, debugLabel: etiqueta)
-        : Ticker(onTick, debugLabel: etiqueta);
+    final Ticker t = !Rendimiento.ligero
+        ? Ticker(onTick, debugLabel: etiqueta)
+        : animarEnWeb
+            ? _TickerLento(onTick, intervaloUs: 1000000 ~/ cuadros, debugLabel: etiqueta)
+            : _TickerQuieto(onTick, debugLabel: etiqueta);
     t.muted = !(_modoTicker?.value.enabled ?? true);
     (_tickersDecorativos ??= <Ticker>{}).add(t);
     return t;
