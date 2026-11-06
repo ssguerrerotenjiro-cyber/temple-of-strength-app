@@ -2068,7 +2068,7 @@ class _MainShellState extends State<MainShell> {
   /// del Pase (una sola vez). Después, la guía de cada módulo la primera vez
   /// que se abre.
   Future<void> _primeraVez() async {
-    if (!mounted) return;
+    if (!mounted || vistaPrueba) return;
     final String u = widget.perfil.nombre;
     // Si los términos cambiaron desde que los aceptó, primero eso.
     if (!await pedirTerminosSiCambiaron(context) || !mounted) return;
@@ -51070,7 +51070,7 @@ Future<void> mostrarGuiaModulo(BuildContext context, String clave, {String? usua
 
 /// Muestra la guía solo si es la primera vez.
 Future<void> guiaSiEsNueva(BuildContext context, String usuario, String clave) async {
-  if (GuiaTemplo.instancia.vista(usuario, clave)) return;
+  if (vistaPrueba || GuiaTemplo.instancia.vista(usuario, clave)) return;
   await mostrarGuiaModulo(context, clave, usuario: usuario);
 }
 
