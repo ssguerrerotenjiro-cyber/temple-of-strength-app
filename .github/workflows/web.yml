@@ -1,0 +1,72 @@
+name: Construir web
+
+# La misma app, compilada para el navegador (Android, iPhone y computador).
+# Se prueba en Chromium y en WebKit (el motor de Safari) y el resultado queda
+# en la rama `web-build`: `app/` es lo que se publica en la página, en /app/,
+# y `pruebas/` trae las capturas de cada navegador.
+on:
+  push:
+    branches: [main, web]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: web-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  web:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Crear el proyecto web
+        run: |
+          flutter create --org com.templeofstrength --project-name temple_of_strength --platforms web .
+          cp -r ci/web/. web/
+
+      - name: Paquetes
+        run: flutter pub get
+
+      - name: Compilar
+        id: compilar
+        run: |
+          flutter build web --release --base-href /app/ --no-web-resources-cdn
+          VERSION=$(grep '^version:' pubspec.yaml | sed 's/version: *//; s/+.*//')
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          printf '{"version":"%s","compilacion":%s,"commit":"%s","fecha":"%s"}\n' \
+            "$VERSION" "${{ github.run_number }}" "${{ github.sha }}" "$(date -u +%FT%TZ)" > build/web/version.json
+          du -sh build/web
+
+      - name: Probar en navegadores
+        id: probar
+        run: |
+          python3 -m pip install --quiet playwright
+          python3 -m playwright install --with-deps chromium
+          python3 -m playwright install --with-deps webkit || echo "::warning::WebKit no se pudo instalar; se prueba solo en Chromium."
+          mkdir -p sitio && cp -r build/web sitio/app
+          (cd sitio && nohup python3 -m http.server 8123 >/dev/null 2>&1 &)
+          sleep 2
+          python3 ci/probar_web.py http://127.0.0.1:8123/app/ salida
+
+      - name: Guardar en la rama web-build
+        if: always() && steps.compilar.outcome == 'success'
+        run: |
+          mkdir -p rama
+          cp -r build/web rama/app
+          cp -r salida rama/pruebas 2>/dev/null || true
+          echo '${{ steps.probar.outcome }}' > rama/pruebas/estado.txt 2>/dev/null || true
+          cd rama
+          git init -q -b web-build
+          git add -A
+          git -c user.name="github-actions[bot]" -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+            commit -q -m "Web ${{ steps.compilar.outputs.version }} (compilación ${{ github.run_number }})"
+          git push -q -f "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}" web-build

@@ -186,6 +186,9 @@ class TempleApp extends StatelessWidget {
           selectionHandleColor: TempleColors.violeta,
         ),
       ),
+      scrollBehavior: const DesplazamientoTemplo(),
+      // En la web, en pantallas anchas, la app va dentro de un teléfono (58.4).
+      builder: (BuildContext context, Widget? child) => MarcoWeb(child: child ?? const SizedBox.shrink()),
       home: const PuertaTemplo(),
     );
   }
@@ -46673,7 +46676,7 @@ class _CuerpoScreenState extends State<CuerpoScreen> {
               ],
               icono: Icons.photo_camera_outlined,
             );
-        if (!MotorAnuncios.instancia.permitido || !an.puedeFotoExtra(widget.usuario)) {
+        if (!MotorAnuncios.instancia.ofrecible || !an.puedeFotoExtra(widget.usuario)) {
           await muro();
           return;
         }
@@ -55858,7 +55861,7 @@ class InformeSemanalScreen extends StatelessWidget {
                                   ),
                                   const SizedBox(height: 14),
                                   BotonOro(texto: 'Desbloquear con el Pase', onPressed: () => abrirPase(context)),
-                                  if (MotorAnuncios.instancia.permitido) ...<Widget>[
+                                  if (MotorAnuncios.instancia.ofrecible) ...<Widget>[
                                     const SizedBox(height: 8),
                                     TextButton.icon(
                                       onPressed: () async {
@@ -56062,7 +56065,7 @@ class _TshCupo extends StatelessWidget {
         if (quedan > 3) return const SizedBox.shrink();
         final int anunciosQuedan =
             math.max(0, AlmacenAnuncios.tenshiAnunciosDia - UsoPase.instancia.anunciosTenshiHoy);
-        if (quedan == 0 && MotorAnuncios.instancia.permitido && anunciosQuedan > 0) {
+        if (quedan == 0 && MotorAnuncios.instancia.ofrecible && anunciosQuedan > 0) {
           return Padding(
             padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
             child: Container(
@@ -59888,6 +59891,10 @@ class MotorAnuncios {
   /// edad) se les piden anuncios no personalizados y aptos para adolescentes.
   bool get permitido => (soportado || simulado) && SesionTemplo.instancia.actual != null;
 
+  /// Si se muestran las recompensas por anuncio. En la web se ven igual y, al
+  /// tocarlas, se recomienda descargar la app (58.2).
+  bool get ofrecible => permitido || (kIsWeb && SesionTemplo.instancia.actual != null);
+
   bool get _menor => SesionTemplo.instancia.actual?.esMenor ?? true;
 
   /// Con qué edad se configuró Google por última vez (cambia si se entra con
@@ -60274,6 +60281,10 @@ class AlmacenAnuncios extends ChangeNotifier {
 
 /// Busca un anuncio, lo muestra y devuelve true si se vio entero.
 Future<bool> verAnuncio(BuildContext context) async {
+  if (EnWeb.activo) {
+    await recomendarApp(context, SoloEnApp.anuncios);
+    return false;
+  }
   if (!MotorAnuncios.instancia.permitido) {
     avisoClan(context, 'Los anuncios no están disponibles en esta cuenta.');
     return false;
@@ -60527,7 +60538,7 @@ class TarjetaAnunciosTaller extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    if (!MotorAnuncios.instancia.permitido) return const SizedBox.shrink();
+    if (!MotorAnuncios.instancia.ofrecible) return const SizedBox.shrink();
     return ListenableBuilder(
       listenable: AlmacenAnuncios.instancia,
       builder: (BuildContext context, _) {
@@ -60600,7 +60611,7 @@ class _TarjetaOfrendaDobleState extends State<TarjetaOfrendaDoble> {
   Widget build(BuildContext context) {
     final AlmacenAnuncios a = AlmacenAnuncios.instancia;
     final String u = widget.usuario;
-    if (!MotorAnuncios.instancia.permitido) return const SizedBox.shrink();
+    if (!MotorAnuncios.instancia.ofrecible) return const SizedBox.shrink();
     if (_cobrado == 0 && !a.ofrendaDisponible(u)) return const SizedBox.shrink();
     return Padding(
       padding: const EdgeInsets.only(bottom: 22),
@@ -60687,7 +60698,7 @@ class TarjetaOmikuji extends StatelessWidget {
         final AlmacenAnuncios a = AlmacenAnuncios.instancia;
         final int n = a.omikujiHoy(usuario);
         final ({FortunaOmikuji fortuna, String frase})? hoy = a.fortunaDeHoy(usuario);
-        final bool anuncio = MotorAnuncios.instancia.permitido && n == 1;
+        final bool anuncio = MotorAnuncios.instancia.ofrecible && n == 1;
         return TempleCard(
           onTap: n == 0
               ? () => _tirar(context, conAnuncio: false)
@@ -60815,7 +60826,7 @@ class BarraPruebaPieza extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    if (!MotorAnuncios.instancia.permitido) return const SizedBox.shrink();
+    if (!MotorAnuncios.instancia.ofrecible) return const SizedBox.shrink();
     return ListenableBuilder(
       listenable: AlmacenAnuncios.instancia,
       builder: (BuildContext context, _) {
@@ -62447,6 +62458,14 @@ class _HojaRecordatoriosState extends State<_HojaRecordatorios> {
   AjustesRecordatorios get _a => _r.ajustes;
 
   Future<void> _activar(void Function() cambio, bool encender) async {
+    if (EnWeb.activo) {
+      // En el navegador quedan guardados para cuando instale la app.
+      setState(cambio);
+      _a.configurado = true;
+      await _r.guardar();
+      if (encender && mounted) await recomendarApp(context, SoloEnApp.recordatorios);
+      return;
+    }
     if (encender) {
       final bool ok = await _r.pedirPermiso();
       if (!ok && mounted) {
@@ -62549,16 +62568,38 @@ class _HojaRecordatoriosState extends State<_HojaRecordatorios> {
               ),
               if (!Recordatorios.soportado) ...<Widget>[
                 const SizedBox(height: 12),
-                Container(
-                  padding: const EdgeInsets.all(12),
-                  decoration: BoxDecoration(
-                    color: TempleColors.alertaSuave.withValues(alpha: 0.08),
+                Material(
+                  color: Colors.transparent,
+                  child: InkWell(
                     borderRadius: BorderRadius.circular(TempleRadius.campo),
-                    border: Border.all(color: TempleColors.alertaSuave.withValues(alpha: 0.35)),
-                  ),
-                  child: const Text(
-                    'Los recordatorios llegan en la app instalada en tu celular. Aquí puedes dejarlos listos.',
-                    style: TextStyle(fontSize: 12, height: 1.4, color: TempleColors.texto),
+                    onTap: () => recomendarApp(context, SoloEnApp.recordatorios),
+                    child: Container(
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        color: TempleColors.alertaSuave.withValues(alpha: 0.08),
+                        borderRadius: BorderRadius.circular(TempleRadius.campo),
+                        border: Border.all(color: TempleColors.alertaSuave.withValues(alpha: 0.35)),
+                      ),
+                      child: Row(
+                        children: <Widget>[
+                          Expanded(
+                            child: Text(
+                              EnWeb.iphone
+                                  ? 'Los recordatorios llegan en la app instalada, que pronto estará en la App '
+                                      'Store. Aquí puedes dejarlos listos.'
+                                  : 'Los recordatorios llegan en la app instalada en tu celular. Aquí puedes '
+                                      'dejarlos listos.',
+                              style: const TextStyle(fontSize: 12, height: 1.4, color: TempleColors.texto),
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          Text(EnWeb.iphone ? 'Saber más' : 'Descargar',
+                              style: const TextStyle(
+                                  fontSize: 12, fontWeight: FontWeight.w700, color: TempleColors.violetaClaro)),
+                          const Icon(Icons.chevron_right_rounded, size: 18, color: TempleColors.violetaClaro),
+                        ],
+                      ),
+                    ),
                   ),
                 ),
               ],
@@ -73104,4 +73145,537 @@ class _TarjetaGymDojoState extends State<TarjetaGymDojo> {
       },
     );
   }
+}
+
+// ===========================================================================
+// 58. VERSIÓN WEB
+//
+// La misma app corre en el navegador del celular (Android y iPhone) y del
+// computador, con la misma cuenta y el mismo progreso. Dos cosas solo
+// existen en la app instalada: los recordatorios del teléfono y las
+// recompensas por anuncio. En la web se ven igual, y al tocarlas se
+// recomienda descargar la app (en iPhone se avisa que llega a la App Store).
+// En pantallas anchas la app se muestra dentro de un marco de teléfono, con
+// un panel de bienvenida y el código QR de descarga.
+// ===========================================================================
+
+// ---------------------------------------------------------------------------
+// 58.1 DÓNDE CORRE
+// ---------------------------------------------------------------------------
+
+class EnWeb {
+  const EnWeb._();
+
+  /// La app corre en un navegador.
+  static bool get activo => kIsWeb;
+
+  /// Navegador de un iPhone.
+  static bool get iphone => kIsWeb && defaultTargetPlatform == TargetPlatform.iOS;
+
+  /// Navegador de un celular Android.
+  static bool get android => kIsWeb && defaultTargetPlatform == TargetPlatform.android;
+
+  /// Navegador de un computador (o de una tableta en modo escritorio).
+  static bool get computador => kIsWeb && !iphone && !android;
+
+  /// Página de descarga: botón del APK e instrucciones.
+  static const String pagina = 'https://ssguerrerotenjiro-cyber.github.io/';
+
+  /// Abre la página de descarga en otra pestaña. Si el navegador lo
+  /// bloquea, copia el enlace.
+  static Future<void> abrirPagina(BuildContext context) async {
+    bool ok = false;
+    try {
+      ok = await launchUrl(Uri.parse(pagina), webOnlyWindowName: '_blank');
+    } catch (_) {
+      ok = false;
+    }
+    if (ok || !context.mounted) return;
+    await Clipboard.setData(const ClipboardData(text: pagina));
+    if (context.mounted) avisoClan(context, 'Copiamos el enlace de descarga: $pagina');
+  }
+}
+
+// ---------------------------------------------------------------------------
+// 58.2 «ESTO VIVE EN LA APP»
+// ---------------------------------------------------------------------------
+
+/// Lo que solo existe en la app instalada.
+enum SoloEnApp { recordatorios, anuncios }
+
+/// Hoja que recomienda descargar la app. Se muestra cada vez que, en la web,
+/// se toca algo que solo existe en la app instalada.
+Future<void> recomendarApp(BuildContext context, SoloEnApp que) {
+  HapticFeedback.selectionClick();
+  return showModalBottomSheet<void>(
+    context: context,
+    isScrollControlled: true,
+    useRootNavigator: true,
+    backgroundColor: TempleColors.grafito,
+    shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(26))),
+    builder: (BuildContext ctx) => _HojaSoloEnApp(que: que, padre: context),
+  );
+}
+
+class _HojaSoloEnApp extends StatelessWidget {
+  const _HojaSoloEnApp({required this.que, required this.padre});
+  final SoloEnApp que;
+
+  /// Pantalla que abrió la hoja: sigue viva cuando la hoja se cierra.
+  final BuildContext padre;
+
+  String get _titulo => switch (que) {
+        SoloEnApp.recordatorios => 'Los recordatorios viven en la app',
+        SoloEnApp.anuncios => 'Las recompensas por anuncio viven en la app',
+      };
+
+  String get _texto => switch (que) {
+        SoloEnApp.recordatorios => 'El navegador no puede avisarte a la hora de entrenar. En la app instalada, '
+            'Tenshi te recuerda tu sesión y el agua del día, y te escribe si llevas días sin entrar.',
+        SoloEnApp.anuncios => 'En la web no hay anuncios. En la app instalada ves uno corto y ganas mon para el '
+            'Taller, una foto de progreso extra, más charla con Tenshi y otras recompensas.',
+      };
+
+  IconData get _icono => switch (que) {
+        SoloEnApp.recordatorios => Icons.notifications_active_outlined,
+        SoloEnApp.anuncios => Icons.play_circle_outline_rounded,
+      };
+
+  String get _nota {
+    if (EnWeb.iphone) {
+      return 'La app para iPhone llega pronto a la App Store. Tu cuenta y tu progreso quedan guardados y te '
+          'esperan cuando la instales. Mientras tanto, todo lo demás funciona aquí.';
+    }
+    if (EnWeb.android) {
+      return 'Es gratis. Entras con el mismo usuario y sigues justo donde ibas.';
+    }
+    return 'Escanea el código con tu celular Android para descargarla. Entras con el mismo usuario.';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final bool iphone = EnWeb.iphone;
+    final bool computador = EnWeb.computador;
+    return SafeArea(
+      top: false,
+      child: SingleChildScrollView(
+        padding: const EdgeInsets.fromLTRB(22, 14, 22, 16),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: <Widget>[
+            Center(
+              child: Container(
+                width: 40,
+                height: 4,
+                decoration: BoxDecoration(color: TempleColors.bordeVivo, borderRadius: BorderRadius.circular(2)),
+              ),
+            ),
+            const SizedBox(height: 18),
+            Center(
+              child: Container(
+                width: 64,
+                height: 64,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: TempleColors.moradoProfundo,
+                  border: Border.all(color: TempleColors.violeta.withValues(alpha: 0.55)),
+                  boxShadow: <BoxShadow>[
+                    BoxShadow(color: TempleColors.violeta.withValues(alpha: 0.25), blurRadius: 22),
+                  ],
+                ),
+                child: Icon(_icono, size: 30, color: TempleColors.violetaClaro),
+              ),
+            ),
+            const SizedBox(height: 16),
+            Text(_titulo,
+                textAlign: TextAlign.center,
+                style: const TextStyle(fontSize: 19, fontWeight: FontWeight.w700, color: TempleColors.blancoLuna)),
+            const SizedBox(height: 8),
+            Text(_texto,
+                textAlign: TextAlign.center,
+                style: const TextStyle(fontSize: 13.5, height: 1.5, color: TempleColors.textoSuave)),
+            const SizedBox(height: 16),
+            if (computador) ...<Widget>[
+              const Center(child: QrDescarga(size: 150)),
+              const SizedBox(height: 14),
+            ],
+            Container(
+              padding: const EdgeInsets.fromLTRB(12, 11, 12, 11),
+              decoration: BoxDecoration(
+                color: TempleColors.superficie,
+                borderRadius: BorderRadius.circular(TempleRadius.campo),
+                border: Border.all(color: TempleColors.borde),
+              ),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: <Widget>[
+                  Padding(
+                    padding: const EdgeInsets.only(top: 1),
+                    child: Icon(iphone ? Icons.phone_iphone_rounded : Icons.android_rounded,
+                        size: 20, color: TempleColors.violetaClaro),
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: <Widget>[
+                        Text(_nota, style: const TextStyle(fontSize: 12.5, height: 1.45, color: TempleColors.texto)),
+                        if (iphone) ...<Widget>[
+                          const SizedBox(height: 6),
+                          const Text(
+                            'Para tenerla como app: en Safari toca Compartir y luego «Agregar a inicio».',
+                            style: TextStyle(fontSize: 12, height: 1.45, color: TempleColors.textoSuave),
+                          ),
+                        ],
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 16),
+            if (iphone)
+              DojoPrimaryButton(texto: 'Entendido', onPressed: () => Navigator.of(context).pop())
+            else ...<Widget>[
+              DojoPrimaryButton(
+                texto: computador ? 'Abrir la página de descarga' : 'Descargar la app para Android',
+                onPressed: () {
+                  // Se abre antes de cerrar la hoja: el navegador solo deja abrir
+                  // pestañas justo después de un toque.
+                  EnWeb.abrirPagina(padre);
+                  Navigator.of(context).pop();
+                },
+              ),
+              TextButton(
+                onPressed: () => Navigator.of(context).pop(),
+                child: const Text('Seguir en la web', style: TextStyle(color: TempleColors.textoSuave)),
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// 58.3 CÓDIGO QR DE DESCARGA
+//
+// Apunta a la página de descarga (corrección de errores alta). Es el mismo
+// código del afiche para gyms, comprobado con un lector.
+// ---------------------------------------------------------------------------
+
+class QrDescarga extends StatelessWidget {
+  const QrDescarga({super.key, this.size = 150});
+  final double size;
+
+  static const List<String> _filas = <String>[
+    '1111111001100001001001001010101111111',
+    '1000001000101110000111001110101000001',
+    '1011101001011111010010011101001011101',
+    '1011101001000100100011011110001011101',
+    '1011101010000010101011111111001011101',
+    '1000001000011000011000000010001000001',
+    '1111111010101010101010101010101111111',
+    '0000000011111100010011111001100000000',
+    '0011001110001011000111111101111010000',
+    '0010000110111110001000001100100101100',
+    '0001101001010001011101110100110111000',
+    '1011110100100110101111111110100001101',
+    '1110101101001110100101000110011010100',
+    '1001100010100101101010011001101010101',
+    '0001101000111010101100001110000010110',
+    '0000000111110001000010110001000110010',
+    '1001101000001110100110010101000101100',
+    '0111000000001010111010100101001001101',
+    '0110111011100101010110001011010010011',
+    '1010110101011011101010011001000011000',
+    '1010101011000011111000011010110010001',
+    '1000000010111101101011110110000101100',
+    '0100111110001101011011101100010011000',
+    '0001110001111111010000011001101001111',
+    '0001101111011100011111101010001110111',
+    '0010010001001000010111011011111111011',
+    '0110111010011111110100110000100100110',
+    '1011110010000100111010110010110010000',
+    '1110001110101011001100100101111110101',
+    '0000000010001111100001111111100011101',
+    '1111111010101000001111101010101011011',
+    '1000001001111000110101001001100011001',
+    '1011101001100000011000011010111111000',
+    '1011101010110110100100101000101010000',
+    '1011101011111001100010011110001111010',
+    '1000001001100110100001100101010111100',
+    '1111111000101101101010001100011000111'
+  ];
+
+  @override
+  Widget build(BuildContext context) {
+    return Semantics(
+      label: 'Código QR para descargar Temple of Strength',
+      image: true,
+      child: Container(
+        width: size,
+        height: size,
+        padding: EdgeInsets.all(size * 0.1),
+        decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(size * 0.09)),
+        child: const CustomPaint(painter: _QrPainter(_filas)),
+      ),
+    );
+  }
+}
+
+class _QrPainter extends CustomPainter {
+  const _QrPainter(this.filas);
+  final List<String> filas;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final int n = filas.length;
+    final double m = size.width / n;
+    final Paint p = Paint()
+      ..color = TempleColors.negro
+      ..isAntiAlias = false;
+    for (int y = 0; y < n; y++) {
+      final String f = filas[y];
+      int x = 0;
+      while (x < n) {
+        if (f.codeUnitAt(x) == 0x31) {
+          int x2 = x;
+          while (x2 < n && f.codeUnitAt(x2) == 0x31) {
+            x2++;
+          }
+          canvas.drawRect(Rect.fromLTWH(x * m, y * m, (x2 - x) * m, m), p);
+          x = x2;
+        } else {
+          x++;
+        }
+      }
+    }
+  }
+
+  @override
+  bool shouldRepaint(_QrPainter oldDelegate) => false;
+}
+
+// ---------------------------------------------------------------------------
+// 58.4 MARCO PARA PANTALLAS ANCHAS
+//
+// En el celular la app ocupa toda la pantalla. En un computador o una tableta
+// se muestra dentro de un teléfono centrado; si hay espacio, al lado aparece
+// la bienvenida con el QR de descarga.
+// ---------------------------------------------------------------------------
+
+class MarcoWeb extends StatelessWidget {
+  const MarcoWeb({super.key, required this.child});
+  final Widget child;
+
+  static const double _anchoMinimo = 640;
+  static const double _anchoPanel = 1060;
+
+  @override
+  Widget build(BuildContext context) {
+    if (!kIsWeb) return child;
+    final MediaQueryData mq = MediaQuery.of(context);
+    final Size s = mq.size;
+    if (s.width < _anchoMinimo || s.height < 540) return child;
+    final double alto = math.min(s.height - 40, 920.0);
+    final double ancho = (alto * 0.47).clamp(360.0, 430.0).toDouble();
+    final bool panel = s.width >= _anchoPanel;
+
+    final Widget telefono = Container(
+      width: ancho + 2.4,
+      height: alto + 2.4,
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(38),
+        border: Border.all(color: TempleColors.bordeVivo, width: 1.2),
+        boxShadow: <BoxShadow>[
+          BoxShadow(color: TempleColors.violeta.withValues(alpha: 0.16), blurRadius: 80, spreadRadius: 6),
+          const BoxShadow(color: Color(0xB3000000), blurRadius: 34, offset: Offset(0, 20)),
+        ],
+      ),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(37),
+        child: MediaQuery(
+          data: mq.copyWith(
+            size: Size(ancho, alto),
+            padding: EdgeInsets.zero,
+            viewPadding: EdgeInsets.zero,
+          ),
+          child: child,
+        ),
+      ),
+    );
+
+    return Material(
+      color: TempleColors.negro,
+      child: Stack(
+        fit: StackFit.expand,
+        children: <Widget>[
+          const DecoratedBox(decoration: BoxDecoration(gradient: TempleColors.fondo)),
+          const IgnorePointer(child: CustomPaint(painter: _PaisajeWebPainter())),
+          Center(
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: <Widget>[
+                if (panel) ...<Widget>[
+                  const _PanelBienvenidaWeb(),
+                  const SizedBox(width: 64),
+                ],
+                telefono,
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _PanelBienvenidaWeb extends StatelessWidget {
+  const _PanelBienvenidaWeb();
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      width: 360,
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: <Widget>[
+          const ToriiMoonLogo(size: 86),
+          const SizedBox(height: 20),
+          const Text(
+            'Temple of Strength',
+            style: TextStyle(
+                fontSize: 36, height: 1.1, fontWeight: FontWeight.w800, letterSpacing: -0.6, color: TempleColors.blancoLuna),
+          ),
+          const SizedBox(height: 12),
+          const Text(
+            'Entrena, sube de rango en cada músculo y construye tu propio templo. Con Tenshi, tu coach con IA, '
+            'y tu gym en el Clan.',
+            style: TextStyle(fontSize: 15.5, height: 1.55, color: TempleColors.textoSuave),
+          ),
+          const SizedBox(height: 28),
+          Container(
+            padding: const EdgeInsets.all(16),
+            decoration: BoxDecoration(
+              color: TempleColors.superficie.withValues(alpha: 0.92),
+              borderRadius: BorderRadius.circular(TempleRadius.tarjeta),
+              border: Border.all(color: TempleColors.borde),
+            ),
+            child: const Row(
+              children: <Widget>[
+                QrDescarga(size: 112),
+                SizedBox(width: 16),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: <Widget>[
+                      Text('Llévala en tu celular',
+                          style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: TempleColors.blancoLuna)),
+                      SizedBox(height: 6),
+                      Text(
+                        'Escanea para descargar la app para Android. En iPhone, abre esta página en Safari y '
+                        'agrégala a tu pantalla de inicio.',
+                        style: TextStyle(fontSize: 12.5, height: 1.45, color: TempleColors.textoSuave),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 18),
+          const Row(
+            children: <Widget>[
+              Icon(Icons.sync_rounded, size: 16, color: TempleColors.textoTenue),
+              SizedBox(width: 8),
+              Expanded(
+                child: Text('Tu cuenta es la misma en la web y en la app.',
+                    style: TextStyle(fontSize: 12.5, color: TempleColors.textoTenue)),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Luna creciente y montañas al fondo del marco web.
+class _PaisajeWebPainter extends CustomPainter {
+  const _PaisajeWebPainter();
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final double w = size.width;
+    final double h = size.height;
+
+    // Halo violeta detrás del teléfono.
+    final Offset centro = Offset(w * 0.62, h * 0.38);
+    canvas.drawCircle(
+      centro,
+      w * 0.45,
+      Paint()
+        ..shader = RadialGradient(colors: <Color>[
+          TempleColors.violeta.withValues(alpha: 0.10),
+          Colors.transparent,
+        ]).createShader(Rect.fromCircle(center: centro, radius: w * 0.45)),
+    );
+
+    // Luna creciente arriba a la izquierda.
+    final double r = math.min(w, h) * 0.13;
+    final Offset c = Offset(w * 0.12, h * 0.18);
+    final Path luna = Path.combine(
+      PathOperation.difference,
+      Path()..addOval(Rect.fromCircle(center: c, radius: r)),
+      Path()..addOval(Rect.fromCircle(center: c + Offset(r * 0.3, -r * 0.1), radius: r * 0.9)),
+    );
+    canvas.drawPath(luna, Paint()..color = TempleColors.moradoProfundo.withValues(alpha: 0.85));
+
+    // Montañas.
+    final Path lejos = Path()..moveTo(0, h);
+    const List<List<double>> picosLejos = <List<double>>[
+      <double>[0, 0.80], <double>[0.13, 0.66], <double>[0.23, 0.74], <double>[0.35, 0.58], <double>[0.46, 0.71],
+      <double>[0.57, 0.63], <double>[0.70, 0.76], <double>[0.81, 0.61], <double>[0.92, 0.72], <double>[1, 0.67],
+    ];
+    for (final List<double> p in picosLejos) {
+      lejos.lineTo(p[0] * w, p[1] * h);
+    }
+    lejos
+      ..lineTo(w, h)
+      ..close();
+    canvas.drawPath(lejos, Paint()..color = TempleColors.grafito.withValues(alpha: 0.9));
+
+    final Path cerca = Path()..moveTo(0, h);
+    const List<List<double>> picosCerca = <List<double>>[
+      <double>[0, 0.88], <double>[0.16, 0.80], <double>[0.28, 0.86], <double>[0.42, 0.78], <double>[0.56, 0.87],
+      <double>[0.70, 0.81], <double>[0.84, 0.88], <double>[1, 0.83],
+    ];
+    for (final List<double> p in picosCerca) {
+      cerca.lineTo(p[0] * w, p[1] * h);
+    }
+    cerca
+      ..lineTo(w, h)
+      ..close();
+    canvas.drawPath(cerca, Paint()..color = TempleColors.superficie);
+  }
+
+  @override
+  bool shouldRepaint(_PaisajeWebPainter oldDelegate) => false;
+}
+
+/// En la web también se puede arrastrar con el mouse (carruseles, listas
+/// horizontales), como con el dedo en el celular.
+class DesplazamientoTemplo extends MaterialScrollBehavior {
+  const DesplazamientoTemplo();
+
+  @override
+  Set<ui.PointerDeviceKind> get dragDevices => <ui.PointerDeviceKind>{
+        ...super.dragDevices,
+        ui.PointerDeviceKind.mouse,
+        ui.PointerDeviceKind.trackpad,
+      };
 }
