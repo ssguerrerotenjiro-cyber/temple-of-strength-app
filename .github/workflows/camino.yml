@@ -79,6 +79,14 @@ jobs:
           sudo dmesg 2>/dev/null | grep -iE "oom|killed process|qemu|segfault" | tail -20 || true
           ls -la /tmp/android-runner 2>/dev/null || true
 
+      - name: Informe de cierre del emulador
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: emulador-${{ github.run_number }}
+          path: /tmp/android-runner/
+          if-no-files-found: ignore
+
       - name: Guardar capturas y registro
         if: always()
         run: |

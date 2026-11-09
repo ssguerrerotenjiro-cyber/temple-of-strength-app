@@ -58,6 +58,19 @@ caminar() { # $1 = desde, $2 = hasta (pasos de unos 8 m hacia el nororiente)
   done
 }
 
+# Etapa 0: el emulador solo, sin la app (¿se cae por sí mismo?).
+for s in $(seq 5 5 40); do
+  sleep 5
+  if ! vivo; then echo "::error::El emulador se cayó solo, sin abrir la app ($s s)"; kill $LOGCAT 2>/dev/null; exit 1; fi
+done
+adb shell am start -a android.settings.SETTINGS > /dev/null 2>&1
+for s in $(seq 5 5 20); do
+  sleep 5
+  if ! vivo; then echo "::error::El emulador se cayó con Ajustes abierto ($s s)"; kill $LOGCAT 2>/dev/null; exit 1; fi
+done
+captura 0_ajustes
+echo "Etapa «0_emulador_solo»: bien"
+
 abrir
 etapa 1_sin_permisos 25
 
