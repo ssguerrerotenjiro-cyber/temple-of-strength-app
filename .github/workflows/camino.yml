@@ -52,6 +52,15 @@ jobs:
           sed -i 's#</application>#    <meta-data android:name="io.flutter.embedding.android.EnableImpeller" android:value="false" />\n    </application>#' android/app/src/main/AndroidManifest.xml
           flutter build apk --release --dart-define=VISTA_PRUEBA=true --target-platform android-x64 --build-number=${{ github.run_number }}
           cp build/app/outputs/flutter-apk/app-release.apk salida/prueba_skia.apk
+          # Control: el Dojo de main (sin el camino), con Impeller, para saber
+          # si la caída del emulador con Impeller ya pasaba antes.
+          git fetch -q origin main
+          git checkout -q origin/main -- lib pubspec.yaml
+          rm -f lib/camino_app.dart lib/camino_web.dart
+          sed -i '/EnableImpeller/d' android/app/src/main/AndroidManifest.xml
+          flutter pub get
+          flutter build apk --release --dart-define=VISTA_PRUEBA=true --target-platform android-x64 --build-number=${{ github.run_number }}
+          cp build/app/outputs/flutter-apk/app-release.apk salida/control_main.apk
           ls -la salida
 
       - uses: actions/upload-artifact@v4
@@ -72,6 +81,12 @@ jobs:
           - nombre: api30-skia
             api: 30
             apk: prueba_skia.apk
+          - nombre: api34-impeller
+            api: 34
+            apk: prueba.apk
+          - nombre: api34-control-main
+            api: 34
+            apk: control_main.apk
           - nombre: api34-skia
             api: 34
             apk: prueba_skia.apk

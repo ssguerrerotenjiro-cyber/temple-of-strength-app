@@ -88,6 +88,7 @@ class Caminante extends ChangeNotifier with WidgetsBindingObserver {
   double metrosGps = 0;
   String _diaGps = '';
   LatLng? _previa;
+  DateTime? _horaPrevia;
 
   int? estaturaCm;
   int meta = 8000;
@@ -386,15 +387,40 @@ class Caminante extends ChangeNotifier with WidgetsBindingObserver {
       }
       _guardarPronto();
     }
+    // Velocidad y rumbo: los del GPS; si el teléfono no los da, se sacan de
+    // la posición anterior.
+    final LatLng? antes = posicion;
+    final DateTime? horaAntes = _horaPrevia;
+    double v = p.speed.isFinite && p.speed > 0 ? p.speed : 0;
+    double? r = v > 0 && p.heading.isFinite && p.heading >= 0 ? p.heading : null;
+    if (v <= 0 && antes != null && horaAntes != null) {
+      final double seg = p.timestamp.difference(horaAntes).inMilliseconds / 1000;
+      if (seg >= 1 && seg <= 30) {
+        final double d = geo.Geolocator.distanceBetween(antes.latitude, antes.longitude, aqui.latitude, aqui.longitude);
+        v = d / seg;
+        if (d >= 3) r = _rumboEntre(antes, aqui);
+      }
+    }
+    _horaPrevia = p.timestamp;
     posicion = aqui;
-    velocidad = p.speed.isFinite && p.speed > 0 ? p.speed : 0;
-    if (p.heading.isFinite && p.heading >= 0 && velocidad > 0.6) {
-      rumbo = p.heading;
+    velocidad = v;
+    if (r != null && velocidad > 0.6) {
+      rumbo = r;
     } else if (velocidad < 0.3) {
       rumbo = null;
     }
     estado = EstadoCamino.activo;
     notifyListeners();
+  }
+
+  /// Rumbo de a hacia b, en grados desde el norte.
+  static double _rumboEntre(LatLng a, LatLng b) {
+    final double f1 = a.latitude * math.pi / 180;
+    final double f2 = b.latitude * math.pi / 180;
+    final double dl = (b.longitude - a.longitude) * math.pi / 180;
+    final double y = math.sin(dl) * math.cos(f2);
+    final double x = math.cos(f1) * math.sin(f2) - math.sin(f1) * math.cos(f2) * math.cos(dl);
+    return (math.atan2(y, x) * 180 / math.pi + 360) % 360;
   }
 
   void _poner(EstadoCamino e) {
@@ -1011,7 +1037,7 @@ class _CaminoDelDiaState extends State<CaminoDelDia> with _PresenciaCamino<Camin
                     pie: const SizedBox.shrink(),
                   ),
                 Positioned(left: 12, top: 12, child: _Insignia(enVivo: c.gpsEnVivo)),
-                if (conMapa) const Positioned(right: 10, top: 14, child: _Atribucion()),
+                if (conMapa) Positioned(right: 10, bottom: c.activado ? 72 : 10, child: const _Atribucion()),
                 Positioned(
                   left: 0,
                   right: 0,
