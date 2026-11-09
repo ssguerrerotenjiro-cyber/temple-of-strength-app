@@ -91,6 +91,9 @@ import 'package:flutter_local_notifications/flutter_local_notifications.dart'
 import 'package:timezone/timezone.dart' as tz;
 import 'package:crypto/crypto.dart' show sha256;
 
+// El Camino del día (sección 61) solo existe en la app instalada.
+import 'camino_app.dart' if (dart.library.js_interop) 'camino_web.dart' as camino;
+
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await TemaTemplo.instancia.cargar();
@@ -5493,6 +5496,11 @@ const List<_ApartadoTerminos> _terminosTemplo = <_ApartadoTerminos>[
     'Cómo ejercerlos: escribe a ${ConfigSupabase.correoSoporte} desde la app o indicando tu @usuario. Respondemos '
         'las consultas en un máximo de 10 días hábiles y los reclamos en un máximo de 15 días hábiles, prorrogables '
         'como permite la ley.',
+    'Camino del día (opcional, solo en la app instalada): si lo activas, la app usa tu ubicación mientras está '
+        'abierta, para mostrarte en el mapa y medir tu recorrido, y el sensor de pasos del teléfono, para contar tus '
+        'pasos. Tu ubicación, tu recorrido y tus pasos se quedan en tu teléfono: no se guardan en tu cuenta ni se '
+        'comparten. El mapa se descarga de OpenFreeMap (datos de OpenStreetMap), que recibe la zona del mapa que se '
+        'muestra, no tu cuenta. Puedes quitar el permiso de ubicación cuando quieras en los ajustes del teléfono.',
     'Al crear la cuenta resuelves un reto visual (captcha). Para frenar las cuentas falsas guardamos durante dos días '
         'una huella cifrada de la conexión desde la que se creó (no la dirección IP en sí) y después la borramos.',
     'Seguridad: protegemos tus datos con medidas técnicas razonables (acceso solo con tu sesión, almacenes privados, '
@@ -10714,10 +10722,15 @@ class _DojoScreenState extends State<DojoScreen>
             controlador: _entrada,
             desde: 0.10,
             hasta: 0.58,
-            child: EscenaViva(
-              vitalidad: llama.valor / 100,
-              entrenoHoy: a.entrenoEse(usuario, DateTime.now()),
-            ),
+            child: EnWeb.activo
+                ? CaminoEnWeb(
+                    vitalidad: llama.valor / 100,
+                    entrenoHoy: a.entrenoEse(usuario, DateTime.now()),
+                  )
+                : camino.bannerCamino(
+                    vitalidad: llama.valor / 100,
+                    entrenoHoy: a.entrenoEse(usuario, DateTime.now()),
+                  ),
           ),
           const SizedBox(height: TempleSpace.l),
 
@@ -11664,12 +11677,17 @@ class EscenaViva extends StatefulWidget {
     required this.vitalidad,
     required this.entrenoHoy,
     this.altura = 210,
+    this.pie,
   });
 
   /// 0 = templo frío y cerrado. 1 = templo encendido.
   final double vitalidad;
   final bool entrenoHoy;
   final double altura;
+
+  /// Lo que va abajo en lugar del kanji y la frase (el Camino del día y su
+  /// tarjeta en la web ponen ahí lo suyo).
+  final Widget? pie;
 
   @override
   State<EscenaViva> createState() => _EscenaVivaState();
@@ -11741,6 +11759,9 @@ class _EscenaVivaState extends State<EscenaViva>
                 ),
               ),
             ),
+            if (widget.pie != null)
+              Positioned(left: 0, right: 0, bottom: 0, child: widget.pie!)
+            else
             Positioned(
               left: 18,
               right: 18,
@@ -73313,7 +73334,7 @@ class EnWeb {
 // ---------------------------------------------------------------------------
 
 /// Lo que solo existe en la app instalada.
-enum SoloEnApp { recordatorios, anuncios }
+enum SoloEnApp { recordatorios, anuncios, camino }
 
 /// Hoja que recomienda descargar la app. Se muestra cada vez que, en la web,
 /// se toca algo que solo existe en la app instalada.
@@ -73339,6 +73360,7 @@ class _HojaSoloEnApp extends StatelessWidget {
   String get _titulo => switch (que) {
         SoloEnApp.recordatorios => 'Los recordatorios viven en la app',
         SoloEnApp.anuncios => 'Las recompensas por anuncio viven en la app',
+        SoloEnApp.camino => 'El camino del día vive en la app',
       };
 
   String get _texto => switch (que) {
@@ -73346,11 +73368,15 @@ class _HojaSoloEnApp extends StatelessWidget {
             'Tenshi te recuerda tu sesión y el agua del día, y te escribe si llevas días sin entrar.',
         SoloEnApp.anuncios => 'En la web no hay anuncios. En la app instalada ves uno corto y ganas mon para el '
             'Taller, una foto de progreso extra, más charla con Tenshi y otras recompensas.',
+        SoloEnApp.camino => 'El navegador no puede contar tus pasos ni seguirte en el mapa con el celular en el '
+            'bolsillo. En la app instalada ves dónde estás en un mapa en vivo que te sigue mientras caminas, y '
+            'llevas la cuenta de tus pasos, kilómetros y calorías del día.',
       };
 
   IconData get _icono => switch (que) {
         SoloEnApp.recordatorios => Icons.notifications_active_outlined,
         SoloEnApp.anuncios => Icons.play_circle_outline_rounded,
+        SoloEnApp.camino => Icons.directions_walk_rounded,
       };
 
   String get _nota {
@@ -73465,6 +73491,100 @@ class _HojaSoloEnApp extends StatelessWidget {
               ),
             ],
           ],
+        ),
+      ),
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// 58.2b EL CAMINO DEL DÍA EN LA WEB
+//
+// En la web no hay mapa ni contador de pasos (sección 61, solo en la app). En
+// su lugar del Dojo va la escena del templo con una invitación a instalar la app.
+// ---------------------------------------------------------------------------
+
+class CaminoEnWeb extends StatelessWidget {
+  const CaminoEnWeb({super.key, required this.vitalidad, required this.entrenoHoy});
+  final double vitalidad;
+  final bool entrenoHoy;
+
+  @override
+  Widget build(BuildContext context) {
+    void abrir() => recomendarApp(context, SoloEnApp.camino);
+    return Semantics(
+      button: true,
+      label: 'El camino del día vive en la app',
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: abrir,
+        child: EscenaViva(
+          vitalidad: vitalidad,
+          entrenoHoy: entrenoHoy,
+          altura: 236,
+          pie: Padding(
+            padding: const EdgeInsets.fromLTRB(18, 0, 18, 16),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: <Widget>[
+                const Text(
+                  '一歩ずつ',
+                  style: TextStyle(
+                    fontSize: 19,
+                    height: 1.4,
+                    letterSpacing: 3,
+                    color: ColoresTradicion.blancoLuna,
+                    shadows: <Shadow>[Shadow(color: Colors.black87, blurRadius: 12)],
+                  ),
+                ),
+                const SizedBox(height: 2),
+                const Text(
+                  'Tu camino del día vive en la app',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    fontSize: 14.5,
+                    fontWeight: FontWeight.w700,
+                    color: ColoresTradicion.blancoLuna,
+                    shadows: <Shadow>[Shadow(color: Colors.black87, blurRadius: 10)],
+                  ),
+                ),
+                const SizedBox(height: 3),
+                Text(
+                  'Mapa en vivo, pasos, kilómetros y calorías mientras caminas.',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    fontSize: 12.5,
+                    height: 1.35,
+                    color: ColoresTradicion.texto.withValues(alpha: 0.86),
+                    shadows: const <Shadow>[Shadow(color: Colors.black87, blurRadius: 10)],
+                  ),
+                ),
+                const SizedBox(height: 10),
+                Material(
+                  color: TempleColors.violeta,
+                  borderRadius: BorderRadius.circular(TempleRadius.pastilla),
+                  child: InkWell(
+                    borderRadius: BorderRadius.circular(TempleRadius.pastilla),
+                    onTap: abrir,
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 8),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: <Widget>[
+                          const Icon(Icons.download_rounded, size: 16, color: Colors.white),
+                          const SizedBox(width: 6),
+                          const Text(
+                            'Instalar la app',
+                            style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: Colors.white),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
         ),
       ),
     );

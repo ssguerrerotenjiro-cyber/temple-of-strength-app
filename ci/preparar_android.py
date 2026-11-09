@@ -6,6 +6,9 @@
 - Firma con la llave propia si existe android/key.properties.
 - Recordatorios: permisos, receptores, icono de notificación y desugaring.
 - Reglas de R8 para que el APK de release no se cierre al abrir.
+- Camino del día: ubicación solo en primer plano y actividad física (pasos).
+  Se quita el servicio de ubicación en segundo plano que trae geolocator:
+  la app nunca usa la ubicación con la pantalla apagada.
 """
 import os, re, sys, shutil
 
@@ -29,7 +32,9 @@ s = leer(man)
 if 'android.permission.INTERNET' not in s:
     s = re.sub(r'(<manifest[^>]*>)', r'\1\n    <uses-permission android:name="android.permission.INTERNET"/>', s, count=1)
 s = re.sub(r'android:label="[^"]*"', f'android:label="{NOMBRE}"', s, count=1)
-for permiso in ('android.permission.POST_NOTIFICATIONS', 'android.permission.RECEIVE_BOOT_COMPLETED'):
+for permiso in ('android.permission.POST_NOTIFICATIONS', 'android.permission.RECEIVE_BOOT_COMPLETED',
+               'android.permission.ACCESS_FINE_LOCATION', 'android.permission.ACCESS_COARSE_LOCATION',
+               'android.permission.ACTIVITY_RECOGNITION'):
     if permiso not in s:
         s = re.sub(r'(<manifest[^>]*>)', r'\1\n    <uses-permission android:name="%s"/>' % permiso, s, count=1)
 if 'ScheduledNotificationReceiver' not in s:
@@ -42,6 +47,12 @@ if 'ScheduledNotificationReceiver' not in s:
                 <action android:name="com.htc.intent.action.QUICKBOOT_POWERON"/>
             </intent-filter>
         </receiver>
+    </application>''', 1)
+# Sin servicio de ubicación en segundo plano (no se declara en Play Console).
+if 'xmlns:tools=' not in s:
+    s = re.sub(r'<manifest ', '<manifest xmlns:tools="http://schemas.android.com/tools" ', s, count=1)
+if 'GeolocatorLocationService' not in s:
+    s = s.replace('</application>', '''    <service android:name="com.baseflow.geolocator.GeolocatorLocationService" tools:node="remove" />
     </application>''', 1)
 if 'com.google.android.gms.ads.APPLICATION_ID' not in s:
     s = s.replace('</application>', f'''    <meta-data
@@ -65,7 +76,7 @@ groovy = 'android/app/build.gradle'
 if os.path.exists(kts):
     g = leer(kts)
     g = re.sub(r'applicationId\s*=\s*"[^"]*"', f'applicationId = "{ID}"', g)
-    g = re.sub(r'minSdk\s*=\s*flutter\.minSdkVersion', 'minSdk = maxOf(flutter.minSdkVersion, 23)', g)
+    g = re.sub(r'minSdk\s*=\s*flutter\.minSdkVersion', 'minSdk = maxOf(flutter.minSdkVersion, 24)', g)
     # Las notificaciones programadas necesitan «desugaring» de Java.
     if 'isCoreLibraryDesugaringEnabled' not in g:
         g = g.replace('compileOptions {', 'compileOptions {\n        isCoreLibraryDesugaringEnabled = true', 1)
@@ -100,7 +111,7 @@ android {''', 1)
 elif os.path.exists(groovy):
     g = leer(groovy)
     g = re.sub(r'applicationId\s*=?\s*"[^"]*"', f'applicationId = "{ID}"', g)
-    g = re.sub(r'minSdk(Version)?\s*=?\s*flutter\.minSdkVersion', 'minSdkVersion Math.max(flutter.minSdkVersion, 23)', g)
+    g = re.sub(r'minSdk(Version)?\s*=?\s*flutter\.minSdkVersion', 'minSdkVersion Math.max(flutter.minSdkVersion, 24)', g)
     if 'coreLibraryDesugaringEnabled' not in g:
         g = g.replace('compileOptions {', 'compileOptions {\n        coreLibraryDesugaringEnabled true', 1)
         g += "\ndependencies {\n    coreLibraryDesugaring 'com.android.tools:desugar_jdk_libs:2.1.4'\n}\n"
