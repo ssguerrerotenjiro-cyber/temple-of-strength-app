@@ -66,10 +66,18 @@ jobs:
           target: google_apis
           arch: x86_64
           disable-animations: false
-          # Sin Vulkan: el Vulkan de SwiftShader del emulador se cayó con el mapa
-          # (la app pasa a OpenGL ES). Los teléfonos reales usan su propio Vulkan.
-          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -no-snapshot -feature -Vulkan
+          # El emulador se caía al dibujar el Dojo con swiftshader_indirect (con y
+          # sin Vulkan). Se prueba con SwiftShader sobre ANGLE y más memoria.
+          ram-size: 3072M
+          emulator-options: -no-window -gpu swangle_indirect -noaudio -no-boot-anim -no-snapshot
           script: ./ci/probar_camino.sh salida/prueba.apk
+
+      - name: Diagnóstico del servidor
+        if: always()
+        run: |
+          free -m || true
+          sudo dmesg 2>/dev/null | grep -iE "oom|killed process|qemu|segfault" | tail -20 || true
+          ls -la /tmp/android-runner 2>/dev/null || true
 
       - name: Guardar capturas y registro
         if: always()
