@@ -67,9 +67,11 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - nombre: api30
+          # Con Impeller, el emulador se cae al tomar la captura de pantalla
+          # (le pasa al GPU por software); con Skia se ve igual y no se cae.
+          - nombre: api30-skia
             api: 30
-            apk: prueba.apk
+            apk: prueba_skia.apk
           - nombre: api34-skia
             api: 34
             apk: prueba_skia.apk

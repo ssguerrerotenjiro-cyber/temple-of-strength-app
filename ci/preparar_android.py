@@ -7,8 +7,10 @@
 - Recordatorios: permisos, receptores, icono de notificación y desugaring.
 - Reglas de R8 para que el APK de release no se cierre al abrir.
 - Camino del día: ubicación solo en primer plano y actividad física (pasos).
-  Se quita el servicio de ubicación en segundo plano que trae geolocator:
-  la app nunca usa la ubicación con la pantalla apagada.
+  El servicio que trae geolocator se deja: sin él no entrega posiciones
+  (lo usa enlazado dentro de la app). La app nunca lo pasa a primer plano
+  ni a segundo plano porque no le da configuración de notificación, y no se
+  declaran los permisos FOREGROUND_SERVICE_* ni ACCESS_BACKGROUND_LOCATION.
 """
 import os, re, sys, shutil
 
@@ -47,12 +49,6 @@ if 'ScheduledNotificationReceiver' not in s:
                 <action android:name="com.htc.intent.action.QUICKBOOT_POWERON"/>
             </intent-filter>
         </receiver>
-    </application>''', 1)
-# Sin servicio de ubicación en segundo plano (no se declara en Play Console).
-if 'xmlns:tools=' not in s:
-    s = re.sub(r'<manifest ', '<manifest xmlns:tools="http://schemas.android.com/tools" ', s, count=1)
-if 'GeolocatorLocationService' not in s:
-    s = s.replace('</application>', '''    <service android:name="com.baseflow.geolocator.GeolocatorLocationService" tools:node="remove" />
     </application>''', 1)
 if 'com.google.android.gms.ads.APPLICATION_ID' not in s:
     s = s.replace('</application>', f'''    <meta-data
