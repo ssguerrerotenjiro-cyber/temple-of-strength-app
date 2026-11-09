@@ -47,7 +47,38 @@ jobs:
           flutter build apk --release --dart-define=VISTA_PRUEBA=true --target-platform android-x64 --build-number=${{ github.run_number }}
           mkdir -p salida
           cp build/app/outputs/flutter-apk/app-release.apk salida/prueba.apk
+          # Variante sin Impeller (Skia), por si el GPU por software del emulador
+          # no aguanta Impeller.
+          sed -i 's#</application>#    <meta-data android:name="io.flutter.embedding.android.EnableImpeller" android:value="false" />\n    </application>#' android/app/src/main/AndroidManifest.xml
+          flutter build apk --release --dart-define=VISTA_PRUEBA=true --target-platform android-x64 --build-number=${{ github.run_number }}
+          cp build/app/outputs/flutter-apk/app-release.apk salida/prueba_skia.apk
           ls -la salida
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: prueba-camino-${{ github.run_number }}
+          path: salida/
+
+  emulador:
+    needs: camino
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - nombre: api30
+            api: 30
+            apk: prueba.apk
+          - nombre: api34-skia
+            api: 34
+            apk: prueba_skia.apk
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: prueba-camino-${{ github.run_number }}
+          path: salida/
 
       - name: Activar KVM
         run: |
@@ -60,17 +91,15 @@ jobs:
       - name: Caminar en el emulador
         uses: reactivecircus/android-emulator-runner@v2
         env:
-          API: 34
+          API: ${{ matrix.api }}
         with:
-          api-level: 34
+          api-level: ${{ matrix.api }}
           target: google_apis
           arch: x86_64
           disable-animations: false
-          # El emulador se caía al dibujar el Dojo con swiftshader_indirect (con y
-          # sin Vulkan). Se prueba con SwiftShader sobre ANGLE y más memoria.
           ram-size: 3072M
-          emulator-options: -no-window -gpu swangle_indirect -noaudio -no-boot-anim -no-snapshot
-          script: ./ci/probar_camino.sh salida/prueba.apk
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -no-snapshot
+          script: ./ci/probar_camino.sh salida/${{ matrix.apk }}
 
       - name: Diagnóstico del servidor
         if: always()
@@ -83,7 +112,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: emulador-${{ github.run_number }}
+          name: emulador-${{ github.run_number }}-${{ matrix.nombre }}
           path: /tmp/android-runner/
           if-no-files-found: ignore
 
@@ -93,7 +122,7 @@ jobs:
           [ -d resultado ] || exit 0
           git config user.name "github-actions"
           git config user.email "github-actions@users.noreply.github.com"
-          RAMA="pruebas/camino-${{ github.run_number }}"
+          RAMA="pruebas/camino-${{ github.run_number }}-${{ matrix.nombre }}"
           git checkout -q --orphan "$RAMA"
           git rm -rq --cached . || true
           git add -f resultado
