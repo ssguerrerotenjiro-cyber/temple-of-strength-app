@@ -66,7 +66,9 @@ jobs:
           target: google_apis
           arch: x86_64
           disable-animations: false
-          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -no-snapshot
+          # Sin Vulkan: el Vulkan de SwiftShader del emulador se cayó con el mapa
+          # (la app pasa a OpenGL ES). Los teléfonos reales usan su propio Vulkan.
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -no-snapshot -feature -Vulkan
           script: ./ci/probar_camino.sh salida/prueba.apk
 
       - name: Guardar capturas y registro

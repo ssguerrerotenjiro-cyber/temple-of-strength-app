@@ -24,16 +24,29 @@ caminar() { # $1 = desde, $2 = hasta (pasos de unos 8 m hacia el nororiente)
   for i in $(seq "$1" "$2"); do
     LAT=$(python3 -c "print(f'{$LAT0 + $i*0.00007:.6f}')")
     LON=$(python3 -c "print(f'{$LON0 + $i*0.00003:.6f}')")
-    adb emu geo fix "$LON" "$LAT"
+    adb emu geo fix "$LON" "$LAT" > /dev/null
     sleep 2
+    if [ "$(adb get-state 2>/dev/null)" != "device" ]; then
+      echo "::error::El emulador dejó de responder durante la caminata (paso $i)"
+      exit 1
+    fi
   done
 }
 adb emu geo fix $LON0 $LAT0
 sleep 3
 adb logcat -c
 adb shell monkey -p $PKG -c android.intent.category.LAUNCHER 1 > /dev/null
-sleep 30
-adb exec-out screencap -p > "$OUT/01_dojo.png"
+for s in 08 16 24 32; do
+  sleep 8
+  if [ "$(adb get-state 2>/dev/null)" != "device" ]; then
+    echo "::error::El emulador dejó de responder $s s después de abrir la app"
+    ls -la /tmp/android-runner 2>/dev/null
+    exit 1
+  fi
+  adb exec-out screencap -p > "$OUT/00_abriendo_${s}s.png"
+  adb logcat -d -v time > "$OUT/logcat_${s}s.txt"
+done
+cp "$OUT/00_abriendo_32s.png" "$OUT/01_dojo.png"
 caminar 1 15
 sleep 4
 adb exec-out screencap -p > "$OUT/02_dojo_caminando.png"
