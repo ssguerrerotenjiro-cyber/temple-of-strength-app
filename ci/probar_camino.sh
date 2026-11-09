@@ -1,6 +1,9 @@
 #!/bin/bash
-# Camino del día en el emulador: da los permisos, simula una caminata con
-# ubicaciones falsas y guarda capturas del banner y de la pantalla del camino.
+# Camino del día en el emulador, por etapas, para saber qué falla si algo falla:
+#   1. La app sin permisos (escena del templo, sin mapa).
+#   2. Con el permiso de actividad física (sensor de pasos).
+#   3. Con la ubicación: mapa en vivo y una caminata simulada.
+#   4. La pantalla del camino.
 # Usa la vista de prueba (VISTA_PRUEBA=true): abre el Dojo sin cuenta.
 PKG=com.templeofstrength.app
 APK=${1:-salida/prueba.apk}
@@ -11,11 +14,32 @@ adb shell getprop ro.build.version.release > "$OUT/android.txt"
 if ! adb install -r "$APK" > "$OUT/instalar.txt" 2>&1; then
   cat "$OUT/instalar.txt"; echo "::error::El APK no se pudo instalar"; exit 1
 fi
-for p in ACCESS_FINE_LOCATION ACCESS_COARSE_LOCATION ACTIVITY_RECOGNITION POST_NOTIFICATIONS; do
-  adb shell pm grant $PKG android.permission.$p 2>/dev/null
-done
+adb shell pm grant $PKG android.permission.POST_NOTIFICATIONS 2>/dev/null
 adb shell cmd location set-location-enabled true 2>/dev/null
-adb shell settings put secure location_mode 3 2>/dev/null
+
+# Registro continuo: si el emulador se cae, queda lo último que pasó.
+adb logcat -c
+adb logcat -v time > "$OUT/logcat.txt" 2>&1 &
+LOGCAT=$!
+
+vivo() { [ "$(timeout 10 adb get-state 2>/dev/null)" = "device" ]; }
+captura() { timeout 20 adb exec-out screencap -p > "$OUT/$1.png" 2>/dev/null; }
+abrir() {
+  adb shell am force-stop $PKG
+  adb shell monkey -p $PKG -c android.intent.category.LAUNCHER 1 > /dev/null 2>&1
+}
+etapa() { # $1 = nombre, $2 = segundos
+  for s in $(seq 5 5 "$2"); do
+    sleep 5
+    if ! vivo; then
+      echo "::error::El emulador se cayó en la etapa «$1», unos $s s después de abrir la app"
+      kill $LOGCAT 2>/dev/null
+      exit 1
+    fi
+  done
+  captura "$1"
+  echo "Etapa «$1»: bien"
+}
 
 # Punto de partida: Parque de la 93, Bogotá.
 LAT0=4.67640
@@ -24,51 +48,45 @@ caminar() { # $1 = desde, $2 = hasta (pasos de unos 8 m hacia el nororiente)
   for i in $(seq "$1" "$2"); do
     LAT=$(python3 -c "print(f'{$LAT0 + $i*0.00007:.6f}')")
     LON=$(python3 -c "print(f'{$LON0 + $i*0.00003:.6f}')")
-    adb emu geo fix "$LON" "$LAT" > /dev/null
+    timeout 10 adb emu geo fix "$LON" "$LAT" > /dev/null 2>&1
     sleep 2
-    if [ "$(adb get-state 2>/dev/null)" != "device" ]; then
-      echo "::error::El emulador dejó de responder durante la caminata (paso $i)"
+    if ! vivo; then
+      echo "::error::El emulador se cayó durante la caminata (paso $i)"
+      kill $LOGCAT 2>/dev/null
       exit 1
     fi
   done
 }
-adb emu geo fix $LON0 $LAT0
-sleep 3
-adb logcat -c
-adb shell monkey -p $PKG -c android.intent.category.LAUNCHER 1 > /dev/null
-for s in 08 16 24 32; do
-  sleep 8
-  if [ "$(adb get-state 2>/dev/null)" != "device" ]; then
-    echo "::error::El emulador dejó de responder $s s después de abrir la app"
-    ls -la /tmp/android-runner 2>/dev/null
-    exit 1
-  fi
-  adb exec-out screencap -p > "$OUT/00_abriendo_${s}s.png"
-  adb logcat -d -v time > "$OUT/logcat_${s}s.txt"
-done
-cp "$OUT/00_abriendo_32s.png" "$OUT/01_dojo.png"
+
+abrir
+etapa 1_sin_permisos 25
+
+adb shell pm grant $PKG android.permission.ACTIVITY_RECOGNITION 2>/dev/null
+abrir
+etapa 2_con_pasos 20
+
+adb shell pm grant $PKG android.permission.ACCESS_COARSE_LOCATION 2>/dev/null
+adb shell pm grant $PKG android.permission.ACCESS_FINE_LOCATION 2>/dev/null
+timeout 10 adb emu geo fix $LON0 $LAT0 > /dev/null 2>&1
+abrir
+etapa 3_mapa 30
 caminar 1 15
 sleep 4
-adb exec-out screencap -p > "$OUT/02_dojo_caminando.png"
+captura 4_mapa_caminando
+echo "Etapa «caminata»: bien"
 
-# Abrir la pantalla del camino tocando el banner.
-adb shell uiautomator dump /sdcard/vista.xml > /dev/null 2>&1
-adb pull /sdcard/vista.xml "$OUT/vista.xml" > /dev/null 2>&1
-XY=$(python3 ci/centro_de.py "$OUT/vista.xml" "Camino del día")
-if [ -z "$XY" ]; then
-  TAM=$(adb shell wm size | grep -oE '[0-9]+x[0-9]+' | tail -1)
-  W=${TAM%x*}; H=${TAM#*x}
-  XY="$((W / 2)) $((H * 34 / 100))"
-fi
-echo "Toque en $XY"
-adb shell input tap $XY
+# Abrir la pantalla del camino tocando el banner (sin uiautomator: con la
+# animación del mapa nunca queda «quieto» y se cuelga).
+TAM=$(adb shell wm size | grep -oE '[0-9]+x[0-9]+' | tail -1)
+W=${TAM%x*}; H=${TAM#*x}
+adb shell input tap $((W / 2)) $((H * 30 / 100))
 sleep 8
-adb exec-out screencap -p > "$OUT/03_pantalla.png"
+captura 5_pantalla
 caminar 16 26
 sleep 4
-adb exec-out screencap -p > "$OUT/04_pantalla_caminando.png"
+captura 6_pantalla_caminando
 
-adb logcat -d -v time > "$OUT/logcat.txt"
+kill $LOGCAT 2>/dev/null
 echo "Errores de Flutter (si hay):"
 grep -E "E/flutter" "$OUT/logcat.txt" | head -60
 if grep -q "FATAL EXCEPTION" "$OUT/logcat.txt" || [ -z "$(adb shell pidof $PKG)" ]; then
