@@ -1,0 +1,63 @@
+name: Paquete para VS Code
+
+# Arma el código completo listo para abrir en VS Code: carpeta android/
+# preparada (sin la llave de firma), icono y pubspec.lock con las versiones
+# probadas. Antes de empaquetar comprueba que compila.
+on:
+  push:
+    branches: [paquete]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  paquete:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Crear el proyecto Android
+        run: flutter create --org com.templeofstrength --project-name temple_of_strength --platforms android .
+
+      - name: Ajustar Android (sin llave: firma de pruebas)
+        run: python3 ci/preparar_android.py
+
+      - name: Paquetes e icono
+        run: |
+          flutter pub get
+          dart run flutter_launcher_icons
+
+      - name: Comprobar que compila
+        run: flutter build apk --debug --target-platform android-arm64
+
+      - name: Armar el zip
+        run: |
+          flutter --version > FLUTTER_USADO.txt
+          cat FLUTTER_USADO.txt
+          zip -r -q "$RUNNER_TEMP/TempleOfStrength-codigo.zip" . \
+            -x '.git/*' '.github/*' 'build/*' '.dart_tool/*' 'test/*' \
+               'android/.gradle/*' 'android/.kotlin/*' 'android/app/.cxx/*' 'android/local.properties' \
+               'android/key.properties' '*.jks' '*.keystore' '*.iml' '.idea/*' \
+               '.flutter-plugins' '.flutter-plugins-dependencies' 'analysis_options.yaml'
+          unzip -l "$RUNNER_TEMP/TempleOfStrength-codigo.zip" | tail -1
+          if unzip -l "$RUNNER_TEMP/TempleOfStrength-codigo.zip" | grep -qE 'key\.properties|\.jks'; then
+            echo "::error::El paquete trae una llave"; exit 1
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: TempleOfStrength-codigo
+          path: ${{ runner.temp }}/TempleOfStrength-codigo.zip
+          retention-days: 7

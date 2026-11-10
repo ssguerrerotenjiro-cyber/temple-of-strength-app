@@ -1,0 +1,26 @@
+{
+  // Ejecutar y depurar (F5) en VS Code. Elige la configuración arriba, en «Ejecutar y depurar».
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Temple · vista de prueba (sin cuenta)",
+      "request": "launch",
+      "type": "dart",
+      "program": "lib/main.dart",
+      "args": ["--dart-define=VISTA_PRUEBA=true"]
+    },
+    {
+      "name": "Temple · con mi cuenta",
+      "request": "launch",
+      "type": "dart",
+      "program": "lib/main.dart"
+    },
+    {
+      "name": "Temple · rápida como el APK (release)",
+      "request": "launch",
+      "type": "dart",
+      "program": "lib/main.dart",
+      "flutterMode": "release"
+    }
+  ]
+}
