@@ -31,7 +31,7 @@ jobs:
       - name: Crear el proyecto Android
         run: flutter create --org com.templeofstrength --project-name temple_of_strength --platforms android .
 
-      - name: Ajustar Android (sin llave: firma de pruebas)
+      - name: Ajustar Android (sin llave, firma de pruebas)
         run: python3 ci/preparar_android.py
 
       - name: Paquetes e icono
