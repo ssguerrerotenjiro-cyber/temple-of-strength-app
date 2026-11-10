@@ -9,7 +9,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   paquete:
@@ -56,8 +56,12 @@ jobs:
             echo "::error::El paquete trae una llave"; exit 1
           fi
 
-      - uses: actions/upload-artifact@v4
-        with:
-          name: TempleOfStrength-codigo
-          path: ${{ runner.temp }}/TempleOfStrength-codigo.zip
-          retention-days: 7
+      - name: Guardar el zip en la rama paquete-zip
+        run: |
+          mkdir -p "$RUNNER_TEMP/rama" && cd "$RUNNER_TEMP/rama"
+          cp "$RUNNER_TEMP/TempleOfStrength-codigo.zip" .
+          git init -q -b paquete-zip
+          git add -A
+          git -c user.name="github-actions[bot]" -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+            commit -q -m "Código para VS Code (compilación ${{ github.run_number }})"
+          git push -q -f "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}" paquete-zip
