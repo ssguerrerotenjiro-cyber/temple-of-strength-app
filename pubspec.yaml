@@ -4,7 +4,7 @@ publish_to: 'none'
 
 # Sube este número en cada versión nueva: 1.0.1, 1.0.2… El número de
 # compilación lo pone solo GitHub en cada construcción.
-version: 1.7.0+7
+version: 1.7.1+8
 
 environment:
   sdk: '>=3.4.0 <4.0.0'

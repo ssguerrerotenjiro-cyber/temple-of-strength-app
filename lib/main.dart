@@ -4137,6 +4137,23 @@ class _PuertaTemploState extends State<PuertaTemplo> {
     if (vistaPrueba) {
       // Solo en compilaciones de prueba (60.5): módulos sin cuenta.
       if (parametroPrueba('pantalla') == 'login') return const LoginScreen();
+      // ?pase=1: nombre con el estilo del Pase. ?marco=kintsugi: marco del sello.
+      if (parametroPrueba('pase') == '1') PaseTemplo.instancia.simularEnVistaPrueba();
+      final MarcoSello? marco = MarcoSello.values.where((MarcoSello m) => m.name == parametroPrueba('marco')).firstOrNull;
+      if (marco != null) AlmacenIdentidad.instancia.de('Kenji').marco = marco;
+      // ?pantalla=ejercicio&id=pajaro: la animación de un ejercicio, grande.
+      if (parametroPrueba('pantalla') == 'ejercicio') {
+        return Scaffold(
+          backgroundColor: TempleColors.negro,
+          body: Center(child: AvatarEjercicio(ejercicioId: parametroPrueba('id') ?? 'pajaro', size: 340)),
+        );
+      }
+      // ?pantalla=perfil: el perfil, con su viñeta del Taller.
+      if (parametroPrueba('pantalla') == 'perfil') {
+        return PerfilScreen(
+          perfil: PerfilUsuario.nuevo(nombre: 'Kenji', espiritu: espiritusDelTemplo.values.first.nombre),
+        );
+      }
       return MainShell(
         perfil: PerfilUsuario.nuevo(nombre: 'Kenji', espiritu: espiritusDelTemplo.values.first.nombre),
         indiceInicial: int.tryParse(parametroPrueba('modulo') ?? '') ?? 0,
@@ -8035,6 +8052,29 @@ class RegistroDiario {
 // PerfilUsuario: se deriva del XP acumulado, así nunca se desincroniza.
 // ---------------------------------------------------------------------------
 
+/// Un rango del templo: se gana al llegar a su nivel.
+class RangoTemplo {
+  const RangoTemplo(this.nombre, this.desde, this.kanji, {this.especial = false});
+  final String nombre;
+  final int desde;
+  final String kanji;
+
+  /// Los dos últimos van en dorado.
+  final bool especial;
+}
+
+/// Los rangos, del primero al último. NivelTemplo.desdeXp y la escalera del
+/// Dojo salen de esta lista.
+const List<RangoTemplo> kRangosTemplo = <RangoTemplo>[
+  RangoTemplo('Aprendiz', 1, '見'),
+  RangoTemplo('Discípulo', 5, '弟'),
+  RangoTemplo('Guerrero', 10, '武'),
+  RangoTemplo('Samurái', 20, '侍'),
+  RangoTemplo('Samurái Élite', 35, '剣'),
+  RangoTemplo('Maestro del Templo', 50, '師', especial: true),
+  RangoTemplo('Leyenda', 75, '伝', especial: true),
+];
+
 class NivelTemplo {
   const NivelTemplo({
     required this.nivel,
@@ -8064,38 +8104,19 @@ class NivelTemplo {
       restante -= costeDeNivel(nivel);
       nivel++;
     }
-    final String rango;
-    final bool especial;
-    if (nivel < 5) {
-      rango = 'Aprendiz';
-      especial = false;
-    } else if (nivel < 10) {
-      rango = 'Discípulo';
-      especial = false;
-    } else if (nivel < 20) {
-      rango = 'Guerrero';
-      especial = false;
-    } else if (nivel < 35) {
-      rango = 'Samurái';
-      especial = false;
-    } else if (nivel < 50) {
-      rango = 'Samurái Élite';
-      especial = false;
-    } else if (nivel < 75) {
-      rango = 'Maestro del Templo';
-      especial = true;
-    } else {
-      rango = 'Leyenda';
-      especial = true;
-    }
+    final RangoTemplo r = rangoDeNivel(nivel);
     return NivelTemplo(
       nivel: nivel,
       xpEnNivel: restante.round(),
       xpParaSiguiente: costeDeNivel(nivel),
-      rango: rango,
-      rangoEspecial: especial,
+      rango: r.nombre,
+      rangoEspecial: r.especial,
     );
   }
+
+  /// El rango que corresponde a un nivel.
+  static RangoTemplo rangoDeNivel(int nivel) =>
+      kRangosTemplo.lastWhere((RangoTemplo r) => nivel >= r.desde, orElse: () => kRangosTemplo.first);
 }
 
 // ---------------------------------------------------------------------------
@@ -11029,7 +11050,7 @@ class _DojoScreenState extends State<DojoScreen>
 
 // -- Piezas del Dojo --------------------------------------------------------
 
-class _Encabezado extends StatelessWidget {
+class _Encabezado extends StatefulWidget {
   const _Encabezado({
     required this.nombre,
     required this.saludo,
@@ -11043,70 +11064,316 @@ class _Encabezado extends StatelessWidget {
   final VoidCallback onAvisos;
 
   @override
+  State<_Encabezado> createState() => _EncabezadoState();
+}
+
+class _EncabezadoState extends State<_Encabezado> {
+  Future<void> _abrirPerfil() async {
+    await Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => PerfilScreen(perfil: TempleShellScope.of(context).perfil),
+      ),
+    );
+    // La foto, el marco o el estilo del nombre pudieron cambiar en el perfil.
+    if (mounted) setState(() {});
+  }
+
+  @override
   Widget build(BuildContext context) {
-    return Row(
-      children: <Widget>[
-        GestureDetector(
-          onTap: () => Navigator.of(context).push(
-            MaterialPageRoute<void>(
-              builder: (_) => PerfilScreen(
-                perfil: TempleShellScope.of(context).perfil,
+    final PerfilUsuario perfil = TempleShellScope.of(context).perfil;
+    final IdentidadUsuario id = AlmacenIdentidad.instancia.de(widget.nombre);
+    final NivelTemplo nivel = widget.nivel;
+    return ListenableBuilder(
+      listenable: PaseTemplo.instancia,
+      builder: (BuildContext context, _) {
+        // Con el Pase, el nombre va en su estilo; si no eligió uno, en oro.
+        final EstiloNombre? estilo = PaseTemplo.instancia.activo
+            ? (DatosEstiloNombre.desde(id.estiloNombre) ?? EstiloNombre.oro)
+            : null;
+        return Row(
+          children: <Widget>[
+            Semantics(
+              button: true,
+              label: 'Mi perfil',
+              child: GestureDetector(
+                onTap: _abrirPerfil,
+                // La foto de perfil (o el sello) con su marco y el nivel.
+                child: SelloUsuario(
+                  identidad: id,
+                  kanji: kanjiDeEspiritu(perfil.espiritu),
+                  nivel: nivel.nivel,
+                  size: 64,
+                  animar: true,
+                ),
+              ),
+            ),
+            const SizedBox(width: 14),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: <Widget>[
+                  Text(widget.saludo, style: const TextStyle(fontSize: 12.5, color: TempleColors.textoSuave)),
+                  const SizedBox(height: 2),
+                  NombreConEstilo(
+                    widget.nombre,
+                    estilo: estilo,
+                    style: const TextStyle(
+                      fontSize: 22,
+                      height: 1.1,
+                      fontWeight: FontWeight.w600,
+                      color: TempleColors.blancoLuna,
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  Row(
+                    children: <Widget>[
+                      Expanded(child: EscaleraRangos(nivel: nivel)),
+                      const SizedBox(width: 4),
+                      const IndicadorNube(compacto: true),
+                    ],
+                  ),
+                  const SizedBox(height: 8),
+                  _BarraXp(
+                    progreso: nivel.progreso,
+                    etiqueta: 'Nivel ${nivel.nivel} · ${nivel.xpEnNivel} / ${nivel.xpParaSiguiente} XP',
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(width: 8),
+            CampanaCorrespondencia(usuario: widget.nombre),
+            BotonMenuTemplo(
+              onTap: () => menuDojo(
+                context,
+                usuario: widget.nombre,
+                espiritu: perfil.espiritu,
+              ),
+            ),
+          ],
+        );
+      },
+    );
+  }
+}
+
+/// El rango actual y, a su lado, los que vienen con el nivel en que se ganan.
+/// Se desliza de lado; al tocarlo se abre el camino completo de rangos.
+class EscaleraRangos extends StatelessWidget {
+  const EscaleraRangos({super.key, required this.nivel});
+  final NivelTemplo nivel;
+
+  @override
+  Widget build(BuildContext context) {
+    final int actual = math.max(0, kRangosTemplo.indexWhere((RangoTemplo r) => r.nombre == nivel.rango));
+    final int cuantos = kRangosTemplo.length - actual;
+    return Semantics(
+      button: true,
+      label: 'Rango ${nivel.rango}. Ver los rangos del templo',
+      child: SizedBox(
+        height: 28,
+        child: ShaderMask(
+          // Se desvanece a la derecha: hay más rangos al deslizar.
+          blendMode: BlendMode.dstIn,
+          shaderCallback: (Rect r) => const LinearGradient(
+            colors: <Color>[Colors.white, Colors.white, Colors.transparent],
+            stops: <double>[0, 0.82, 1],
+          ).createShader(r),
+          child: ListView.separated(
+            scrollDirection: Axis.horizontal,
+            padding: const EdgeInsets.only(right: 18),
+            itemCount: cuantos,
+            separatorBuilder: (BuildContext context, int i) =>
+                const Icon(Icons.chevron_right_rounded, size: 15, color: TempleColors.textoTenue),
+            itemBuilder: (BuildContext context, int k) {
+              final RangoTemplo r = kRangosTemplo[actual + k];
+              return GestureDetector(
+                behavior: HitTestBehavior.opaque,
+                onTap: () => mostrarRangosTemplo(context, nivel),
+                child: Center(
+                  child: k == 0 ? InsigniaRango(r.nombre, especial: r.especial) : _RangoPorVenir(rango: r),
+                ),
+              );
+            },
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _RangoPorVenir extends StatelessWidget {
+  const _RangoPorVenir({required this.rango});
+  final RangoTemplo rango;
+
+  @override
+  Widget build(BuildContext context) {
+    final Color tinte = rango.especial ? TempleColors.dorado : TempleColors.textoTenue;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(TempleRadius.pastilla),
+        border: Border.all(color: tinte.withValues(alpha: 0.35)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: <Widget>[
+          Icon(Icons.lock_outline_rounded, size: 11, color: tinte),
+          const SizedBox(width: 4),
+          Text(
+            '${rango.nombre} · Nv ${rango.desde}',
+            style: TextStyle(fontSize: 10.5, fontWeight: FontWeight.w500, color: tinte),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Los siete rangos del templo: cuáles ya tienes, el actual y lo que falta.
+Future<void> mostrarRangosTemplo(BuildContext context, NivelTemplo nivel) {
+  HapticFeedback.selectionClick();
+  final int actual = math.max(0, kRangosTemplo.indexWhere((RangoTemplo r) => r.nombre == nivel.rango));
+  return showModalBottomSheet<void>(
+    context: context,
+    isScrollControlled: true,
+    backgroundColor: TempleColors.grafito,
+    shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(26))),
+    builder: (BuildContext ctx) => SafeArea(
+      top: false,
+      child: ConstrainedBox(
+        constraints: BoxConstraints(maxHeight: MediaQuery.sizeOf(ctx).height * 0.85),
+        child: ListView(
+          shrinkWrap: true,
+          padding: const EdgeInsets.fromLTRB(22, 12, 22, 22),
+          children: <Widget>[
+            Center(
+              child: Container(
+                width: 38,
+                height: 4,
+                decoration: BoxDecoration(color: TempleColors.borde, borderRadius: BorderRadius.circular(2)),
+              ),
+            ),
+            const SizedBox(height: 16),
+            const Text(
+              'Los rangos del templo',
+              style: TextStyle(fontSize: 19, fontWeight: FontWeight.w700, color: TempleColors.blancoLuna),
+            ),
+            const SizedBox(height: 4),
+            Text(
+              'Subes de rango al llegar al nivel de cada uno. Estás en el nivel ${nivel.nivel}.',
+              style: const TextStyle(fontSize: 13, height: 1.4, color: TempleColors.textoSuave),
+            ),
+            const SizedBox(height: 16),
+            for (int i = 0; i < kRangosTemplo.length; i++)
+              _FilaRango(
+                rango: kRangosTemplo[i],
+                estado: i < actual ? 0 : (i == actual ? 1 : 2),
+                faltan: kRangosTemplo[i].desde - nivel.nivel,
+                ultimo: i == kRangosTemplo.length - 1,
+              ),
+          ],
+        ),
+      ),
+    ),
+  );
+}
+
+class _FilaRango extends StatelessWidget {
+  const _FilaRango({required this.rango, required this.estado, required this.faltan, required this.ultimo});
+  final RangoTemplo rango;
+
+  /// 0 = ya lo tuviste, 1 = el actual, 2 = por venir.
+  final int estado;
+  final int faltan;
+  final bool ultimo;
+
+  @override
+  Widget build(BuildContext context) {
+    final Color tinte = rango.especial ? TempleColors.dorado : TempleColors.violeta;
+    final bool encendido = estado <= 1;
+    return IntrinsicHeight(
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: <Widget>[
+          SizedBox(
+            width: 44,
+            child: Column(
+              children: <Widget>[
+                Container(
+                  width: 40,
+                  height: 40,
+                  alignment: Alignment.center,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    color: encendido ? tinte.withValues(alpha: estado == 1 ? 0.24 : 0.12) : TempleColors.superficie,
+                    border: Border.all(
+                      color: encendido ? tinte.withValues(alpha: 0.7) : TempleColors.borde,
+                      width: estado == 1 ? 2 : 1,
+                    ),
+                  ),
+                  child: Text(
+                    rango.kanji,
+                    style: TextStyle(
+                      fontSize: 18,
+                      height: 1,
+                      color: encendido
+                          ? (rango.especial ? TempleColors.dorado : TempleColors.violetaClaro)
+                          : TempleColors.textoTenue,
+                    ),
+                  ),
+                ),
+                if (!ultimo)
+                  Expanded(
+                    child: Container(
+                      width: 2,
+                      margin: const EdgeInsets.symmetric(vertical: 3),
+                      color: estado == 0 ? tinte.withValues(alpha: 0.5) : TempleColors.borde,
+                    ),
+                  ),
+              ],
+            ),
+          ),
+          const SizedBox(width: 14),
+          Expanded(
+            child: Padding(
+              padding: EdgeInsets.only(top: 2, bottom: ultimo ? 0 : 18),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: <Widget>[
+                  Text(
+                    rango.nombre,
+                    style: TextStyle(
+                      fontSize: 15.5,
+                      fontWeight: FontWeight.w700,
+                      color: encendido
+                          ? (rango.especial ? TempleColors.dorado : TempleColors.blancoLuna)
+                          : TempleColors.textoSuave,
+                    ),
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    switch (estado) {
+                      0 => 'Desde el nivel ${rango.desde} · ya lo superaste',
+                      1 => 'Desde el nivel ${rango.desde} · tu rango ahora',
+                      _ => 'Desde el nivel ${rango.desde} · faltan $faltan ${faltan == 1 ? 'nivel' : 'niveles'}',
+                    },
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: estado == 1 ? TempleColors.violetaClaro : TempleColors.textoTenue,
+                    ),
+                  ),
+                ],
               ),
             ),
           ),
-          child: _Sello(nivel: nivel.nivel),
-        ),        
-        const SizedBox(width: 14),
-        Expanded(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            mainAxisSize: MainAxisSize.min,
-            children: <Widget>[
-              Text(saludo,
-                  style: const TextStyle(
-                      fontSize: 12.5, color: TempleColors.textoSuave)),
-              const SizedBox(height: 2),
-              Text(
-                nombre,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: const TextStyle(
-                  fontSize: 22,
-                  height: 1.1,
-                  fontWeight: FontWeight.w600,
-                  color: TempleColors.blancoLuna,
-                ),
-              ),
-              const SizedBox(height: 8),
-              Row(
-                children: <Widget>[
-                  InsigniaRango(nivel.rango, especial: nivel.rangoEspecial),
-                  const SizedBox(width: 8),
-                  Text('Nivel ${nivel.nivel}',
-                      style: const TextStyle(
-                          fontSize: 11.5, color: TempleColors.textoSuave)),
-                  const SizedBox(width: 4),
-                  const IndicadorNube(compacto: true),
-                ],
-              ),
-              const SizedBox(height: 8),
-              _BarraXp(
-                progreso: nivel.progreso,
-                etiqueta: '${nivel.xpEnNivel} / ${nivel.xpParaSiguiente} XP',
-              ),
-            ],
-          ),
-        ),
-        const SizedBox(width: 8),
-        CampanaCorrespondencia(usuario: nombre),
-        BotonMenuTemplo(
-          onTap: () => menuDojo(
-            context,
-            usuario: nombre,
-            espiritu: TempleShellScope.of(context).perfil.espiritu,
-          ),
-        ),
-      ],
+          if (estado == 2)
+            const Padding(
+              padding: EdgeInsets.only(top: 10),
+              child: Icon(Icons.lock_outline_rounded, size: 16, color: TempleColors.textoTenue),
+            ),
+        ],
+      ),
     );
   }
 }
@@ -17399,13 +17666,17 @@ class _VinetaPerfilState extends State<VinetaPerfil>
     super.dispose();
   }
 
+  // ClipRect: nada del Taller (pétalos, nieve, aves, humo, luces) se sale de
+  // su viñeta, ni en el perfil, ni en el Clan, ni en el Taller.
   @override
   Widget build(BuildContext context) => SizedBox(
         height: widget.altura,
-        child: RepaintBoundary(
-          child: CustomPaint(
-            painter: _LienzoPainter(reloj: _reloj, config: widget.config),
-            size: Size.infinite,
+        child: ClipRect(
+          child: RepaintBoundary(
+            child: CustomPaint(
+              painter: _LienzoPainter(reloj: _reloj, config: widget.config),
+              size: Size.infinite,
+            ),
           ),
         ),
       );
@@ -50394,15 +50665,79 @@ class _AvatarPainter extends CustomPainter {
     c.restore();
   }
 
+  /// Espalda del pájaro, vista de frente y un poco desde arriba: la cintura
+  /// (lejos) arriba y angosta, los hombros (cerca) abajo y anchos, y los
+  /// omóplatos que se juntan al subir los brazos.
+  void _espaldaInclinada(Canvas c, List<(double, Offset, Offset, Offset)> brazos) {
+    const double lejos = 100, cerca = 119;
+    final double sube = 1.5 * fase;
+    final Path espalda = Path()
+      ..moveTo(86.5, lejos)
+      ..quadraticBezierTo(100, lejos - 3.5, 113.5, lejos)
+      ..quadraticBezierTo(121, lejos + 8, 124.5, cerca - 4 - sube)
+      ..quadraticBezierTo(126.5, cerca + 1 - sube, 120, cerca + 2 - sube)
+      ..quadraticBezierTo(100, cerca + 6 - sube, 80, cerca + 2 - sube)
+      ..quadraticBezierTo(73.5, cerca + 1 - sube, 75.5, cerca - 4 - sube)
+      ..quadraticBezierTo(79, lejos + 8, 86.5, lejos)
+      ..close();
+    c.drawPath(espalda, _avTrazo(_AvCol.borde, 1.9));
+    c.drawPath(espalda, Paint()..color = _AvCol.gi);
+    // Sombra suave hacia la cintura, que queda más lejos.
+    c.save();
+    c.clipPath(espalda);
+    c.drawRect(
+      const Rect.fromLTRB(70, lejos - 4, 130, lejos + 9),
+      Paint()
+        ..shader = const LinearGradient(
+          begin: Alignment.topCenter,
+          end: Alignment.bottomCenter,
+          colors: <Color>[_AvCol.giSombra, Color(0x00CEC4E6)],
+        ).createShader(const Rect.fromLTRB(70, lejos - 4, 130, lejos + 9)),
+    );
+    c.restore();
+    // Obi en la cintura, al fondo.
+    c.drawPath(
+      Path()
+        ..moveTo(86.8, lejos + 0.5)
+        ..quadraticBezierTo(100, lejos - 3, 113.2, lejos + 0.5)
+        ..lineTo(114.2, lejos + 4.6)
+        ..quadraticBezierTo(100, lejos + 1.2, 85.8, lejos + 4.6)
+        ..close(),
+      Paint()..color = _AvCol.obi,
+    );
+    // Columna.
+    _avLinea(c, const Offset(100, lejos + 6), Offset(100, cerca - 2 - sube), 1.1, _AvCol.giLinea);
+    // Omóplatos: separados abajo, juntos arriba.
+    final double junta = 9.5 - 4.5 * fase;
+    for (final double s in <double>[-1, 1]) {
+      c.drawPath(
+        Path()
+          ..moveTo(100 + s * junta, lejos + 9)
+          ..quadraticBezierTo(100 + s * (junta + 8), lejos + 11, 100 + s * (junta + 6.5), cerca - 4 - sube),
+        _avTrazo(_AvCol.giLinea, 1.1),
+      );
+    }
+    // Hombros redondos (deltoides), debajo de los brazos.
+    for (final (double, Offset, Offset, Offset) b in brazos) {
+      _avCirculo(c, b.$2, 7.6, _AvCol.borde);
+      _avCirculo(c, b.$2, 6.6, _AvCol.gi);
+    }
+  }
+
   void _pintarFrenteCuerpo(Canvas c) {
     final EscenaPatron e = escena;
     final double a = e.anguloA + (e.anguloB - e.anguloA) * fase;
     final bool inc = e.inclinado;
-    final double hombroY = inc ? 96 : 66, cinturaY = inc ? 110 : 104, caderaY = 116;
-    final Offset cab = inc ? const Offset(100, 88) : const Offset(100, 46);
+    // Inclinado (pájaro): se ve la espalda un poco desde arriba. La cintura,
+    // lejos, queda arriba; los hombros, cerca, abajo; la cabeza va delante.
+    final double hombroY = inc ? 115 : 66, cinturaY = inc ? 110 : 104, caderaY = 116;
+    final Offset cab = inc ? const Offset(100, 127) : const Offset(100, 46);
     final List<(double, Offset, Offset, Offset)> brazos = <(double, Offset, Offset, Offset)>[];
     for (final double s in <double>[-1, 1]) {
-      final Offset hom = Offset(100 + 22 * s, hombroY + 3);
+      // Al juntar los omóplatos, el hombro sube y se recoge un poco.
+      final Offset hom = inc
+          ? Offset(100 + (23 - 1.2 * fase) * s, hombroY + 3 - 1.5 * fase)
+          : Offset(100 + 22 * s, hombroY + 3);
       final double g = a * _avRad;
       final Offset codo = hom + Offset(math.sin(g) * s, math.cos(g)) * 28;
       final double g2 = g + e.flexCodo * _avRad;
@@ -50451,6 +50786,9 @@ class _AvatarPainter extends CustomPainter {
       }
     }
     // Torso
+    if (inc) {
+      _espaldaInclinada(c, brazos);
+    } else {
     final double medio = (hombroY + cinturaY) / 2;
     final Path torso = Path()
       ..moveTo(77, hombroY)
@@ -50463,9 +50801,7 @@ class _AvatarPainter extends CustomPainter {
       ..close();
     c.drawPath(torso, _avTrazo(_AvCol.borde, 1.9));
     c.drawPath(torso, Paint()..color = _AvCol.gi);
-    if (inc) {
-      _avLinea(c, Offset(100, hombroY), Offset(100, cinturaY - 3), 1.2, _AvCol.giLinea);
-    } else {
+    {
       c.drawPath(
           Path()
             ..moveTo(93.5, hombroY - 3)
@@ -50482,27 +50818,34 @@ class _AvatarPainter extends CustomPainter {
     }
     // Obi
     c.drawRect(Rect.fromLTWH(82.4, cinturaY - 3, 35.2, 5.6), Paint()..color = _AvCol.obi);
-    if (!inc) {
+    {
       _avCirculo(c, Offset(100, cinturaY), 2.7, _AvCol.obi);
       final double ola = math.sin(tiempo * math.pi * 2) * 0.8;
       _avLinea(c, Offset(100, cinturaY), Offset(96 - ola, cinturaY + 11), 2.3, _AvCol.obi);
       _avLinea(c, Offset(100, cinturaY), Offset(104 + ola, cinturaY + 12), 2.3, _AvCol.obi);
     }
+    }
     // Cabeza
     final Paint pelo = Paint()..color = _AvCol.pelo;
     if (inc) {
-      // Inclinado: se ve sobre todo la coronilla.
-      _avCapsula(c, Offset(100, hombroY - 1), Offset(100, cab.dy + 2), 4, 4, _AvCol.pielSombra);
+      // Inclinado y mirando al suelo: delante de los hombros se ve la
+      // coronilla, la cinta y apenas la frente.
+      _avCirculo(c, cab + const Offset(0, 1.5), 10.6, Colors.black.withValues(alpha: 0.18));
       _avCirculo(c, cab, 10.4, _AvCol.piel);
-      c.drawArc(Rect.fromCircle(center: cab + const Offset(0, -1.5), radius: 11), math.pi * 0.95, math.pi * 1.1, false,
-          pelo);
-      _avCirculo(c, cab + const Offset(0, -3), 9.5, _AvCol.pelo);
-      _avLinea(c, cab + const Offset(-10.4, 2.5), cab + const Offset(10.4, 2.5), 3, _AvCol.cinta);
-      for (final double s in <double>[-1, 1]) {
-        c.drawOval(
-            Rect.fromCenter(center: cab + Offset(4 * s, 6), width: 2.2, height: (1.2 - 0.5 * fase) * 2),
-            Paint()..color = _AvCol.ojo);
-      }
+      c.save();
+      c.clipPath(Path()..addOval(Rect.fromCircle(center: cab, radius: 10.4)));
+      c.drawRect(Rect.fromLTRB(cab.dx - 12, cab.dy - 12, cab.dx + 12, cab.dy + 5.5), pelo);
+      c.drawArc(Rect.fromCircle(center: cab + const Offset(-3, -4), radius: 5), math.pi * 1.1, math.pi * 0.6, false,
+          _avTrazo(_AvCol.peloBrillo, 1.4));
+      c.restore();
+      c.drawArc(Rect.fromCenter(center: cab + const Offset(0, 4), width: 21.6, height: 9), 0.05, math.pi - 0.1, false,
+          _avTrazo(_AvCol.cinta, 2.6));
+      final double ola = math.sin(tiempo * math.pi * 4) * 1.5;
+      c.drawPath(
+          Path()
+            ..moveTo(cab.dx + 9.5, cab.dy + 5)
+            ..quadraticBezierTo(cab.dx + 14, cab.dy + 9 + ola, cab.dx + 16, cab.dy + 15 - ola),
+          _avTrazo(_AvCol.cinta, 2.2));
     } else {
       _avCapsula(c, Offset(100, hombroY - 2), Offset(100, cab.dy + 6), 4, 4, _AvCol.pielSombra);
       for (final double s in <double>[-1, 1]) {
@@ -52975,6 +53318,14 @@ class PaseTemplo extends ChangeNotifier {
       final SharedPreferences sp = await SharedPreferences.getInstance();
       await sp.setString('$_clave$uid', convert.jsonEncode(e.toMap()));
     } catch (_) {}
+  }
+
+  /// Solo en la vista de prueba (`?pase=1`): simula el Pase para revisar
+  /// cómo se ve, sin cuenta ni servidor.
+  void simularEnVistaPrueba() {
+    if (!vistaPrueba || _e.activo) return;
+    _e = const EstadoPase(plan: PlanPase.regalo);
+    notifyListeners();
   }
 
   /// Siete días gratis, una vez por cuenta. Devuelve un mensaje si falla.
