@@ -20,7 +20,7 @@ import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter/foundation.dart' show kIsWeb, kDebugMode, defaultTargetPlatform, TargetPlatform, debugPrint, ChangeNotifier, compute, ValueListenable;
-import 'package:flutter/scheduler.dart' show Ticker, TickerCallback, TickerProvider;
+import 'package:flutter/scheduler.dart' show Ticker, TickerCallback, TickerProvider, timeDilation;
 import 'package:flutter/rendering.dart' show RenderRepaintBoundary;
 import 'dart:typed_data' show Uint8List, Float64List, ByteData;
 
@@ -100,6 +100,9 @@ Future<void> main() async {
   if (vistaPrueba) {
     final String? tema = parametroPrueba('tema');
     if (tema != null) TemaTemplo.instancia.probar(tema);
+    // ?lento=5: todas las animaciones cinco veces más lentas, para revisarlas.
+    final double? lento = double.tryParse(parametroPrueba('lento') ?? '');
+    if (lento != null && lento > 0) timeDilation = lento;
     if (parametroPrueba('pantalla') == 'apariencia') TemaTemplo.instancia.reabrirAlMontar();
   }
   await Supabase.initialize(
@@ -76379,6 +76382,7 @@ class _XpCeremonia extends StatelessWidget {
                   alignment: Alignment.centerLeft,
                   child: FractionallySizedBox(
                     widthFactor: progreso.clamp(0.02, 1.0),
+                    heightFactor: 1,
                     child: DecoratedBox(
                       decoration: BoxDecoration(
                         borderRadius: BorderRadius.circular(999),
@@ -76698,6 +76702,7 @@ class _PuntoSemana extends StatelessWidget {
         alignment: Alignment.centerLeft,
         child: FractionallySizedBox(
           widthFactor: v.clamp(0.0, 1.0),
+          heightFactor: 1,
           child: DecoratedBox(
             decoration: BoxDecoration(color: color, borderRadius: BorderRadius.circular(999)),
           ),
