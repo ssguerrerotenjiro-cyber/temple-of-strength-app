@@ -4141,6 +4141,13 @@ class _PuertaTemploState extends State<PuertaTemplo> {
       if (parametroPrueba('pase') == '1') PaseTemplo.instancia.simularEnVistaPrueba();
       final MarcoSello? marco = MarcoSello.values.where((MarcoSello m) => m.name == parametroPrueba('marco')).firstOrNull;
       if (marco != null) AlmacenIdentidad.instancia.de('Kenji').marco = marco;
+      // ?vineta=todo: la última pieza de cada capa del Taller (las más cargadas),
+      // para revisar que nada se salga de su banner.
+      if (parametroPrueba('vineta') == 'todo') {
+        MotorProgresion.instancia.de('Kenji').vineta = <CapaVineta, String>{
+          for (final CapaVineta c in CapaVineta.values) c: PiezasVineta.deCapa(c).last.id,
+        };
+      }
       // ?pantalla=ejercicio&id=pajaro: la animación de un ejercicio, grande.
       if (parametroPrueba('pantalla') == 'ejercicio') {
         return Scaffold(
@@ -11090,66 +11097,75 @@ class _EncabezadoState extends State<_Encabezado> {
         final EstiloNombre? estilo = PaseTemplo.instancia.activo
             ? (DatosEstiloNombre.desde(id.estiloNombre) ?? EstiloNombre.oro)
             : null;
-        return Row(
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          mainAxisSize: MainAxisSize.min,
           children: <Widget>[
-            Semantics(
-              button: true,
-              label: 'Mi perfil',
-              child: GestureDetector(
-                onTap: _abrirPerfil,
-                // La foto de perfil (o el sello) con su marco y el nivel.
-                child: SelloUsuario(
-                  identidad: id,
-                  kanji: kanjiDeEspiritu(perfil.espiritu),
-                  nivel: nivel.nivel,
-                  size: 64,
-                  animar: true,
-                ),
-              ),
-            ),
-            const SizedBox(width: 14),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                mainAxisSize: MainAxisSize.min,
-                children: <Widget>[
-                  Text(widget.saludo, style: const TextStyle(fontSize: 12.5, color: TempleColors.textoSuave)),
-                  const SizedBox(height: 2),
-                  NombreConEstilo(
-                    widget.nombre,
-                    estilo: estilo,
-                    style: const TextStyle(
-                      fontSize: 22,
-                      height: 1.1,
-                      fontWeight: FontWeight.w600,
-                      color: TempleColors.blancoLuna,
+            Row(
+              children: <Widget>[
+                Semantics(
+                  button: true,
+                  label: 'Mi perfil',
+                  child: GestureDetector(
+                    onTap: _abrirPerfil,
+                    // La foto de perfil (o el sello) con su marco y el nivel.
+                    child: SelloUsuario(
+                      identidad: id,
+                      kanji: kanjiDeEspiritu(perfil.espiritu),
+                      nivel: nivel.nivel,
+                      size: 64,
+                      animar: true,
                     ),
                   ),
-                  const SizedBox(height: 8),
-                  Row(
+                ),
+                const SizedBox(width: 14),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
                     children: <Widget>[
-                      Expanded(child: EscaleraRangos(nivel: nivel)),
-                      const SizedBox(width: 4),
-                      const IndicadorNube(compacto: true),
+                      Text(widget.saludo, style: const TextStyle(fontSize: 12.5, color: TempleColors.textoSuave)),
+                      const SizedBox(height: 2),
+                      NombreConEstilo(
+                        widget.nombre,
+                        estilo: estilo,
+                        style: const TextStyle(
+                          fontSize: 22,
+                          height: 1.1,
+                          fontWeight: FontWeight.w600,
+                          color: TempleColors.blancoLuna,
+                        ),
+                      ),
+                      const SizedBox(height: 10),
+                      Row(
+                        children: <Widget>[
+                          Expanded(
+                            child: _BarraXp(
+                              progreso: nivel.progreso,
+                              etiqueta: 'Nivel ${nivel.nivel} · ${nivel.xpEnNivel} / ${nivel.xpParaSiguiente} XP',
+                            ),
+                          ),
+                          const SizedBox(width: 6),
+                          const IndicadorNube(compacto: true),
+                        ],
+                      ),
                     ],
                   ),
-                  const SizedBox(height: 8),
-                  _BarraXp(
-                    progreso: nivel.progreso,
-                    etiqueta: 'Nivel ${nivel.nivel} · ${nivel.xpEnNivel} / ${nivel.xpParaSiguiente} XP',
+                ),
+                const SizedBox(width: 8),
+                CampanaCorrespondencia(usuario: widget.nombre),
+                BotonMenuTemplo(
+                  onTap: () => menuDojo(
+                    context,
+                    usuario: widget.nombre,
+                    espiritu: perfil.espiritu,
                   ),
-                ],
-              ),
+                ),
+              ],
             ),
-            const SizedBox(width: 8),
-            CampanaCorrespondencia(usuario: widget.nombre),
-            BotonMenuTemplo(
-              onTap: () => menuDojo(
-                context,
-                usuario: widget.nombre,
-                espiritu: perfil.espiritu,
-              ),
-            ),
+            const SizedBox(height: 14),
+            // El rango actual y, a su lado, los que se ganan al subir de nivel.
+            EscaleraRangos(nivel: nivel),
           ],
         );
       },
@@ -50761,16 +50777,34 @@ class _AvatarPainter extends CustomPainter {
     // Piernas
     final double abre = (e.piernasA + (e.piernasB - e.piernasA) * fase) * _avRad;
     for (final double s in <double>[-1, 1]) {
-      final Offset cad = Offset(100 + 9 * s, caderaY);
-      final Offset rod = cad + Offset(math.sin(abre) * s * 35, math.cos(abre) * 35);
-      final Offset tob = cad + Offset(math.sin(abre) * s * 69, math.cos(abre) * 69);
+      // Inclinado, las piernas salen de la cadera, arriba y detrás de la
+      // espalda, y van en sombra porque quedan más lejos que el torso.
+      final Offset cad = inc ? Offset(100 + 10 * s, 101) : Offset(100 + 9 * s, caderaY);
+      final double muslo = inc ? 43 : 35, total = inc ? 84 : 69;
+      final Offset rod = cad + Offset(math.sin(abre) * s * muslo + (inc ? 1.5 * s : 0), math.cos(abre) * muslo);
+      final Offset tob = cad + Offset(math.sin(abre) * s * total, math.cos(abre) * total);
+      final Color tela = inc ? _AvCol.giSombra : _AvCol.gi;
       _avPiezas(c, <_AvPieza>[
         _AvPieza.cap(tob + const Offset(0, 1), tob + Offset(4 * s, 3), 4.2, 3.6, _AvCol.piel, _AvCol.bordePiel),
       ]);
       _avPiezas(c, <_AvPieza>[
-        _AvPieza.cap(cad, rod, 8.6, 6.4, _AvCol.gi, _AvCol.borde),
-        _AvPieza.cap(rod, tob, 6.4, 4.8, _AvCol.gi, _AvCol.borde),
+        _AvPieza.cap(cad, rod, 8.6, 6.4, tela, _AvCol.borde),
+        _AvPieza.cap(rod, tob, 6.4, 4.8, tela, _AvCol.borde),
       ]);
+    }
+    if (inc) {
+      // La cadera asoma por encima de la cintura y el torso hace sombra
+      // sobre los muslos.
+      final Rect cadera = Rect.fromCenter(center: const Offset(100, 99.5), width: 37, height: 15);
+      c.drawOval(cadera.inflate(0.95), Paint()..color = _AvCol.borde);
+      c.drawOval(cadera, Paint()..color = _AvCol.giSombra);
+      _avLinea(c, const Offset(100, 93.5), const Offset(100, 97), 1, _AvCol.giLinea);
+      c.drawOval(
+        Rect.fromCenter(center: const Offset(100, 127), width: 44, height: 12),
+        Paint()
+          ..color = Colors.black.withValues(alpha: 0.22)
+          ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 2.5),
+      );
     }
     // Poleas
     final Offset? pf = e.poleaFrente;
