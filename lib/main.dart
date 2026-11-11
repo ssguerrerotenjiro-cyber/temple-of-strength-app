@@ -783,19 +783,23 @@ class InsigniaRango extends StatelessWidget {
   }
 }
 
-/// Aparición escalonada compartida por login y Dojo: entrar a la app y entrar
-/// al Dojo se sienten como el mismo gesto.
+/// Aparición escalonada compartida por login, Dojo y los demás módulos:
+/// entrar a la app y entrar a un módulo se sienten como el mismo gesto.
+///
+/// Sin [controlador], toma la entrada del módulo en el que está
+/// ([EntradaModulo], sección 62): cada vez que llegas a un módulo, sus
+/// piezas aparecen en cascada.
 class Aparece extends StatelessWidget {
   const Aparece({
     super.key,
-    required this.controlador,
+    this.controlador,
     required this.desde,
     required this.hasta,
     required this.child,
     this.desplazamiento = 18,
   });
 
-  final AnimationController controlador;
+  final Animation<double>? controlador;
   final double desde;
   final double hasta;
   final double desplazamiento;
@@ -806,18 +810,19 @@ class Aparece extends StatelessWidget {
     final bool reducir = MediaQuery.maybeDisableAnimationsOf(context) ?? false;
     if (reducir) return child;
 
-    final Animation<double> curva = CurvedAnimation(
-      parent: controlador,
-      curve: Interval(desde, hasta, curve: TempleMotion.entrada),
-    );
+    // El intervalo se calcula a mano: un CurvedAnimation creado en cada
+    // build dejaba un oyente colgado del controlador por cada reconstrucción.
+    final Animation<double> base = controlador ?? EntradaModulo.de(context);
+    final Curve curva = Interval(desde, hasta, curve: TempleMotion.entrada);
 
     return AnimatedBuilder(
-      animation: curva,
+      animation: base,
       builder: (BuildContext context, Widget? hijo) {
+        final double v = curva.transform(base.value.clamp(0.0, 1.0));
         return Opacity(
-          opacity: curva.value.clamp(0.0, 1.0),
+          opacity: v.clamp(0.0, 1.0),
           child: Transform.translate(
-            offset: Offset(0, (1 - curva.value) * desplazamiento),
+            offset: Offset(0, (1 - v) * desplazamiento),
             child: hijo,
           ),
         );
@@ -2044,12 +2049,44 @@ class MainShell extends StatefulWidget {
   State<MainShell> createState() => _MainShellState();
 }
 
-class _MainShellState extends State<MainShell> {
+class _MainShellState extends State<MainShell> with TickerProviderStateMixin {
   late int _indice = TemaTemplo.instancia.tomarModulo() ?? widget.indiceInicial;
+
+  // Cambio de módulo (62): el que se va se desvanece, el que llega entra
+  // desde el lado del que vienes y sus piezas aparecen en cascada.
+  late final AnimationController _cambio =
+      AnimationController(vsync: this, duration: TransicionModulos.duracion, value: 1)
+        ..addStatusListener(_alTerminarCambio);
+  late final AnimationController _entrada =
+      AnimationController(vsync: this, duration: TransicionModulos.cascada);
+  int? _anterior;
+  int _sentido = 1;
+
+  void _alTerminarCambio(AnimationStatus s) {
+    if (s == AnimationStatus.completed && _anterior != null && mounted) {
+      setState(() => _anterior = null);
+    }
+  }
+
+  @override
+  void dispose() {
+    _cambio.dispose();
+    _entrada.dispose();
+    super.dispose();
+  }
 
   @override
   void initState() {
     super.initState();
+    // La primera vez también: el módulo con el que abre la app entra en cascada.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      if (MediaQuery.maybeDisableAnimationsOf(context) ?? false) {
+        _entrada.value = 1;
+      } else {
+        _entrada.forward();
+      }
+    });
     if (TemaTemplo.instancia.tomarReapertura()) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (mounted) abrirApariencia(context, modulo: _indice);
@@ -2108,9 +2145,31 @@ class _MainShellState extends State<MainShell> {
     if (i == _indice) return;
     HapticFeedback.selectionClick();
     sonar(SonidoTemplo.toque);
-    setState(() => _indice = i);
+    final bool reducir = MediaQuery.maybeDisableAnimationsOf(context) ?? false;
+    // El valor vuelve a 0 antes de reconstruir: así el módulo nuevo nunca
+    // asoma completo un cuadro antes de su cascada.
+    if (reducir) {
+      _entrada.value = 1;
+      _cambio.value = 1;
+    } else {
+      _entrada.forward(from: 0);
+      _cambio.forward(from: 0);
+    }
+    setState(() {
+      _sentido = i > _indice ? 1 : -1;
+      _anterior = reducir ? null : _indice;
+      _indice = i;
+    });
     WidgetsBinding.instance.addPostFrameCallback((_) => _guiaDe(i));
   }
+
+  static const List<Widget> _modulos = <Widget>[
+    DojoScreen(),
+    CasaScreen(),
+    TenshiScreen(),
+    ClanScreen(),
+    RankedScreen(),
+  ];
 
   @override
   Widget build(BuildContext context) {
@@ -2122,14 +2181,26 @@ class _MainShellState extends State<MainShell> {
         backgroundColor: TempleColors.negro,
         extendBody: true,
         body: FondoTemplo(
-          child: IndexedStack(
-            index: _indice,
-            children: const <Widget>[
-              DojoScreen(),
-              CasaScreen(),
-              TenshiScreen(),
-              ClanScreen(),
-              RankedScreen(),
+          // Los cinco módulos siguen montados (conservan su estado, como con
+          // el IndexedStack de antes); solo se pintan el actual y, mientras
+          // dura el cambio, el que se va.
+          child: Stack(
+            fit: StackFit.expand,
+            children: <Widget>[
+              for (int i = 0; i < _modulos.length; i++)
+                CapaModulo(
+                  key: ValueKey<int>(i),
+                  papel: i == _indice
+                      ? PapelModulo.llega
+                      : i == _anterior
+                          ? PapelModulo.sale
+                          : PapelModulo.oculto,
+                  cambio: _cambio,
+                  entrada: _entrada,
+                  sentido: _sentido,
+                  child: _modulos[i],
+                ),
+              NieblaCambio(cambio: _cambio, sentido: _sentido),
             ],
           ),
         ),
@@ -4154,6 +4225,11 @@ class _PuertaTemploState extends State<PuertaTemplo> {
           backgroundColor: TempleColors.negro,
           body: Center(child: AvatarEjercicio(ejercicioId: parametroPrueba('id') ?? 'pajaro', size: 340)),
         );
+      }
+      // ?pantalla=celebracion&caso=nivel|rango|record|normal|primera&voz=alegre:
+      // la ceremonia al terminar el entrenamiento, con una sesión de ejemplo.
+      if (parametroPrueba('pantalla') == 'celebracion') {
+        return ResumenSesionScreen(resumen: resumenDePrueba(parametroPrueba('caso') ?? 'nivel'));
       }
       // ?pantalla=perfil: el perfil, con su viñeta del Taller.
       if (parametroPrueba('pantalla') == 'perfil') {
@@ -10294,332 +10370,7 @@ class _HojaCierreState extends State<_HojaCierre> {
 // El momento de recompensa. Todo lo que ganó, en orden de importancia.
 // ---------------------------------------------------------------------------
 
-class ResumenSesionScreen extends StatelessWidget {
-  const ResumenSesionScreen({super.key, required this.resumen});
-
-  final ResumenCierre resumen;
-
-  @override
-  Widget build(BuildContext context) {
-    final Sesion s = resumen.sesion;
-    final PiezaTemplo? pieza = resumen.piezaDesbloqueada;
-
-    return Scaffold(
-      backgroundColor: TempleColors.negro,
-      body: FondoTemplo(
-        child: SafeArea(
-          child: ListView(
-            padding: const EdgeInsets.fromLTRB(20, 30, 20, 30),
-            children: <Widget>[
-              const Center(child: ToriiMoonLogo(size: 96)),
-              const SizedBox(height: 22),
-              const Text(
-                'SESIÓN COMPLETADA',
-                textAlign: TextAlign.center,
-                style: TextStyle(
-                  fontSize: 11,
-                  fontWeight: FontWeight.w600,
-                  letterSpacing: 4,
-                  color: TempleColors.textoSuave,
-                ),
-              ),
-              const SizedBox(height: 8),
-              Text(
-                s.nombre ?? 'Sesión libre',
-                textAlign: TextAlign.center,
-                style: const TextStyle(
-                  fontSize: 26,
-                  fontWeight: FontWeight.w600,
-                  color: TempleColors.blancoLuna,
-                ),
-              ),
-              const SizedBox(height: 28),
-
-              // Cifras de la sesión.
-              TempleCard(
-                child: Row(
-                  children: <Widget>[
-                    _Cifra(
-                        valor: '${s.volumenTotal.round()}',
-                        unidad: 'kg',
-                        etiqueta: 'Volumen'),
-                    _Cifra(
-                        valor: '${s.minutos}',
-                        unidad: 'min',
-                        etiqueta: 'Duración'),
-                    _Cifra(
-                        valor: '${s.seriesEfectivas}',
-                        unidad: '',
-                        etiqueta: 'Series'),
-                    _Cifra(
-                        valor: s.densidad.toStringAsFixed(0),
-                        unidad: 'kg/min',
-                        etiqueta: 'Densidad'),
-                  ],
-                ),
-              ),
-              const SizedBox(height: 22),
-
-              if (resumen.subioNivel) ...<Widget>[
-                _Bandera(
-                  glifo: TempleGlyph.medalla,
-                  titulo: '¡Nivel ${resumen.nivelDespues.nivel}!',
-                  texto: resumen.nivelDespues.rango,
-                  dorado: true,
-                ),
-                const SizedBox(height: 14),
-              ],
-
-              if (pieza != null) ...<Widget>[
-                _Bandera(
-                  glifo: TempleGlyph.casa,
-                  titulo: 'Se levantó ${pieza.nombre.toLowerCase()}',
-                  texto: pieza.descripcion,
-                  dorado: true,
-                ),
-                const SizedBox(height: 14),
-              ],
-
-              if (resumen.records.isNotEmpty) ...<Widget>[
-                const EtiquetaSeccion('Récords rotos'),
-                TempleCard(
-                  padding: const EdgeInsets.symmetric(
-                      horizontal: 16, vertical: 6),
-                  child: Column(
-                    children: resumen.records.map((RecordRoto r) {
-                      final String n =
-                          ejercicioPorId(r.ejercicioId)?.nombre ??
-                              r.ejercicioId;
-                      return Padding(
-                        padding: const EdgeInsets.symmetric(vertical: 11),
-                        child: Row(
-                          children: <Widget>[
-                            const TempleIcon(TempleGlyph.medalla,
-                                size: 18, color: TempleColors.dorado),
-                            const SizedBox(width: 12),
-                            Expanded(
-                              child: Text(
-                                n,
-                                style: const TextStyle(
-                                    fontSize: 13.5,
-                                    color: TempleColors.texto),
-                              ),
-                            ),
-                            Text(
-                              '${r.anterior.round()} → ${r.nuevo.round()}',
-                              style: const TextStyle(
-                                fontSize: 12.5,
-                                fontWeight: FontWeight.w600,
-                                color: TempleColors.dorado,
-                              ),
-                            ),
-                          ],
-                        ),
-                      );
-                    }).toList(),
-                  ),
-                ),
-                const SizedBox(height: 22),
-              ],
-
-              TarjetaHonorSesion(usuario: s.usuario, sesion: s),
-
-              TarjetaOfrendaDoble(usuario: s.usuario),
-
-              TarjetaCompartirSesion(resumen: resumen),
-
-              const EtiquetaSeccion('Experiencia ganada'),
-              TempleCard(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: <Widget>[
-                    Text(
-                      '+${resumen.xpTotal.round()} XP',
-                      style: const TextStyle(
-                        fontSize: 26,
-                        fontWeight: FontWeight.w600,
-                        color: TempleColors.violetaClaro,
-                      ),
-                    ),
-                    const SizedBox(height: 16),
-                    ...(resumen.xpPorGrupo.entries.toList()
-                          ..sort((MapEntry<GrupoMuscular, double> a,
-                                  MapEntry<GrupoMuscular, double> b) =>
-                              b.value.compareTo(a.value)))
-                        .map((MapEntry<GrupoMuscular, double> e) => Padding(
-                              padding: const EdgeInsets.only(bottom: 10),
-                              child: Row(
-                                children: <Widget>[
-                                  SizedBox(
-                                    width: 96,
-                                    child: Text(
-                                      e.key.etiqueta,
-                                      style: const TextStyle(
-                                          fontSize: 12.5,
-                                          color: TempleColors.textoSuave),
-                                    ),
-                                  ),
-                                  Expanded(
-                                    child: ClipRRect(
-                                      borderRadius:
-                                          BorderRadius.circular(999),
-                                      child: LinearProgressIndicator(
-                                        value: (e.value / 200).clamp(0.05, 1),
-                                        minHeight: 5,
-                                        backgroundColor: TempleColors.borde,
-                                        valueColor:
-                                            const AlwaysStoppedAnimation<
-                                                Color>(TempleColors.violeta),
-                                      ),
-                                    ),
-                                  ),
-                                  const SizedBox(width: 10),
-                                  Text(
-                                    '+${e.value.round()}',
-                                    style: const TextStyle(
-                                        fontSize: 12,
-                                        color: TempleColors.violetaClaro),
-                                  ),
-                                ],
-                              ),
-                            )),
-                  ],
-                ),
-              ),
-              const SizedBox(height: 22),
-
-              const EtiquetaSeccion('El peso del templo'),
-              TempleCard(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: <Widget>[
-                    Text(
-                      '${resumen.pesoTemploDespues.round()} kg',
-                      style: const TextStyle(
-                        fontSize: 28,
-                        fontWeight: FontWeight.w600,
-                        color: TempleColors.blancoLuna,
-                      ),
-                    ),
-                    Text(
-                      '+${(resumen.pesoTemploDespues - resumen.pesoTemploAntes).round()} kg hoy',
-                      style: const TextStyle(
-                          fontSize: 12.5, color: TempleColors.exito),
-                    ),
-                  ],
-                ),
-              ),
-              const SizedBox(height: 34),
-              DojoPrimaryButton(
-                texto: 'Volver al Dojo',
-                onPressed: () => Navigator.of(context).pop(),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-class _Cifra extends StatelessWidget {
-  const _Cifra({
-    required this.valor,
-    required this.unidad,
-    required this.etiqueta,
-  });
-
-  final String valor;
-  final String unidad;
-  final String etiqueta;
-
-  @override
-  Widget build(BuildContext context) => Expanded(
-        child: Column(
-          children: <Widget>[
-            RichText(
-              text: TextSpan(
-                text: valor,
-                style: const TextStyle(
-                  fontSize: 19,
-                  fontWeight: FontWeight.w600,
-                  color: TempleColors.blancoLuna,
-                ),
-                children: <InlineSpan>[
-                  TextSpan(
-                    text: unidad.isEmpty ? '' : ' $unidad',
-                    style: const TextStyle(
-                        fontSize: 10, color: TempleColors.textoTenue),
-                  ),
-                ],
-              ),
-            ),
-            const SizedBox(height: 4),
-            Text(
-              etiqueta,
-              style: const TextStyle(
-                  fontSize: 10.5, color: TempleColors.textoSuave),
-            ),
-          ],
-        ),
-      );
-}
-
-class _Bandera extends StatelessWidget {
-  const _Bandera({
-    required this.glifo,
-    required this.titulo,
-    required this.texto,
-    this.dorado = false,
-  });
-
-  final TempleGlyph glifo;
-  final String titulo;
-  final String texto;
-  final bool dorado;
-
-  @override
-  Widget build(BuildContext context) {
-    final Color c = dorado ? TempleColors.dorado : TempleColors.violeta;
-    return Container(
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: c.withValues(alpha: 0.09),
-        borderRadius: BorderRadius.circular(TempleRadius.tarjeta),
-        border: Border.all(color: c.withValues(alpha: 0.35)),
-      ),
-      child: Row(
-        children: <Widget>[
-          TempleIcon(glifo, size: 26, color: c),
-          const SizedBox(width: 14),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: <Widget>[
-                Text(
-                  titulo,
-                  style: TextStyle(
-                    fontSize: 15.5,
-                    fontWeight: FontWeight.w600,
-                    color: c,
-                  ),
-                ),
-                const SizedBox(height: 3),
-                Text(
-                  texto,
-                  style: const TextStyle(
-                      fontSize: 12.5,
-                      height: 1.4,
-                      color: TempleColors.textoSuave),
-                ),
-              ],
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
+// ResumenSesionScreen vive ahora en la sección 62 (la ceremonia).
 
 // ---------------------------------------------------------------------------
 // 26. DOJO RECALCULADO
@@ -10635,26 +10386,9 @@ class DojoScreen extends StatefulWidget {
   State<DojoScreen> createState() => _DojoScreenState();
 }
 
-class _DojoScreenState extends State<DojoScreen>
-    with SingleTickerProviderStateMixin {
-  late final AnimationController _entrada = AnimationController(
-    vsync: this,
-    duration: const Duration(milliseconds: 1100),
-  );
-
-  @override
-  void initState() {
-    super.initState();
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted) _entrada.forward();
-    });
-  }
-
-  @override
-  void dispose() {
-    _entrada.dispose();
-    super.dispose();
-  }
+class _DojoScreenState extends State<DojoScreen> {
+  // La cascada de entrada la da el shell (EntradaModulo, sección 62): se
+  // repite cada vez que vuelves al Dojo, no solo al abrir la app.
 
   String get _saludo {
     final int h = DateTime.now().hour;
@@ -10734,7 +10468,6 @@ class _DojoScreenState extends State<DojoScreen>
         ),
         children: <Widget>[
           Aparece(
-            controlador: _entrada,
             desde: 0,
             hasta: 0.45,
             child: _Encabezado(
@@ -10747,7 +10480,6 @@ class _DojoScreenState extends State<DojoScreen>
           const SizedBox(height: TempleSpace.l),
 
           Aparece(
-            controlador: _entrada,
             desde: 0.10,
             hasta: 0.58,
             child: EnWeb.activo
@@ -10764,7 +10496,6 @@ class _DojoScreenState extends State<DojoScreen>
 
           if (enCurso != null) ...<Widget>[
             Aparece(
-              controlador: _entrada,
               desde: 0.16,
               hasta: 0.62,
               child: TempleCard(
@@ -10792,12 +10523,11 @@ class _DojoScreenState extends State<DojoScreen>
           ],
 
           // Tu gym: cuántos hay ahora y registrar la llegada (sección 57).
-          const TarjetaGymDojo(),
+          const Aparece(desde: 0.12, hasta: 0.60, child: TarjetaGymDojo()),
 
           // La primera vez: ¿te recuerdo entrenar y tomar agua? (sección 51).
           if (TarjetaRecordatoriosDojo.tocaMostrar()) ...<Widget>[
             Aparece(
-              controlador: _entrada,
               desde: 0.14,
               hasta: 0.62,
               child: TarjetaRecordatoriosDojo(onCambio: () {
@@ -10810,7 +10540,6 @@ class _DojoScreenState extends State<DojoScreen>
           // Sus palabras vuelven de vez en cuando (sección 46).
           if (RecordatorioMeta.tocaHoy(usuario)) ...<Widget>[
             Aparece(
-              controlador: _entrada,
               desde: 0.16,
               hasta: 0.64,
               child: TarjetaMetaDojo(
@@ -10823,7 +10552,6 @@ class _DojoScreenState extends State<DojoScreen>
           ],
 
           Aparece(
-            controlador: _entrada,
             desde: 0.20,
             hasta: 0.68,
             child: Column(
@@ -10837,7 +10565,6 @@ class _DojoScreenState extends State<DojoScreen>
           const SizedBox(height: TempleSpace.l),
 
           Aparece(
-            controlador: _entrada,
             desde: 0.28,
             hasta: 0.76,
             child: Column(
@@ -10858,7 +10585,6 @@ class _DojoScreenState extends State<DojoScreen>
           const SizedBox(height: TempleSpace.l),
 
           Aparece(
-            controlador: _entrada,
             desde: 0.30,
             hasta: 0.78,
             child: Column(
@@ -10872,7 +10598,6 @@ class _DojoScreenState extends State<DojoScreen>
           const SizedBox(height: TempleSpace.l),
 
           Aparece(
-            controlador: _entrada,
             desde: 0.34,
             hasta: 0.82,
             child: Row(
@@ -10904,7 +10629,6 @@ class _DojoScreenState extends State<DojoScreen>
           const SizedBox(height: TempleSpace.l),
 
           Aparece(
-            controlador: _entrada,
             desde: 0.40,
             hasta: 0.88,
             child: Column(
@@ -10918,7 +10642,6 @@ class _DojoScreenState extends State<DojoScreen>
           const SizedBox(height: TempleSpace.l),
 
           Aparece(
-            controlador: _entrada,
             desde: 0.46,
             hasta: 0.92,
             child: Column(
@@ -10941,7 +10664,6 @@ class _DojoScreenState extends State<DojoScreen>
           ),
           const SizedBox(height: TempleSpace.l),
                     Aparece(
-            controlador: _entrada,
             desde: 0.44,
             hasta: 0.90,
             child: Column(
@@ -10955,7 +10677,6 @@ class _DojoScreenState extends State<DojoScreen>
           const SizedBox(height: TempleSpace.l),
 
           Aparece(
-            controlador: _entrada,
             desde: 0.52,
             hasta: 0.96,
             child: Column(
@@ -10972,7 +10693,6 @@ class _DojoScreenState extends State<DojoScreen>
           const SizedBox(height: TempleSpace.l),
 
           Aparece(
-            controlador: _entrada,
             desde: 0.58,
             hasta: 1,
             child: Column(
@@ -28144,7 +27864,11 @@ class _CasaScreenState extends State<CasaScreen> {
                   top: MediaQuery.paddingOf(context).top + 12,
                   left: 20,
                   right: 20,
-                  child: Row(
+                  child: Aparece(
+                    desde: 0.05,
+                    hasta: 0.45,
+                    desplazamiento: -12,
+                    child: Row(
                     children: <Widget>[
                       _Sello2(
                           texto: estado.estacion.kanji,
@@ -28166,12 +27890,16 @@ class _CasaScreenState extends State<CasaScreen> {
                       ),
                     ],
                   ),
+                  ),
                 ),
                 Positioned(
                   left: 20,
                   right: 20,
                   bottom: 16,
-                  child: Column(
+                  child: Aparece(
+                    desde: 0.12,
+                    hasta: 0.55,
+                    child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: <Widget>[
                       Text(
@@ -28198,6 +27926,7 @@ class _CasaScreenState extends State<CasaScreen> {
                       ),
                     ],
                   ),
+                  ),
                 ),
               ],
             ),
@@ -28208,13 +27937,16 @@ class _CasaScreenState extends State<CasaScreen> {
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: <Widget>[
                   // -- Lo que falta -----------------------------------------
-                  _TarjetaConstruccion(estado: estado),
+                  Aparece(desde: 0.18, hasta: 0.62, child: _TarjetaConstruccion(estado: estado)),
                   const SizedBox(height: 14),
-                  TarjetaOmikuji(usuario: usuario),
+                  Aparece(desde: 0.24, hasta: 0.68, child: TarjetaOmikuji(usuario: usuario)),
                   const SizedBox(height: 22),
 
                   // -- Pestañas ---------------------------------------------
-                  Row(
+                  Aparece(
+                    desde: 0.30,
+                    hasta: 0.72,
+                    child: Row(
                     children: <Widget>[
                       _Pestana(
                         texto: 'El exterior',
@@ -28235,17 +27967,21 @@ class _CasaScreenState extends State<CasaScreen> {
                       ),
                     ],
                   ),
+                  ),
                   const SizedBox(height: 18),
 
-                  if (_pestana == 0)
-                    _Exterior(usuario: usuario, onVolver: () => setState(() {}))
-                  else if (_pestana == 1)
- InteriorCasa(
-                      usuario: usuario,
-                      espiritu: shell.perfil.espiritu,
-                    )
-                  else
-                    HabitanteResumen(usuario: usuario),
+                  Aparece(
+                    desde: 0.36,
+                    hasta: 0.80,
+                    child: _pestana == 0
+                        ? _Exterior(usuario: usuario, onVolver: () => setState(() {}))
+                        : _pestana == 1
+                            ? InteriorCasa(
+                                usuario: usuario,
+                                espiritu: shell.perfil.espiritu,
+                              )
+                            : HabitanteResumen(usuario: usuario),
+                  ),
                 ], // cierra children de Column (dentro de Padding)
               ), // cierra Column
             ), // cierra Padding
@@ -34656,7 +34392,11 @@ class _TenshiScreenState extends State<TenshiScreen> {
           bottom: false,
           child: Column(
             children: <Widget>[
-              _TshCabecera(
+              Aparece(
+                desde: 0.0,
+                hasta: 0.42,
+                desplazamiento: -12,
+                child: _TshCabecera(
                 estado: _estado,
                 tono: c.tono,
                 espiritu: c.espiritu,
@@ -34670,8 +34410,13 @@ class _TenshiScreenState extends State<TenshiScreen> {
                     : () => _borrarConversacion(c),
                 onMenu: () => _menu(c, puedeBorrar: turnos.length > 1 && !_ocupado),
               ),
+              ),
               Expanded(
-                child: GestureDetector(
+                child: Aparece(
+                  desde: 0.12,
+                  hasta: 0.58,
+                  desplazamiento: 22,
+                  child: GestureDetector(
                   onTap: () => _foco.unfocus(),
                   behavior: HitTestBehavior.translucent,
                   child: ListView(
@@ -34706,20 +34451,29 @@ class _TenshiScreenState extends State<TenshiScreen> {
                     ],
                   ),
                 ),
+                ),
               ),
               if (_chips.isNotEmpty && !_ocupado)
-                _TshChips(
-                  sugerencias: _chips,
-                  tono: c.tono,
-                  onTexto: (String m) => _enviar(m, c),
+                Aparece(
+                  desde: 0.26,
+                  hasta: 0.68,
+                  child: _TshChips(
+                    sugerencias: _chips,
+                    tono: c.tono,
+                    onTexto: (String m) => _enviar(m, c),
+                  ),
                 ),
-              _TshCupo(tono: c.tono),
-              _TshCampo(
-                controller: _campo,
-                foco: _foco,
-                tono: c.tono,
-                habilitado: !_ocupado,
-                onEnviar: () => _enviar(_campo.text, c),
+              Aparece(desde: 0.30, hasta: 0.72, child: _TshCupo(tono: c.tono)),
+              Aparece(
+                desde: 0.32,
+                hasta: 0.74,
+                child: _TshCampo(
+                  controller: _campo,
+                  foco: _foco,
+                  tono: c.tono,
+                  habilitado: !_ocupado,
+                  onEnviar: () => _enviar(_campo.text, c),
+                ),
               ),
             ],
           ),
@@ -36782,7 +36536,11 @@ class _ClanScreenState extends State<ClanScreen> {
             children: <Widget>[
               Padding(
                 padding: const EdgeInsets.fromLTRB(TempleSpace.borde, 10, 8, 0),
-                child: Row(
+                child: Aparece(
+                  desde: 0.0,
+                  hasta: 0.42,
+                  desplazamiento: -12,
+                  child: Row(
                   children: <Widget>[
                     const Expanded(
                       child: Column(
@@ -36830,11 +36588,15 @@ class _ClanScreenState extends State<ClanScreen> {
                     BotonMenuTemplo(onTap: () => mostrarAjustesClan(context)),
                   ],
                 ),
+                ),
               ),
               const SizedBox(height: 14),
               Padding(
                 padding: const EdgeInsets.symmetric(horizontal: TempleSpace.borde),
-                child: _PestanasClan(
+                child: Aparece(
+                  desde: 0.10,
+                  hasta: 0.50,
+                  child: _PestanasClan(
                   indice: _pestana,
                   opciones: const <String>['Para ti', 'Siguiendo', 'Mi clan', 'Retos', 'Gym'],
                   onCambio: (int i) {
@@ -36842,10 +36604,15 @@ class _ClanScreenState extends State<ClanScreen> {
                     setState(() => _pestana = i);
                   },
                 ),
+                ),
               ),
               const SizedBox(height: 6),
               Expanded(
-                child: IndexedStack(
+                child: Aparece(
+                  desde: 0.18,
+                  hasta: 0.64,
+                  desplazamiento: 26,
+                  child: IndexedStack(
                   index: _pestana,
                   children: <Widget>[
                     FeedClan(
@@ -36877,6 +36644,7 @@ class _ClanScreenState extends State<ClanScreen> {
                     const PestanaGym(),
                   ],
                 ),
+                ),
               ),
             ],
           ),
@@ -36888,7 +36656,12 @@ class _ClanScreenState extends State<ClanScreen> {
               return Positioned(
                 right: TempleSpace.borde,
                 bottom: kAlturaNavBar + MediaQuery.paddingOf(context).bottom + 18,
-                child: _BotonPublicar(onTap: _publicar),
+                child: Aparece(
+                  desde: 0.34,
+                  hasta: 0.78,
+                  desplazamiento: 30,
+                  child: _BotonPublicar(onTap: _publicar),
+                ),
               );
             },
           ),
@@ -43814,7 +43587,7 @@ class _RankedScreenState extends State<RankedScreen> {
       physics: const BouncingScrollPhysics(),
       padding: EdgeInsets.fromLTRB(
           TempleSpace.borde, MediaQuery.paddingOf(context).top + 8, TempleSpace.borde, abajo),
-      children: <Widget>[
+      children: enCascada(<Widget>[
         Row(
           children: <Widget>[
             if (_suelta)
@@ -44070,7 +43843,7 @@ class _RankedScreenState extends State<RankedScreen> {
               if (mounted) setState(() {});
             },
           ),
-      ],
+      ]),
     );
   }
 }
@@ -75451,4 +75224,1638 @@ const bool vistaPrueba = bool.fromEnvironment('VISTA_PRUEBA');
 String? parametroPrueba(String clave) {
   if (!vistaPrueba || !kIsWeb) return null;
   return Uri.base.queryParameters[clave];
+}
+
+// ===========================================================================
+// 62. MOVIMIENTO ENTRE MÓDULOS Y CEREMONIA DEL ENTRENAMIENTO
+//
+// 62.1 Cambio de módulo: el que se va se desvanece hacia un lado, el que
+//      llega entra desde el otro mientras cruza una niebla violeta, y sus
+//      piezas aparecen en cascada (Aparece sin controlador).
+// 62.2 La ceremonia al terminar el entrenamiento: un ensō que se dibuja,
+//      chispas y pétalos, las cifras que cuentan, la barra de nivel que se
+//      llena, los récords, la semana de la racha y una frase de Tenshi en su
+//      tono. Se salta con un toque.
+// En la web también se anima (es movimiento con función, no decoración),
+// con menos partículas. Con «reducir movimiento» todo aparece quieto.
+// ===========================================================================
+
+// -- 62.1 Cambio de módulo ----------------------------------------------------
+
+class TransicionModulos {
+  const TransicionModulos._();
+
+  /// El cruce entre el módulo que se va y el que llega.
+  static const Duration duracion = Duration(milliseconds: 480);
+
+  /// La cascada de las piezas del módulo que llega.
+  static const Duration cascada = Duration(milliseconds: 950);
+}
+
+/// La entrada del módulo en el que está un widget. [Aparece] sin controlador
+/// la usa; fuera del shell (una pantalla empujada encima) vale «completa».
+class EntradaModulo extends InheritedWidget {
+  const EntradaModulo({super.key, required this.animacion, required super.child});
+
+  final Animation<double> animacion;
+
+  static Animation<double> de(BuildContext context) =>
+      context.dependOnInheritedWidgetOfExactType<EntradaModulo>()?.animacion ??
+      kAlwaysCompleteAnimation;
+
+  @override
+  bool updateShouldNotify(EntradaModulo old) => old.animacion != animacion;
+}
+
+/// Envuelve cada pieza de una lista de módulo para que entre en cascada. Los
+/// espacios (SizedBox vacíos) no cuentan como piezas.
+List<Widget> enCascada(List<Widget> piezas, {double inicio = 0, double paso = 0.065}) {
+  final List<Widget> r = <Widget>[];
+  int n = 0;
+  for (final Widget w in piezas) {
+    if (w is SizedBox && w.child == null) {
+      r.add(w);
+      continue;
+    }
+    final double desde = math.min(inicio + n * paso, 0.5);
+    r.add(Aparece(desde: desde, hasta: math.min(desde + 0.44, 1.0), child: w));
+    n++;
+  }
+  return r;
+}
+
+enum PapelModulo { llega, sale, oculto }
+
+/// Una capa del shell. La estructura es siempre la misma (nunca se pierde el
+/// estado del módulo); solo cambian los valores. Quieta, la opacidad es 1 y
+/// la transformación es la identidad: no crea capas ni cuesta nada.
+class CapaModulo extends StatelessWidget {
+  const CapaModulo({
+    super.key,
+    required this.papel,
+    required this.cambio,
+    required this.entrada,
+    required this.sentido,
+    required this.child,
+  });
+
+  final PapelModulo papel;
+  final Animation<double> cambio;
+  final Animation<double> entrada;
+
+  /// 1 si el módulo nuevo está a la derecha del anterior en la barra; -1 si
+  /// está a la izquierda.
+  final int sentido;
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    final bool visible = papel != PapelModulo.oculto;
+    final bool llega = papel == PapelModulo.llega;
+    return Offstage(
+      offstage: !visible,
+      // Lo que no se ve no anima (la decoración y el Camino del día se
+      // apagan solos al cambiar de pestaña).
+      child: TickerMode(
+        enabled: visible,
+        child: IgnorePointer(
+          ignoring: !llega,
+          child: ExcludeSemantics(
+            excluding: !llega,
+            child: AnimatedBuilder(
+              animation: cambio,
+              builder: (BuildContext context, Widget? hijo) {
+                final double t = cambio.value;
+                double opacidad = 1, dx = 0, escala = 1;
+                if (llega && t < 1) {
+                  final double e = Curves.easeOutCubic.transform(t);
+                  opacidad = const Interval(0.1, 1, curve: Curves.easeOut).transform(t);
+                  dx = sentido * 30 * (1 - e);
+                  if (!Rendimiento.ligero) escala = 0.985 + 0.015 * e;
+                } else if (papel == PapelModulo.sale) {
+                  final double e = const Interval(0, 0.5, curve: Curves.easeIn).transform(t);
+                  opacidad = 1 - e;
+                  dx = -sentido * 20 * e;
+                  if (!Rendimiento.ligero) escala = 1 - 0.012 * e;
+                }
+                return Opacity(
+                  opacity: opacidad,
+                  child: Transform.translate(
+                    offset: Offset(dx, 0),
+                    child: Transform.scale(scale: escala, child: hijo),
+                  ),
+                );
+              },
+              child: RepaintBoundary(
+                child: EntradaModulo(
+                  animacion: llega ? entrada : kAlwaysCompleteAnimation,
+                  child: child,
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// La niebla que cruza la pantalla durante el cambio, en el sentido del
+/// viaje: un velo violeta muy tenue, como bruma de templo.
+class NieblaCambio extends StatelessWidget {
+  const NieblaCambio({super.key, required this.cambio, required this.sentido});
+
+  final Animation<double> cambio;
+  final int sentido;
+
+  @override
+  Widget build(BuildContext context) {
+    return IgnorePointer(
+      child: AnimatedBuilder(
+        animation: cambio,
+        builder: (BuildContext context, _) {
+          final double t = cambio.value;
+          if (t <= 0 || t >= 1) return const SizedBox.shrink();
+          final double fuerza = math.sin(t * math.pi);
+          final double x = (1.9 - 3.8 * Curves.easeInOutSine.transform(t)) * sentido;
+          return Align(
+            alignment: Alignment(x, 0),
+            child: FractionallySizedBox(
+              widthFactor: 0.8,
+              heightFactor: 1,
+              child: DecoratedBox(
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    colors: <Color>[
+                      TempleColors.violeta.withValues(alpha: 0),
+                      TempleColors.violeta.withValues(alpha: 0.10 * fuerza),
+                      TempleColors.blancoLuna.withValues(alpha: 0.05 * fuerza),
+                      TempleColors.violeta.withValues(alpha: 0.10 * fuerza),
+                      TempleColors.violeta.withValues(alpha: 0),
+                    ],
+                    stops: const <double>[0, 0.32, 0.5, 0.68, 1],
+                  ),
+                ),
+              ),
+            ),
+          );
+        },
+      ),
+    );
+  }
+}
+
+// -- 62.2 La ceremonia del entrenamiento --------------------------------------
+
+/// Una frase para cerrar la sesión. Algunas son dichos japoneses, con su
+/// kanji y su lectura.
+class FraseCeremonia {
+  const FraseCeremonia(this.texto, {this.kanji, this.lectura});
+  final String texto;
+  final String? kanji;
+  final String? lectura;
+}
+
+class FrasesCeremonia {
+  const FrasesCeremonia._();
+
+  /// Dichos japoneses tradicionales, con lo que significan.
+  static const List<FraseCeremonia> dichos = <FraseCeremonia>[
+    FraseCeremonia('La constancia es fuerza.', kanji: '継続は力なり', lectura: 'Keizoku wa chikara nari'),
+    FraseCeremonia('Cae siete veces, levántate ocho.', kanji: '七転び八起き', lectura: 'Nana korobi ya oki'),
+    FraseCeremonia('Hasta el polvo, si se acumula, se vuelve montaña.',
+        kanji: '塵も積もれば山となる', lectura: 'Chiri mo tsumoreba yama to naru'),
+    FraseCeremonia('Tres años sobre una piedra, y hasta la piedra se calienta.',
+        kanji: '石の上にも三年', lectura: 'Ishi no ue ni mo sannen'),
+    FraseCeremonia('Un camino de mil leguas empieza con un paso.',
+        kanji: '千里の道も一歩から', lectura: 'Senri no michi mo ippo kara'),
+    FraseCeremonia('Después de la lluvia, la tierra se vuelve firme.',
+        kanji: '雨降って地固まる', lectura: 'Ame futte ji katamaru'),
+    FraseCeremonia('No olvides el espíritu del principiante.',
+        kanji: '初心忘るべからず', lectura: 'Shoshin wasuru bekarazu'),
+  ];
+
+  static const Map<String, Map<String, List<String>>> _porTono = <String, Map<String, List<String>>>{
+    'serena': <String, List<String>>{
+      'general': <String>[
+        'Apareciste, y eso ya es la mitad del camino. Ahora descansa bien.',
+        'Hoy sumaste una piedra más al templo. Sin prisa, sin pausa.',
+        'El cuerpo recuerda cada sesión, aunque tú la olvides. Esta cuenta.',
+        'Lo hiciste con calma y lo hiciste bien. Ahora, a recuperar.',
+        'Cada serie de hoy es una promesa cumplida contigo.',
+      ],
+      'record': <String>['Superaste tu marca. Ese peso ya es tuyo para siempre.'],
+      'nivel': <String>['Subiste de nivel. El camino sigue igual de abierto, y tú llegas más fuerte.'],
+      'rango': <String>['Ahora eres {rango}. Llévalo con calma y con orgullo.'],
+      'semana': <String>['Cumpliste tu semana. Esa constancia es la que transforma.'],
+      'primera': <String>['Tu primera sesión en el templo. Todo camino empieza así.'],
+      'regreso': <String>['Volviste. Eso es lo que importa, no cuánto tiempo pasó.'],
+      'mejor': <String>['Tu sesión con más volumen hasta hoy. Tu cuerpo está respondiendo.'],
+    },
+    'alegre': <String, List<String>>{
+      'general': <String>[
+        '¡Sesión hecha! Tu yo de mañana te está aplaudiendo.',
+        '¡Eso fue un entrenamiento de verdad! Bebe agua y presume un poquito.',
+        '¡Otra más en la cuenta! A este paso el templo se queda pequeño.',
+        '¡Lo diste todo! Ahora a comer rico y a dormir a pierna suelta.',
+        '¡Qué sesión! Si sigues así, voy a tener que subir el listón.',
+      ],
+      'record': <String>['¡RÉCORD! Lo rompiste y ni te despeinaste.'],
+      'nivel': <String>['¡Nivel nuevo! Esto se está poniendo serio.'],
+      'rango': <String>['¡Ya eres {rango}! Esto hay que celebrarlo.'],
+      'semana': <String>['¡Semana completa! Tu racha está que arde.'],
+      'primera': <String>['¡Primera sesión! Te doy la bienvenida al templo: esto apenas empieza.'],
+      'regreso': <String>['¡Volviste! El templo estaba muy callado sin ti.'],
+      'mejor': <String>['¡Nunca habías movido tanto peso en una sesión! Bestial.'],
+    },
+    'exigente': <String, List<String>>{
+      'general': <String>[
+        'Hecho. Desde mañana, el estándar es este.',
+        'Cumpliste. Recupera bien, que la próxima pide más.',
+        'Disciplina es esto: hacerlo aunque no apetezca. Bien.',
+        'Una sesión no te cambia. Cien sí. Vas por buen camino.',
+        'Trabajo terminado. No lo celebres demasiado: vuelve.',
+      ],
+      'record': <String>['Récord. Ahora ese número es tu mínimo, no tu techo.'],
+      'nivel': <String>['Nivel nuevo. El siguiente cuesta más. Prepárate.'],
+      'rango': <String>['{rango}. Ahora entrena como uno.'],
+      'semana': <String>['Semana cumplida. Repítela la próxima. Y la otra.'],
+      'primera': <String>['Primera sesión hecha. Ahora viene lo difícil: volver.'],
+      'regreso': <String>['Volviste. Que no vuelva a pasar tanto tiempo.'],
+      'mejor': <String>['Tu mayor volumen. Bien. Ahora hazlo costumbre.'],
+    },
+  };
+
+  static String titulo(String tono, String nombre) {
+    switch (tono) {
+      case 'alegre':
+        return '¡Lo lograste, $nombre!';
+      case 'exigente':
+        return 'Hecho, $nombre.';
+      default:
+        return 'Bien hecho, $nombre.';
+    }
+  }
+
+  /// [semilla] elige sin azar visible: la misma sesión, la misma frase.
+  static FraseCeremonia de(String tono, String caso, int semilla, {String rango = ''}) {
+    final Map<String, List<String>> t = _porTono[tono] ?? _porTono['serena']!;
+    if (caso == 'general') {
+      final List<String> propias = t['general']!;
+      final int i = semilla % (propias.length + dichos.length);
+      if (i >= propias.length) return dichos[i - propias.length];
+      return FraseCeremonia(propias[i]);
+    }
+    final List<String> l = t[caso] ?? t['general']!;
+    return FraseCeremonia(l[semilla % l.length].replaceAll('{rango}', rango));
+  }
+}
+
+/// Lo que la ceremonia necesita saber además del resumen: la sesión
+/// anterior para comparar, la racha de la semana y la frase.
+class DatosCeremonia {
+  DatosCeremonia._({
+    required this.titulo,
+    required this.frase,
+    required this.racha,
+    required this.comparacion,
+    required this.especial,
+    required this.rangoNuevo,
+  });
+
+  final String titulo;
+  final FraseCeremonia frase;
+  final Racha racha;
+
+  /// Una línea sobre cómo fue frente a antes, o null.
+  final String? comparacion;
+
+  /// Récord o nivel: el ensō termina en dorado.
+  final bool especial;
+  final bool rangoNuevo;
+
+  factory DatosCeremonia.de(ResumenCierre r) {
+    final Sesion s = r.sesion;
+    final String u = s.usuario;
+    final AlmacenTemplo a = AlmacenTemplo.instancia;
+    final String tono = a.de(u).ascenso['voz'] ?? 'serena';
+
+    final List<Sesion> otras = a.de(u).completadas.where((Sesion x) => x.id != s.id).toList()
+      ..sort((Sesion x, Sesion y) => (x.fin ?? x.inicio).compareTo(y.fin ?? y.inicio));
+    final Sesion? previa = otras.isEmpty ? null : otras.last;
+    final Sesion? igual = s.nombre == null
+        ? null
+        : otras.where((Sesion x) => x.nombre == s.nombre).lastOrNull;
+    final Sesion? base = igual ?? previa;
+    final bool primera = otras.isEmpty;
+    final bool regreso =
+        previa != null && s.inicio.difference(previa.fin ?? previa.inicio).inDays >= 7;
+    final double maxAntes =
+        otras.fold<double>(0, (double m, Sesion x) => math.max(m, x.volumenTotal));
+    final bool mejor = otras.length >= 2 && s.volumenTotal > maxAntes && s.volumenTotal > 0;
+
+    String? comparacion;
+    if (primera) {
+      comparacion = 'Tu primera sesión en el templo';
+    } else if (mejor) {
+      comparacion = 'Tu sesión con más volumen hasta hoy';
+    } else if (base != null && base.volumenTotal > 0 && s.volumenTotal > 0) {
+      final double cambio = s.volumenTotal / base.volumenTotal - 1;
+      final String contra = identical(base, igual) ? 'la última vez con esta rutina' : 'tu sesión anterior';
+      if (cambio >= 0.03) {
+        comparacion = '${(cambio * 100).round()}% más volumen que $contra';
+      } else if (cambio > -0.03) {
+        comparacion = 'El mismo volumen que $contra: constancia';
+      } else {
+        comparacion = 'Más ligera que $contra: también suma';
+      }
+    }
+
+    final Racha racha = MotorProgresion.instancia.racha(u);
+    final bool rangoNuevo = r.subioNivel && r.nivelDespues.rango != r.nivelAntes.rango;
+    final bool semanaJusta = racha.sesionesEstaSemana == racha.objetivoSemanal;
+    final String caso = rangoNuevo
+        ? 'rango'
+        : r.subioNivel
+            ? 'nivel'
+            : r.records.isNotEmpty
+                ? 'record'
+                : primera
+                    ? 'primera'
+                    : regreso
+                        ? 'regreso'
+                        : semanaJusta
+                            ? 'semana'
+                            : mejor
+                                ? 'mejor'
+                                : 'general';
+    final int semilla = s.id.codeUnits.fold<int>(7, (int h, int c) => (h * 31 + c) & 0x3fffffff);
+
+    return DatosCeremonia._(
+      titulo: FrasesCeremonia.titulo(tono, u),
+      frase: FrasesCeremonia.de(tono, caso, semilla, rango: r.nivelDespues.rango),
+      racha: racha,
+      comparacion: comparacion,
+      especial: r.subioNivel || r.records.isNotEmpty,
+      rangoNuevo: rangoNuevo,
+    );
+  }
+}
+
+/// Los tiempos de la ceremonia, como fracciones de [_ResumenSesionScreenState.duracion].
+class _TiemposCeremonia {
+  const _TiemposCeremonia._();
+  static const Interval logo = Interval(0.0, 0.14, curve: Curves.easeOutBack);
+  static const Interval enso = Interval(0.02, 0.26, curve: Curves.easeInOutCubic);
+  static const Interval sello = Interval(0.22, 0.31, curve: Curves.easeOutCubic);
+  static const Interval cuenta = Interval(0.24, 0.50, curve: Curves.easeOutCubic);
+  static const Interval xp = Interval(0.40, 0.62, curve: Curves.easeOutCubic);
+  static const Interval barra = Interval(0.42, 0.70, curve: Curves.easeInOutCubic);
+  static const Interval semana = Interval(0.64, 0.80, curve: Curves.easeOut);
+  static const Interval escribir = Interval(0.72, 0.92);
+  static const Interval peso = Interval(0.84, 0.98, curve: Curves.easeOutCubic);
+
+  /// En la barra, el momento en que se llena el nivel anterior.
+  static const double quiebre = 0.6;
+}
+
+class ResumenSesionScreen extends StatefulWidget {
+  const ResumenSesionScreen({super.key, required this.resumen});
+
+  final ResumenCierre resumen;
+
+  @override
+  State<ResumenSesionScreen> createState() => _ResumenSesionScreenState();
+}
+
+class _ResumenSesionScreenState extends State<ResumenSesionScreen> with TickerProviderStateMixin {
+  static const Duration duracion = Duration(milliseconds: 5600);
+
+  late final AnimationController _c = AnimationController(vsync: this, duration: duracion)
+    ..addListener(_alAvanzar);
+  late final AnimationController _chispas =
+      AnimationController(vsync: this, duration: const Duration(milliseconds: 2600));
+  final ScrollController _scroll = ScrollController();
+  final GlobalKey _claveRacha = GlobalKey();
+  final GlobalKey _claveFrase = GlobalKey();
+  late final DatosCeremonia _d = DatosCeremonia.de(widget.resumen);
+  late final List<_Chispa> _particulas = _Chispa.lluvia(Rendimiento.ligero ? 30 : 56);
+
+  // Si la persona mueve la lista o salta la ceremonia, nada se mueve solo.
+  bool _manual = false;
+  bool _vibroNivel = false;
+  bool _vioRacha = false;
+  bool _vioFrase = false;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      if (MediaQuery.maybeDisableAnimationsOf(context) ?? false) {
+        _manual = true;
+        _vibroNivel = true;
+        _c.value = 1;
+        return;
+      }
+      HapticFeedback.mediumImpact();
+      _c.forward();
+      _chispas.forward();
+    });
+  }
+
+  @override
+  void dispose() {
+    _c.dispose();
+    _chispas.dispose();
+    _scroll.dispose();
+    super.dispose();
+  }
+
+  void _alAvanzar() {
+    final double t = _c.value;
+    final double nivel = _TiemposCeremonia.barra.begin +
+        (_TiemposCeremonia.barra.end - _TiemposCeremonia.barra.begin) * _TiemposCeremonia.quiebre;
+    if (!_vibroNivel && widget.resumen.subioNivel && t >= nivel) {
+      _vibroNivel = true;
+      HapticFeedback.heavyImpact();
+    }
+    if (!_vioRacha && t >= 0.60) {
+      _vioRacha = true;
+      _mostrar(_claveRacha);
+    }
+    if (!_vioFrase && t >= 0.72) {
+      _vioFrase = true;
+      _mostrar(_claveFrase);
+    }
+  }
+
+  /// Baja la lista lo justo para que se vea lo que está apareciendo.
+  void _mostrar(GlobalKey k) {
+    final BuildContext? ctx = k.currentContext;
+    if (_manual || ctx == null) return;
+    Scrollable.ensureVisible(
+      ctx,
+      duration: const Duration(milliseconds: 900),
+      curve: Curves.easeInOutCubic,
+      alignmentPolicy: ScrollPositionAlignmentPolicy.keepVisibleAtEnd,
+    );
+  }
+
+  void _saltar() {
+    if (!_c.isAnimating) return;
+    _manual = true;
+    _vibroNivel = true;
+    _c.value = 1;
+  }
+
+  Widget _fase(double desde, double hasta, Widget hijo, {double desplazamiento = 18}) =>
+      Aparece(controlador: _c, desde: desde, hasta: hasta, desplazamiento: desplazamiento, child: hijo);
+
+  @override
+  Widget build(BuildContext context) {
+    final ResumenCierre r = widget.resumen;
+    final Sesion s = r.sesion;
+    final PiezaTemplo? pieza = r.piezaDesbloqueada;
+
+    return Scaffold(
+      backgroundColor: TempleColors.negro,
+      body: FondoTemplo(
+        child: SafeArea(
+          child: Stack(
+            children: <Widget>[
+              NotificationListener<UserScrollNotification>(
+                onNotification: (_) {
+                  _manual = true;
+                  return false;
+                },
+                child: ListView(
+                  controller: _scroll,
+                  padding: const EdgeInsets.fromLTRB(20, 18, 20, 30),
+                  children: <Widget>[
+                    GestureDetector(
+                      behavior: HitTestBehavior.opaque,
+                      onTap: _saltar,
+                      child: _HeroeCeremonia(c: _c, datos: _d, sesion: s),
+                    ),
+                    const SizedBox(height: 22),
+
+                    // Cifras de la sesión, contando.
+                    _fase(
+                      0.20,
+                      0.34,
+                      TempleCard(
+                        child: Row(
+                          children: <Widget>[
+                            _CifraCuenta(c: _c, valor: s.volumenTotal, unidad: 'kg', etiqueta: 'Volumen'),
+                            _CifraCuenta(c: _c, valor: s.minutos.toDouble(), unidad: 'min', etiqueta: 'Duración'),
+                            _CifraCuenta(c: _c, valor: s.seriesEfectivas.toDouble(), unidad: '', etiqueta: 'Series'),
+                            _CifraCuenta(
+                                c: _c, valor: s.repeticionesTotales.toDouble(), unidad: '', etiqueta: 'Repeticiones'),
+                          ],
+                        ),
+                      ),
+                    ),
+                    if (_d.comparacion != null) ...<Widget>[
+                      const SizedBox(height: 10),
+                      _fase(0.44, 0.56, _LineaComparacion(texto: _d.comparacion!), desplazamiento: 8),
+                    ],
+                    const SizedBox(height: 22),
+
+                    // Experiencia y nivel.
+                    _fase(0.36, 0.48, const EtiquetaSeccion('Experiencia ganada')),
+                    _fase(0.36, 0.50, _XpCeremonia(c: _c, resumen: r)),
+                    const SizedBox(height: 14),
+
+                    if (r.subioNivel) ...<Widget>[
+                      _BanderaCeremonia(
+                        c: _c,
+                        intervalo: const Interval(0.60, 0.72, curve: Curves.easeOutBack),
+                        glifo: TempleGlyph.medalla,
+                        titulo: _d.rangoNuevo
+                            ? 'Nuevo rango: ${r.nivelDespues.rango}'
+                            : '¡Nivel ${r.nivelDespues.nivel}!',
+                        texto: _d.rangoNuevo
+                            ? 'Nivel ${r.nivelDespues.nivel}. El templo te reconoce.'
+                            : r.nivelDespues.rango,
+                      ),
+                      const SizedBox(height: 14),
+                    ],
+                    if (pieza != null) ...<Widget>[
+                      _BanderaCeremonia(
+                        c: _c,
+                        intervalo: const Interval(0.66, 0.78, curve: Curves.easeOutBack),
+                        glifo: TempleGlyph.casa,
+                        titulo: 'Se levantó ${pieza.nombre.toLowerCase()}',
+                        texto: pieza.descripcion,
+                      ),
+                      const SizedBox(height: 14),
+                    ],
+
+                    if (r.records.isNotEmpty) ...<Widget>[
+                      const SizedBox(height: 8),
+                      _fase(0.50, 0.62,
+                          EtiquetaSeccion(r.records.length == 1 ? 'Récord roto' : '${r.records.length} récords rotos')),
+                      TempleCard(
+                        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+                        child: Column(
+                          children: <Widget>[
+                            for (int i = 0; i < r.records.length; i++)
+                              _FilaRecord(
+                                c: _c,
+                                intervalo: Interval(
+                                  math.min(0.52 + i * 0.05, 0.74),
+                                  math.min(0.64 + i * 0.05, 0.86),
+                                  curve: Curves.easeOutCubic,
+                                ),
+                                record: r.records[i],
+                              ),
+                          ],
+                        ),
+                      ),
+                      const SizedBox(height: 22),
+                    ] else
+                      const SizedBox(height: 8),
+
+                    // La semana y la racha.
+                    _fase(
+                      0.60,
+                      0.72,
+                      KeyedSubtree(key: _claveRacha, child: _RachaCeremonia(c: _c, racha: _d.racha)),
+                    ),
+                    const SizedBox(height: 16),
+
+                    // La frase de Tenshi.
+                    _fase(
+                      0.70,
+                      0.80,
+                      KeyedSubtree(key: _claveFrase, child: _FraseTenshi(c: _c, frase: _d.frase)),
+                    ),
+                    const SizedBox(height: 26),
+
+                    _fase(0.80, 0.92, TarjetaHonorSesion(usuario: s.usuario, sesion: s)),
+                    _fase(0.82, 0.94, TarjetaOfrendaDoble(usuario: s.usuario)),
+                    _fase(0.84, 0.96, TarjetaCompartirSesion(resumen: r)),
+
+                    _fase(0.84, 0.96, const EtiquetaSeccion('El peso del templo')),
+                    _fase(
+                      0.84,
+                      0.96,
+                      TempleCard(
+                        child: AnimatedBuilder(
+                          animation: _c,
+                          builder: (BuildContext context, _) {
+                            final double v = _TiemposCeremonia.peso.transform(_c.value);
+                            final double kg = r.pesoTemploAntes + (r.pesoTemploDespues - r.pesoTemploAntes) * v;
+                            return Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: <Widget>[
+                                Text(
+                                  '${milesTemplo(kg)} kg',
+                                  style: const TextStyle(
+                                    fontSize: 28,
+                                    fontWeight: FontWeight.w600,
+                                    color: TempleColors.blancoLuna,
+                                  ),
+                                ),
+                                Text(
+                                  '+${milesTemplo(r.pesoTemploDespues - r.pesoTemploAntes)} kg hoy',
+                                  style: const TextStyle(fontSize: 12.5, color: TempleColors.exito),
+                                ),
+                              ],
+                            );
+                          },
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 34),
+                    _fase(
+                      0.88,
+                      1.0,
+                      DojoPrimaryButton(
+                        texto: 'Volver al Dojo',
+                        onPressed: () => Navigator.of(context).pop(),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              // Chispas y pétalos que salen del logo y caen sobre todo.
+              Positioned.fill(
+                child: IgnorePointer(
+                  child: RepaintBoundary(
+                    child: CustomPaint(
+                      painter: _ChispasPainter(
+                        tiempo: _chispas,
+                        scroll: _scroll,
+                        particulas: _particulas,
+                        origenY: 18 + _HeroeCeremonia.centroLogo,
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// El logo dentro de un ensō que se dibuja de un trazo, el sello 完 que se
+/// estampa, y el saludo.
+class _HeroeCeremonia extends StatelessWidget {
+  const _HeroeCeremonia({required this.c, required this.datos, required this.sesion});
+
+  final Animation<double> c;
+  final DatosCeremonia datos;
+  final Sesion sesion;
+
+  static const double lado = 156;
+  static const double centroLogo = lado / 2;
+
+  @override
+  Widget build(BuildContext context) {
+    final Color acento = datos.especial ? TempleColors.dorado : TempleColors.violetaClaro;
+    return Column(
+      children: <Widget>[
+        SizedBox(
+          width: lado,
+          height: lado,
+          child: AnimatedBuilder(
+            animation: c,
+            builder: (BuildContext context, _) {
+              final double t = c.value;
+              final double logo = _TiemposCeremonia.logo.transform(t);
+              final double enso = _TiemposCeremonia.enso.transform(t);
+              final double sello = _TiemposCeremonia.sello.transform(t);
+              return Stack(
+                alignment: Alignment.center,
+                clipBehavior: Clip.none,
+                children: <Widget>[
+                  // Halo que respira detrás del logo.
+                  Opacity(
+                    opacity: (enso * 0.9).clamp(0.0, 1.0),
+                    child: Container(
+                      width: lado * (0.7 + 0.3 * enso),
+                      height: lado * (0.7 + 0.3 * enso),
+                      decoration: BoxDecoration(
+                        shape: BoxShape.circle,
+                        gradient: RadialGradient(
+                          colors: <Color>[
+                            acento.withValues(alpha: 0.22),
+                            TempleColors.violeta.withValues(alpha: 0.08),
+                            TempleColors.violeta.withValues(alpha: 0),
+                          ],
+                          stops: const <double>[0, 0.55, 1],
+                        ),
+                      ),
+                    ),
+                  ),
+                  CustomPaint(
+                    size: const Size.square(lado),
+                    painter: _EnsoPainter(
+                      progreso: enso,
+                      inicio: TempleColors.violeta,
+                      fin: acento,
+                      segmentos: Rendimiento.ligero ? 60 : 110,
+                    ),
+                  ),
+                  Opacity(
+                    opacity: logo.clamp(0.0, 1.0),
+                    child: Transform.scale(
+                      scale: 0.55 + 0.45 * logo,
+                      child: const ToriiMoonLogo(size: 86),
+                    ),
+                  ),
+                  // El sello 完 («completo») se estampa en la esquina.
+                  Positioned(
+                    right: 2,
+                    top: 8,
+                    child: Opacity(
+                      opacity: (sello * 3).clamp(0.0, 1.0),
+                      child: Transform.rotate(
+                        angle: -0.16,
+                        child: Transform.scale(
+                          scale: 1.9 - 0.9 * sello,
+                          child: _Hanko(color: acento),
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              );
+            },
+          ),
+        ),
+        const SizedBox(height: 14),
+        Aparece(
+          controlador: c,
+          desde: 0.08,
+          hasta: 0.24,
+          desplazamiento: 10,
+          child: const Text(
+            'SESIÓN COMPLETADA',
+            textAlign: TextAlign.center,
+            style: TextStyle(
+              fontSize: 11,
+              fontWeight: FontWeight.w600,
+              letterSpacing: 4,
+              color: TempleColors.textoSuave,
+            ),
+          ),
+        ),
+        const SizedBox(height: 8),
+        Aparece(
+          controlador: c,
+          desde: 0.12,
+          hasta: 0.28,
+          child: Text(
+            datos.titulo,
+            textAlign: TextAlign.center,
+            style: const TextStyle(
+              fontSize: 27,
+              height: 1.15,
+              fontWeight: FontWeight.w700,
+              color: TempleColors.blancoLuna,
+            ),
+          ),
+        ),
+        const SizedBox(height: 6),
+        Aparece(
+          controlador: c,
+          desde: 0.15,
+          hasta: 0.31,
+          child: Text(
+            sesion.nombre ?? 'Sesión libre',
+            textAlign: TextAlign.center,
+            style: const TextStyle(fontSize: 14, color: TempleColors.textoSuave),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _Hanko extends StatelessWidget {
+  const _Hanko({required this.color});
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) => Container(
+        width: 36,
+        height: 36,
+        alignment: Alignment.center,
+        decoration: BoxDecoration(
+          color: color.withValues(alpha: 0.12),
+          borderRadius: BorderRadius.circular(7),
+          border: Border.all(color: color, width: 1.8),
+        ),
+        child: Text('完', style: TextStyle(fontSize: 19, height: 1, fontWeight: FontWeight.w700, color: color)),
+      );
+}
+
+/// Un ensō de pincel: entra grueso, se adelgaza y termina en un hilo, sin
+/// cerrarse del todo.
+class _EnsoPainter extends CustomPainter {
+  _EnsoPainter({required this.progreso, required this.inicio, required this.fin, required this.segmentos});
+
+  final double progreso;
+  final Color inicio;
+  final Color fin;
+  final int segmentos;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    if (progreso <= 0) return;
+    final Offset centro = size.center(Offset.zero);
+    final double radio = size.shortestSide / 2 - 9;
+    const double arranque = -math.pi / 2 - 0.55;
+    const double barrido = math.pi * 2 * 0.92;
+    final Paint p = Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeCap = StrokeCap.round;
+    for (int i = 0; i < segmentos; i++) {
+      final double a = i / segmentos;
+      if (a >= progreso) break;
+      final double b = math.min((i + 1) / segmentos, progreso);
+      final double grosor = 8.0 * (1 - a * 0.78) * (0.86 + 0.14 * math.sin(a * 21));
+      final double r = radio + math.sin(a * 7.5) * 1.4;
+      p
+        ..strokeWidth = grosor
+        ..color = Color.lerp(inicio, fin, Curves.easeIn.transform(a))!;
+      canvas.drawArc(
+        Rect.fromCircle(center: centro, radius: r),
+        arranque + barrido * a,
+        barrido * (b - a) + 0.012,
+        false,
+        p,
+      );
+    }
+  }
+
+  @override
+  bool shouldRepaint(_EnsoPainter old) =>
+      old.progreso != progreso || old.inicio != inicio || old.fin != fin;
+}
+
+/// Una partícula de la celebración: chispa (rápida, pequeña) o pétalo (lento,
+/// cae meciéndose).
+class _Chispa {
+  const _Chispa({
+    required this.angulo,
+    required this.velocidad,
+    required this.tamano,
+    required this.tipo,
+    required this.retraso,
+    required this.giro,
+    required this.fase,
+  });
+
+  final double angulo;
+  final double velocidad;
+  final double tamano;
+
+  /// 0 violeta, 1 dorado, 2 blanco, 3 pétalo.
+  final int tipo;
+  final double retraso;
+  final double giro;
+  final double fase;
+
+  static List<_Chispa> lluvia(int n) {
+    final math.Random rnd = math.Random(17);
+    return List<_Chispa>.generate(n, (int i) {
+      final bool petalo = i % 3 == 0;
+      return _Chispa(
+        angulo: -math.pi / 2 + (rnd.nextDouble() - 0.5) * math.pi * (petalo ? 1.5 : 2),
+        velocidad: petalo ? 0.45 + rnd.nextDouble() * 0.5 : 0.7 + rnd.nextDouble() * 0.9,
+        tamano: petalo ? 4.5 + rnd.nextDouble() * 3 : 1.6 + rnd.nextDouble() * 2.2,
+        tipo: petalo ? 3 : rnd.nextInt(3),
+        retraso: rnd.nextDouble() * 0.14,
+        giro: rnd.nextDouble() * math.pi * 2,
+        fase: rnd.nextDouble() * math.pi * 2,
+      );
+    });
+  }
+}
+
+class _ChispasPainter extends CustomPainter {
+  _ChispasPainter({
+    required this.tiempo,
+    required this.scroll,
+    required this.particulas,
+    required this.origenY,
+  }) : super(repaint: Listenable.merge(<Listenable>[tiempo, scroll]));
+
+  final Animation<double> tiempo;
+  final ScrollController scroll;
+  final List<_Chispa> particulas;
+  final double origenY;
+
+  static const Color _petalo = Color(0xFFF6B8D8);
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final double t = tiempo.value;
+    if (t <= 0 || t >= 1) return;
+    final double desplazado = scroll.hasClients ? scroll.offset : 0;
+    final Offset origen = Offset(size.width / 2, origenY - desplazado);
+
+    // La onda del primer instante.
+    if (t < 0.32) {
+      final double o = t / 0.32;
+      canvas.drawCircle(
+        origen,
+        30 + 150 * Curves.easeOutCubic.transform(o),
+        Paint()
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 2.2 * (1 - o) + 0.4
+          ..color = TempleColors.violetaClaro.withValues(alpha: 0.45 * (1 - o)),
+      );
+    }
+
+    final Paint p = Paint();
+    for (final _Chispa c in particulas) {
+      final double u = ((t - c.retraso) / (1 - c.retraso)).clamp(0.0, 1.0);
+      if (u <= 0) continue;
+      final double sale = Curves.easeOutCubic.transform(u);
+      if (c.tipo == 3) {
+        final Offset pos = origen +
+            Offset(math.cos(c.angulo), math.sin(c.angulo)) * (120 * c.velocidad * sale) +
+            Offset(math.sin(u * 7 + c.fase) * 16, 330 * u * u);
+        final double vida = 1 - math.pow(u, 3).toDouble();
+        canvas.save();
+        canvas.translate(pos.dx, pos.dy);
+        canvas.rotate(c.giro + u * 5);
+        p.color = _petalo.withValues(alpha: 0.85 * vida);
+        canvas.drawOval(Rect.fromCenter(center: Offset.zero, width: c.tamano * 1.7, height: c.tamano), p);
+        canvas.restore();
+      } else {
+        final Offset pos = origen +
+            Offset(math.cos(c.angulo), math.sin(c.angulo)) * (210 * c.velocidad * sale) +
+            Offset(0, 140 * u * u);
+        final double vida = 1 - math.pow(u, 1.6).toDouble();
+        final Color color = c.tipo == 0
+            ? TempleColors.violetaClaro
+            : c.tipo == 1
+                ? TempleColors.dorado
+                : TempleColors.blancoLuna;
+        p.color = color.withValues(alpha: 0.25 * vida);
+        canvas.drawCircle(pos, c.tamano * 2.6, p);
+        p.color = color.withValues(alpha: 0.95 * vida);
+        canvas.drawCircle(pos, c.tamano, p);
+      }
+    }
+  }
+
+  @override
+  bool shouldRepaint(_ChispasPainter old) => false;
+}
+
+/// Una cifra que cuenta desde 0 hasta su valor.
+class _CifraCuenta extends StatelessWidget {
+  const _CifraCuenta({required this.c, required this.valor, required this.unidad, required this.etiqueta});
+
+  final Animation<double> c;
+  final double valor;
+  final String unidad;
+  final String etiqueta;
+
+  @override
+  Widget build(BuildContext context) {
+    return Expanded(
+      child: Semantics(
+        label: '$etiqueta: ${milesTemplo(valor)} $unidad',
+        excludeSemantics: true,
+        child: AnimatedBuilder(
+          animation: c,
+          builder: (BuildContext context, _) {
+            final double v = _TiemposCeremonia.cuenta.transform(c.value);
+            return Column(
+              children: <Widget>[
+                FittedBox(
+                  fit: BoxFit.scaleDown,
+                  child: RichText(
+                    text: TextSpan(
+                      text: milesTemplo(valor * v),
+                      style: const TextStyle(
+                        fontSize: 19,
+                        fontWeight: FontWeight.w600,
+                        color: TempleColors.blancoLuna,
+                        fontFeatures: <FontFeature>[FontFeature.tabularFigures()],
+                      ),
+                      children: <InlineSpan>[
+                        TextSpan(
+                          text: unidad.isEmpty ? '' : ' $unidad',
+                          style: const TextStyle(fontSize: 10, color: TempleColors.textoTenue),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  etiqueta,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(fontSize: 10.5, color: TempleColors.textoSuave),
+                ),
+              ],
+            );
+          },
+        ),
+      ),
+    );
+  }
+}
+
+class _LineaComparacion extends StatelessWidget {
+  const _LineaComparacion({required this.texto});
+  final String texto;
+
+  @override
+  Widget build(BuildContext context) {
+    final bool sube = texto.contains('más volumen') || texto.startsWith('Tu sesión con más');
+    return Row(
+      mainAxisAlignment: MainAxisAlignment.center,
+      children: <Widget>[
+        Icon(
+          sube ? Icons.trending_up_rounded : Icons.auto_awesome_rounded,
+          size: 16,
+          color: sube ? TempleColors.exito : TempleColors.violetaClaro,
+        ),
+        const SizedBox(width: 6),
+        Flexible(
+          child: Text(
+            texto,
+            textAlign: TextAlign.center,
+            style: TextStyle(fontSize: 12.5, color: sube ? TempleColors.exito : TempleColors.textoSuave),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+/// La experiencia que cuenta y la barra de nivel que se llena. Si subiste,
+/// la barra llega al final, destella y vuelve a empezar en el nivel nuevo.
+class _XpCeremonia extends StatelessWidget {
+  const _XpCeremonia({required this.c, required this.resumen});
+
+  final Animation<double> c;
+  final ResumenCierre resumen;
+
+  @override
+  Widget build(BuildContext context) {
+    final List<MapEntry<GrupoMuscular, double>> grupos = resumen.xpPorGrupo.entries.toList()
+      ..sort((MapEntry<GrupoMuscular, double> a, MapEntry<GrupoMuscular, double> b) => b.value.compareTo(a.value));
+    final NivelTemplo antes = resumen.nivelAntes;
+    final NivelTemplo despues = resumen.nivelDespues;
+
+    return TempleCard(
+      destacada: resumen.subioNivel,
+      child: AnimatedBuilder(
+        animation: c,
+        builder: (BuildContext context, _) {
+          final double t = c.value;
+          final double xp = _TiemposCeremonia.xp.transform(t);
+          final double b = _TiemposCeremonia.barra.transform(t);
+          const double q = _TiemposCeremonia.quiebre;
+          final bool cruzo = resumen.subioNivel && b >= q;
+          final double progreso = !resumen.subioNivel
+              ? antes.progreso + (despues.progreso - antes.progreso) * b
+              : b < q
+                  ? antes.progreso + (1 - antes.progreso) * (b / q)
+                  : despues.progreso * ((b - q) / (1 - q));
+          // Destello al cruzar de nivel.
+          final double destello = cruzo ? (1 - ((b - q) / 0.25)).clamp(0.0, 1.0) : 0;
+          final NivelTemplo n = cruzo ? despues : antes;
+          final Color color = cruzo ? TempleColors.dorado : TempleColors.violeta;
+
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: <Widget>[
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.end,
+                children: <Widget>[
+                  Text(
+                    '+${milesTemplo(resumen.xpTotal * xp)} XP',
+                    style: const TextStyle(
+                      fontSize: 26,
+                      fontWeight: FontWeight.w600,
+                      color: TempleColors.violetaClaro,
+                      fontFeatures: <FontFeature>[FontFeature.tabularFigures()],
+                    ),
+                  ),
+                  const Spacer(),
+                  Transform.scale(
+                    scale: 1 + 0.18 * destello,
+                    alignment: Alignment.centerRight,
+                    child: Text(
+                      'Nivel ${n.nivel}',
+                      style: TextStyle(
+                        fontSize: 13,
+                        fontWeight: FontWeight.w600,
+                        color: cruzo ? TempleColors.dorado : TempleColors.textoSuave,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 12),
+              Container(
+                height: 8,
+                decoration: BoxDecoration(
+                  color: TempleColors.borde,
+                  borderRadius: BorderRadius.circular(999),
+                  boxShadow: destello > 0
+                      ? <BoxShadow>[
+                          BoxShadow(color: TempleColors.dorado.withValues(alpha: 0.55 * destello), blurRadius: 16),
+                        ]
+                      : null,
+                ),
+                child: Align(
+                  alignment: Alignment.centerLeft,
+                  child: FractionallySizedBox(
+                    widthFactor: progreso.clamp(0.02, 1.0),
+                    child: DecoratedBox(
+                      decoration: BoxDecoration(
+                        borderRadius: BorderRadius.circular(999),
+                        gradient: LinearGradient(
+                          colors: <Color>[color, Color.lerp(color, TempleColors.blancoLuna, 0.35)!],
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 6),
+              Text(
+                cruzo || !resumen.subioNivel
+                    ? 'Faltan ${milesTemplo(despues.xpParaSiguiente - despues.xpEnNivel)} XP para el nivel ${despues.nivel + 1}'
+                    : 'Llenando el nivel ${antes.nivel}…',
+                style: const TextStyle(fontSize: 11.5, color: TempleColors.textoTenue),
+              ),
+              if (grupos.isNotEmpty) const SizedBox(height: 16),
+              for (int i = 0; i < grupos.length; i++)
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 10),
+                  child: Builder(builder: (BuildContext context) {
+                    final double v = Interval(
+                      math.min(0.46 + i * 0.03, 0.7),
+                      math.min(0.64 + i * 0.03, 0.88),
+                      curve: Curves.easeOutCubic,
+                    ).transform(t);
+                    final MapEntry<GrupoMuscular, double> e = grupos[i];
+                    return Row(
+                      children: <Widget>[
+                        SizedBox(
+                          width: 96,
+                          child: Text(e.key.etiqueta,
+                              style: const TextStyle(fontSize: 12.5, color: TempleColors.textoSuave)),
+                        ),
+                        Expanded(
+                          child: ClipRRect(
+                            borderRadius: BorderRadius.circular(999),
+                            child: LinearProgressIndicator(
+                              value: ((e.value / 200).clamp(0.05, 1.0)) * v,
+                              minHeight: 5,
+                              backgroundColor: TempleColors.borde,
+                              valueColor: const AlwaysStoppedAnimation<Color>(TempleColors.violeta),
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 10),
+                        SizedBox(
+                          width: 40,
+                          child: Text(
+                            '+${(e.value * v).round()}',
+                            textAlign: TextAlign.right,
+                            style: const TextStyle(fontSize: 12, color: TempleColors.violetaClaro),
+                          ),
+                        ),
+                      ],
+                    );
+                  }),
+                ),
+            ],
+          );
+        },
+      ),
+    );
+  }
+}
+
+/// Un aviso dorado que entra con un pequeño rebote (nivel, rango, pieza).
+class _BanderaCeremonia extends StatelessWidget {
+  const _BanderaCeremonia({
+    required this.c,
+    required this.intervalo,
+    required this.glifo,
+    required this.titulo,
+    required this.texto,
+  });
+
+  final Animation<double> c;
+  final Interval intervalo;
+  final TempleGlyph glifo;
+  final String titulo;
+  final String texto;
+
+  @override
+  Widget build(BuildContext context) {
+    const Color d = TempleColors.dorado;
+    final Widget cuerpo = Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: d.withValues(alpha: 0.09),
+        borderRadius: BorderRadius.circular(TempleRadius.tarjeta),
+        border: Border.all(color: d.withValues(alpha: 0.4)),
+      ),
+      child: Row(
+        children: <Widget>[
+          TempleIcon(glifo, size: 26, color: d),
+          const SizedBox(width: 14),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: <Widget>[
+                Text(titulo, style: const TextStyle(fontSize: 15.5, fontWeight: FontWeight.w600, color: d)),
+                const SizedBox(height: 3),
+                Text(texto, style: const TextStyle(fontSize: 12.5, height: 1.4, color: TempleColors.textoSuave)),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+    return AnimatedBuilder(
+      animation: c,
+      child: cuerpo,
+      builder: (BuildContext context, Widget? hijo) {
+        final double v = intervalo.transform(c.value);
+        // Un brillo que cruza la bandera al aparecer.
+        final double brillo = Interval(intervalo.begin + 0.04, math.min(intervalo.end + 0.1, 1.0)).transform(c.value);
+        return Opacity(
+          opacity: v.clamp(0.0, 1.0),
+          child: Transform.scale(
+            scale: 0.7 + 0.3 * v,
+            child: Stack(
+              children: <Widget>[
+                hijo!,
+                if (brillo > 0 && brillo < 1)
+                  Positioned.fill(
+                    child: IgnorePointer(
+                      child: ClipRRect(
+                        borderRadius: BorderRadius.circular(TempleRadius.tarjeta),
+                        child: Align(
+                          alignment: Alignment(-1.6 + 3.2 * brillo, 0),
+                          child: FractionallySizedBox(
+                            widthFactor: 0.35,
+                            heightFactor: 1,
+                            child: DecoratedBox(
+                              decoration: BoxDecoration(
+                                gradient: LinearGradient(
+                                  colors: <Color>[
+                                    d.withValues(alpha: 0),
+                                    d.withValues(alpha: 0.22),
+                                    d.withValues(alpha: 0),
+                                  ],
+                                ),
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+}
+
+class _FilaRecord extends StatelessWidget {
+  const _FilaRecord({required this.c, required this.intervalo, required this.record});
+
+  final Animation<double> c;
+  final Interval intervalo;
+  final RecordRoto record;
+
+  @override
+  Widget build(BuildContext context) {
+    final String n = ejercicioPorId(record.ejercicioId)?.nombre ?? record.ejercicioId;
+    final int mejora = (record.mejora * 100).round();
+    final Widget fila = Padding(
+      padding: const EdgeInsets.symmetric(vertical: 11),
+      child: Row(
+        children: <Widget>[
+          const TempleIcon(TempleGlyph.medalla, size: 18, color: TempleColors.dorado),
+          const SizedBox(width: 12),
+          Expanded(child: Text(n, style: const TextStyle(fontSize: 13.5, color: TempleColors.texto))),
+          Text(
+            '${record.anterior.round()} → ${record.nuevo.round()}',
+            style: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w600, color: TempleColors.dorado),
+          ),
+          if (record.anterior > 0 && mejora > 0) ...<Widget>[
+            const SizedBox(width: 6),
+            Text('+$mejora%', style: const TextStyle(fontSize: 11, color: TempleColors.exito)),
+          ],
+        ],
+      ),
+    );
+    return AnimatedBuilder(
+      animation: c,
+      child: fila,
+      builder: (BuildContext context, Widget? hijo) {
+        final double v = intervalo.transform(c.value);
+        return Opacity(
+          opacity: v.clamp(0.0, 1.0),
+          child: Transform.translate(offset: Offset(-24 * (1 - v), 0), child: hijo),
+        );
+      },
+    );
+  }
+}
+
+/// La semana: una llama que late y una cuenta de sesiones que se llena.
+class _RachaCeremonia extends StatelessWidget {
+  const _RachaCeremonia({required this.c, required this.racha});
+
+  final Animation<double> c;
+  final Racha racha;
+
+  @override
+  Widget build(BuildContext context) {
+    final int hechas = racha.sesionesEstaSemana;
+    final int meta = racha.objetivoSemanal;
+    final String pie = racha.semanaCumplida
+        ? racha.semanas > 0
+            ? 'Semana cumplida · racha de ${racha.semanas} ${racha.semanas == 1 ? 'semana' : 'semanas'}'
+            : 'Semana cumplida'
+        : racha.faltan == 1
+            ? 'Te falta 1 sesión para cumplir la semana'
+            : 'Te faltan ${racha.faltan} sesiones para cumplir la semana';
+    final String dias = racha.diasSeguidos >= 2 ? ' · ${racha.diasSeguidos} días seguidos' : '';
+
+    return TempleCard(
+      destacada: racha.semanaCumplida,
+      child: AnimatedBuilder(
+        animation: c,
+        builder: (BuildContext context, _) {
+          final double t = c.value;
+          final double s = _TiemposCeremonia.semana.transform(t);
+          // La llama late mientras dura la ceremonia y luego queda quieta.
+          final double latido = t < 1 ? math.sin(t * math.pi * 14).abs() * (1 - t) : 0;
+          return Row(
+            children: <Widget>[
+              Container(
+                width: 52,
+                height: 52,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: TempleColors.violeta.withValues(alpha: 0.12),
+                  boxShadow: <BoxShadow>[
+                    BoxShadow(
+                      color: (racha.semanaCumplida ? TempleColors.dorado : TempleColors.violeta)
+                          .withValues(alpha: 0.25 + 0.35 * latido),
+                      blurRadius: 14 + 10 * latido,
+                    ),
+                  ],
+                ),
+                child: Center(
+                  child: Transform.scale(
+                    scale: 1 + 0.12 * latido,
+                    child: TempleIcon(
+                      TempleGlyph.llama,
+                      size: 26,
+                      color: racha.semanaCumplida ? TempleColors.dorado : TempleColors.violetaClaro,
+                    ),
+                  ),
+                ),
+              ),
+              const SizedBox(width: 14),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: <Widget>[
+                    Text(
+                      'Sesión $hechas de $meta esta semana',
+                      style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w600, color: TempleColors.blancoLuna),
+                    ),
+                    const SizedBox(height: 8),
+                    Wrap(
+                      spacing: 6,
+                      runSpacing: 6,
+                      children: <Widget>[
+                        for (int i = 0; i < meta; i++)
+                          _PuntoSemana(
+                            lleno: i < hechas,
+                            nivel: (s * meta - i).clamp(0.0, 1.0),
+                            dorado: racha.semanaCumplida,
+                          ),
+                        if (hechas > meta)
+                          Text('+${hechas - meta}',
+                              style: const TextStyle(fontSize: 11.5, color: TempleColors.dorado)),
+                      ],
+                    ),
+                    const SizedBox(height: 8),
+                    Text('$pie$dias', style: const TextStyle(fontSize: 12, color: TempleColors.textoSuave)),
+                  ],
+                ),
+              ),
+            ],
+          );
+        },
+      ),
+    );
+  }
+}
+
+class _PuntoSemana extends StatelessWidget {
+  const _PuntoSemana({required this.lleno, required this.nivel, required this.dorado});
+
+  final bool lleno;
+  final double nivel;
+  final bool dorado;
+
+  @override
+  Widget build(BuildContext context) {
+    final Color color = dorado ? TempleColors.dorado : TempleColors.violeta;
+    final double v = lleno ? Curves.easeOutBack.transform(nivel) : 0;
+    return Container(
+      width: 22,
+      height: 8,
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(999),
+        color: TempleColors.borde,
+      ),
+      child: Align(
+        alignment: Alignment.centerLeft,
+        child: FractionallySizedBox(
+          widthFactor: v.clamp(0.0, 1.0),
+          child: DecoratedBox(
+            decoration: BoxDecoration(color: color, borderRadius: BorderRadius.circular(999)),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// La frase de Tenshi, que se escribe sola. Los dichos llevan su kanji.
+class _FraseTenshi extends StatelessWidget {
+  const _FraseTenshi({required this.c, required this.frase});
+
+  final Animation<double> c;
+  final FraseCeremonia frase;
+
+  @override
+  Widget build(BuildContext context) {
+    const TextStyle estilo = TextStyle(fontSize: 15.5, height: 1.5, color: TempleColors.blancoLuna);
+    return Container(
+      padding: const EdgeInsets.fromLTRB(18, 16, 18, 14),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(TempleRadius.tarjeta),
+        border: Border.all(color: TempleColors.violeta.withValues(alpha: 0.35)),
+        gradient: LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: <Color>[
+            TempleColors.violeta.withValues(alpha: 0.14),
+            TempleColors.superficie.withValues(alpha: 0.6),
+          ],
+        ),
+      ),
+      child: Semantics(
+        label: 'Tenshi dice: ${frase.texto}',
+        excludeSemantics: true,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: <Widget>[
+            if (frase.kanji != null) ...<Widget>[
+              Text(frase.kanji!,
+                  style: const TextStyle(fontSize: 21, letterSpacing: 3, color: TempleColors.violetaClaro)),
+              const SizedBox(height: 2),
+              Text(frase.lectura ?? '',
+                  style: const TextStyle(fontSize: 11.5, fontStyle: FontStyle.italic, color: TempleColors.textoTenue)),
+              const SizedBox(height: 10),
+            ],
+            AnimatedBuilder(
+              animation: c,
+              builder: (BuildContext context, _) {
+                final double v = _TiemposCeremonia.escribir.transform(c.value);
+                final int n = (frase.texto.length * v).round().clamp(0, frase.texto.length);
+                // El texto completo, invisible, guarda el alto: nada salta.
+                return Stack(
+                  children: <Widget>[
+                    Opacity(opacity: 0, child: Text(frase.texto, style: estilo)),
+                    Text(frase.texto.substring(0, n), style: estilo),
+                  ],
+                );
+              },
+            ),
+            const SizedBox(height: 10),
+            const Align(
+              alignment: Alignment.centerRight,
+              child: Text('— Tenshi', style: TextStyle(fontSize: 12, color: TempleColors.textoSuave)),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// Solo para la vista de prueba: una sesión de ejemplo de Kenji para ver la
+/// ceremonia sin entrenar. [caso]: nivel, rango, record, normal o primera.
+ResumenCierre resumenDePrueba(String caso) {
+  final DateTime fin = DateTime.now();
+  SerieRegistrada serie(int n, double kg, int reps) =>
+      SerieRegistrada(numero: n, peso: kg, repeticiones: reps, completada: true, registradaEn: fin);
+  final DatosUsuario d = AlmacenTemplo.instancia.de('Kenji');
+  final String? voz = parametroPrueba('voz');
+  if (voz != null) d.ascenso['voz'] = voz;
+  if (caso != 'primera' && d.sesiones.isEmpty) {
+    // Dos sesiones anteriores, para comparar y para contar la semana.
+    for (int i = 1; i <= 2; i++) {
+      d.sesiones.add(Sesion(
+        id: 'previa-$i',
+        usuario: 'Kenji',
+        inicio: fin.subtract(Duration(days: i, minutes: 50)),
+        fin: fin.subtract(Duration(days: i)),
+        estado: EstadoSesion.completada,
+        nombre: 'Empuje · fuerza',
+        ejercicios: <EjercicioSesion>[
+          EjercicioSesion(ejercicioId: 'press_banca', orden: 0, series: <SerieRegistrada>[
+            serie(1, 70, 8),
+            serie(2, 72.5, 8),
+            serie(3, 75, 6),
+          ]),
+          EjercicioSesion(ejercicioId: 'remo_barra', orden: 1, series: <SerieRegistrada>[
+            serie(1, 60, 10),
+            serie(2, 60, 8),
+          ]),
+        ],
+      ));
+    }
+  }
+  final Sesion s = Sesion(
+    id: 'prueba-$caso',
+    usuario: 'Kenji',
+    inicio: fin.subtract(const Duration(minutes: 52)),
+    fin: fin,
+    estado: EstadoSesion.completada,
+    nombre: 'Empuje · fuerza',
+    ejercicios: <EjercicioSesion>[
+      EjercicioSesion(ejercicioId: 'press_banca', orden: 0, series: <SerieRegistrada>[
+        serie(1, 70, 8),
+        serie(2, 75, 6),
+        serie(3, 80, 5),
+        serie(4, 85, 3),
+      ]),
+      EjercicioSesion(ejercicioId: 'remo_barra', orden: 1, series: <SerieRegistrada>[
+        serie(1, 60, 10),
+        serie(2, 60, 10),
+        serie(3, 65, 8),
+      ]),
+      EjercicioSesion(ejercicioId: 'sentadilla', orden: 2, series: <SerieRegistrada>[
+        serie(1, 90, 8),
+        serie(2, 100, 6),
+        serie(3, 100, 6),
+      ]),
+    ],
+  );
+  d.sesiones.add(s);
+  final double xpAntes = switch (caso) {
+    'rango' => 1600,
+    'nivel' => 350,
+    _ => 120,
+  };
+  const double xp = 410;
+  final bool conRecords = caso == 'nivel' || caso == 'rango' || caso == 'record';
+  return ResumenCierre(
+    sesion: s,
+    records: conRecords
+        ? const <RecordRoto>[
+            RecordRoto(ejercicioId: 'press_banca', tipo: 'peso', anterior: 80, nuevo: 85),
+            RecordRoto(ejercicioId: 'sentadilla', tipo: 'peso', anterior: 95, nuevo: 100),
+          ]
+        : const <RecordRoto>[],
+    xpPorGrupo: const <GrupoMuscular, double>{
+      GrupoMuscular.pecho: 148,
+      GrupoMuscular.espalda: 112,
+      GrupoMuscular.piernas: 96,
+      GrupoMuscular.triceps: 54,
+    },
+    xpTotal: xp,
+    nivelAntes: NivelTemplo.desdeXp(xpAntes),
+    nivelDespues: NivelTemplo.desdeXp(caso == 'normal' || caso == 'primera' || caso == 'record' ? xpAntes + 200 : xpAntes + xp),
+    pesoTemploAntes: 12400,
+    pesoTemploDespues: 15230,
+  );
 }
