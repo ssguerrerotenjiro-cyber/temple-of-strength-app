@@ -4213,6 +4213,8 @@ class _PuertaTemploState extends State<PuertaTemplo> {
       if (parametroPrueba('pantalla') == 'login') return const LoginScreen();
       // ?pase=1: nombre con el estilo del Pase. ?marco=kintsugi: marco del sello.
       if (parametroPrueba('pase') == '1') PaseTemplo.instancia.simularEnVistaPrueba();
+      // ?demo=1: una cuenta de ejemplo con semanas de entrenamiento (capturas y videos).
+      if (parametroPrueba('demo') == '1') sembrarDemostracion();
       final MarcoSello? marco = MarcoSello.values.where((MarcoSello m) => m.name == parametroPrueba('marco')).firstOrNull;
       if (marco != null) AlmacenIdentidad.instancia.de('Kenji').marco = marco;
       // ?vineta=todo: la última pieza de cada capa del Taller (las más cargadas),
@@ -76863,4 +76865,73 @@ ResumenCierre resumenDePrueba(String caso) {
     pesoTemploAntes: 12400,
     pesoTemploDespues: 15230,
   );
+}
+
+
+// ---------------------------------------------------------------------------
+// 63. CUENTA DE DEMOSTRACIÓN (solo vista de prueba, ?demo=1)
+// ---------------------------------------------------------------------------
+
+bool _demoSembrada = false;
+
+/// Llena a «Kenji» con cinco semanas de entrenamiento de ejemplo, para que
+/// las capturas y los videos muestren la app con datos y no recién creada.
+/// Solo se llama desde la vista de prueba; nunca toca cuentas reales.
+void sembrarDemostracion() {
+  if (_demoSembrada) return;
+  _demoSembrada = true;
+  final DateTime hoy = DateTime.now();
+  final DatosUsuario d = AlmacenTemplo.instancia.de('Kenji');
+  if (d.sesiones.isNotEmpty) return;
+  for (int i = 17; i >= 1; i--) {
+    final DateTime fin = hoy.subtract(Duration(days: i * 2, hours: 3));
+    final double sube = (17 - i) * 1.25;
+    SerieRegistrada serie(int n, double kg, int reps) =>
+        SerieRegistrada(numero: n, peso: kg, repeticiones: reps, completada: true, registradaEn: fin);
+    EjercicioSesion ej(String id, int orden, double kg, int reps) => EjercicioSesion(
+          ejercicioId: id,
+          orden: orden,
+          series: <SerieRegistrada>[serie(1, kg, reps), serie(2, kg + 2.5, reps), serie(3, kg + 5, reps - 2)],
+        );
+    final int tipo = i % 3;
+    d.sesiones.add(Sesion(
+      id: 'demo-$i',
+      usuario: 'Kenji',
+      inicio: fin.subtract(const Duration(minutes: 55)),
+      fin: fin,
+      estado: EstadoSesion.completada,
+      nombre: tipo == 0 ? 'Empuje · fuerza' : (tipo == 1 ? 'Tirón · fuerza' : 'Pierna · fuerza'),
+      ejercicios: tipo == 0
+          ? <EjercicioSesion>[
+              ej('press_banca', 0, 62.5 + sube, 8),
+              ej('press_militar', 1, 37.5 + sube * 0.5, 8),
+              ej('fondos', 2, 10 + sube * 0.5, 10),
+              ej('elevaciones_laterales', 3, 8, 12),
+            ]
+          : tipo == 1
+              ? <EjercicioSesion>[
+                  ej('peso_muerto', 0, 95 + sube * 1.5, 6),
+                  ej('remo_barra', 1, 55 + sube, 8),
+                  ej('dominadas', 2, 5 + sube * 0.4, 8),
+                  ej('curl_barra', 3, 27.5 + sube * 0.3, 10),
+                ]
+              : <EjercicioSesion>[
+                  ej('sentadilla', 0, 85 + sube * 1.5, 6),
+                  ej('prensa', 1, 140 + sube * 2, 10),
+                  ej('zancadas', 2, 30 + sube * 0.5, 10),
+                  ej('elevacion_talones', 3, 60 + sube, 12),
+                ],
+    ));
+  }
+  d.xpGeneral = 8600;
+  d.xpPorGrupo
+    ..[GrupoMuscular.pecho] = 5200
+    ..[GrupoMuscular.espalda] = 4300
+    ..[GrupoMuscular.hombros] = 2600
+    ..[GrupoMuscular.biceps] = 1900
+    ..[GrupoMuscular.triceps] = 2250
+    ..[GrupoMuscular.antebrazos] = 700
+    ..[GrupoMuscular.abdomen] = 1200
+    ..[GrupoMuscular.piernas] = 6100
+    ..[GrupoMuscular.pantorrillas] = 950;
 }
