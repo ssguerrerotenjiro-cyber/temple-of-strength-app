@@ -4236,6 +4236,25 @@ class _PuertaTemploState extends State<PuertaTemplo> {
       if (parametroPrueba('pantalla') == 'celebracion') {
         return ResumenSesionScreen(resumen: resumenDePrueba(parametroPrueba('caso') ?? 'nivel'));
       }
+      // ?pantalla=cuerpo&rango=12&lado=espalda&genero=mujer: la silueta de
+      // Ranked grande. Sin rango, cada músculo con un rango distinto.
+      if (parametroPrueba('pantalla') == 'cuerpo') {
+        final int? r = int.tryParse(parametroPrueba('rango') ?? '');
+        return Scaffold(
+          backgroundColor: TempleColors.negro,
+          body: SafeArea(
+            child: Center(
+              child: SiluetaRanked(
+                altura: 720,
+                espalda: parametroPrueba('lado') == 'espalda',
+                rangos: <GrupoMuscular, int>{
+                  for (final GrupoMuscular g in GrupoMuscular.values) g: r ?? (g.index * 5 + 1) % 22,
+                },
+              ),
+            ),
+          ),
+        );
+      }
       // ?pantalla=perfil: el perfil, con su viñeta del Taller.
       if (parametroPrueba('pantalla') == 'perfil') {
         return PerfilScreen(
