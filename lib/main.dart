@@ -27185,11 +27185,11 @@ class _CasaPainter extends CustomPainter {
     _aire(canvas);
     canvas.restore();
 
-    // Viñeta inferior: garantiza que el texto encima siempre se lea.
+    // Viñeta inferior: el texto encima siempre se lee, sin tapar las piezas.
     canvas.drawRect(
       Offset.zero & size,
-      _lin(Offset(0, h * 0.5), Offset(0, h),
-          <Color>[_al(ColoresTradicion.negro, 0), _al(ColoresTradicion.negro, 0.6)]),
+      _lin(Offset(0, h * 0.62), Offset(0, h),
+          <Color>[_al(ColoresTradicion.negro, 0), _al(ColoresTradicion.negro, 0.5)]),
     );
   }
 
@@ -28489,7 +28489,7 @@ class _CasaScreenState extends State<CasaScreen> {
               children: <Widget>[
                 EscenaCasa(
                   estado: estado,
-                  altura: 320 + MediaQuery.paddingOf(context).top,
+                  altura: 350 + MediaQuery.paddingOf(context).top,
                 ),
                 Positioned(
                   top: MediaQuery.paddingOf(context).top + 12,
