@@ -1,0 +1,71 @@
+[
+  {
+    "caso": "android",
+    "motor": "chromium",
+    "ok": true,
+    "obligatorio": true,
+    "primer_cuadro_s": 2.8,
+    "motivo": "",
+    "errores": [],
+    "consola": [
+      "warning: Flutter Web: Skwasm uses multi-threading and web workers for better performance, but your page needs to be cross-origin isolated to support multi-threading. Skwasm will run in single-threaded mode.\nTo enable multithreading, serve your app with these HTTP response headers:\n  Cross-Origin-Opener-Policy: same-origin\n  Cross-Origin-Embedder-Policy: require-corp\nSee https://web.dev/articles/co",
+      "warning: [.WebGL-0x57401d26200]GL Driver Message (OpenGL, Performance, GL_CLOSE_PATH_NV, High): GPU stall due to ReadPixels",
+      "warning: [.WebGL-0x57401d26200]GL Driver Message (OpenGL, Performance, GL_CLOSE_PATH_NV, High): GPU stall due to ReadPixels",
+      "warning: [.WebGL-0x57401d26200]GL Driver Message (OpenGL, Performance, GL_CLOSE_PATH_NV, High): GPU stall due to ReadPixels"
+    ]
+  },
+  {
+    "caso": "iphone",
+    "motor": "chromium",
+    "ok": true,
+    "obligatorio": true,
+    "primer_cuadro_s": 2.4,
+    "motivo": "",
+    "errores": [],
+    "consola": [
+      "warning: Flutter Web: Skwasm uses multi-threading and web workers for better performance, but your page needs to be cross-origin isolated to support multi-threading. Skwasm will run in single-threaded mode.\nTo enable multithreading, serve your app with these HTTP response headers:\n  Cross-Origin-Opener-Policy: same-origin\n  Cross-Origin-Embedder-Policy: require-corp\nSee https://web.dev/articles/co",
+      "warning: [.WebGL-0x3d04043d5600]GL Driver Message (OpenGL, Performance, GL_CLOSE_PATH_NV, High): GPU stall due to ReadPixels",
+      "warning: [.WebGL-0x3d04043d5600]GL Driver Message (OpenGL, Performance, GL_CLOSE_PATH_NV, High): GPU stall due to ReadPixels",
+      "warning: [.WebGL-0x3d04043d5600]GL Driver Message (OpenGL, Performance, GL_CLOSE_PATH_NV, High): GPU stall due to ReadPixels",
+      "warning: [.WebGL-0x3d04043d5600]GL Driver Message (OpenGL, Performance, GL_CLOSE_PATH_NV, High): GPU stall due to ReadPixels (this message will no longer repeat)"
+    ]
+  },
+  {
+    "caso": "computador",
+    "motor": "chromium",
+    "ok": true,
+    "obligatorio": true,
+    "primer_cuadro_s": 2.4,
+    "motivo": "",
+    "errores": [],
+    "consola": [
+      "warning: Flutter Web: Skwasm uses multi-threading and web workers for better performance, but your page needs to be cross-origin isolated to support multi-threading. Skwasm will run in single-threaded mode.\nTo enable multithreading, serve your app with these HTTP response headers:\n  Cross-Origin-Opener-Policy: same-origin\n  Cross-Origin-Embedder-Policy: require-corp\nSee https://web.dev/articles/co",
+      "warning: [.WebGL-0x377c0445ee00]GL Driver Message (OpenGL, Performance, GL_CLOSE_PATH_NV, High): GPU stall due to ReadPixels",
+      "warning: [.WebGL-0x377c0445ee00]GL Driver Message (OpenGL, Performance, GL_CLOSE_PATH_NV, High): GPU stall due to ReadPixels",
+      "warning: [.WebGL-0x377c0445ee00]GL Driver Message (OpenGL, Performance, GL_CLOSE_PATH_NV, High): GPU stall due to ReadPixels",
+      "warning: [.WebGL-0x377c0445ee00]GL Driver Message (OpenGL, Performance, GL_CLOSE_PATH_NV, High): GPU stall due to ReadPixels (this message will no longer repeat)"
+    ]
+  },
+  {
+    "caso": "computador_mediano",
+    "motor": "chromium",
+    "ok": true,
+    "obligatorio": true,
+    "primer_cuadro_s": 2.4,
+    "motivo": "",
+    "errores": [],
+    "consola": [
+      "warning: Flutter Web: Skwasm uses multi-threading and web workers for better performance, but your page needs to be cross-origin isolated to support multi-threading. Skwasm will run in single-threaded mode.\nTo enable multithreading, serve your app with these HTTP response headers:\n  Cross-Origin-Opener-Policy: same-origin\n  Cross-Origin-Embedder-Policy: require-corp\nSee https://web.dev/articles/co",
+      "warning: [.WebGL-0x644040be200]GL Driver Message (OpenGL, Performance, GL_CLOSE_PATH_NV, High): GPU stall due to ReadPixels",
+      "warning: [.WebGL-0x644040be200]GL Driver Message (OpenGL, Performance, GL_CLOSE_PATH_NV, High): GPU stall due to ReadPixels",
+      "warning: [.WebGL-0x644040be200]GL Driver Message (OpenGL, Performance, GL_CLOSE_PATH_NV, High): GPU stall due to ReadPixels",
+      "warning: [.WebGL-0x644040be200]GL Driver Message (OpenGL, Performance, GL_CLOSE_PATH_NV, High): GPU stall due to ReadPixels (this message will no longer repeat)"
+    ]
+  },
+  {
+    "caso": "iphone_safari",
+    "ok": null,
+    "obligatorio": false,
+    "motivo": "Sin webkit: BrowserType.launch: \n╔══════════════════════════════════════════════════════╗\n║ Host system is missing dependencies to run browsers. ║\n║ Please install them with the following command:      ║\n║                                                      ║\n║     sudo playwright install-deps     "
+  }
+]
