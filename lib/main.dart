@@ -26908,8 +26908,19 @@ class EstadoCasa {
 
   static EstadoCasa de(String usuario) {
     final AlmacenTemplo a = AlmacenTemplo.instancia;
-    final double kilos = a.pesoDelTemplo(usuario);
+    double kilos = a.pesoDelTemplo(usuario);
     final DateTime ahora = DateTime.now();
+    MomentoDia momento = DatosMomento.deHora(ahora.hour);
+    Estacion estacion = DatosEstacion.delMes(ahora.month);
+    double vitalidad = (a.llama(usuario).valor / 100).clamp(0.0, 1.0);
+    if (vistaPrueba) {
+      // ?kilos=800000&momento=noche&estacion=otono&llama=0.9: la Casa en
+      // cualquier estado, para revisarla.
+      kilos = double.tryParse(parametroPrueba('kilos') ?? '') ?? kilos;
+      momento = MomentoDia.values.where((MomentoDia m) => m.name == parametroPrueba('momento')).firstOrNull ?? momento;
+      estacion = Estacion.values.where((Estacion e) => e.name == parametroPrueba('estacion')).firstOrNull ?? estacion;
+      vitalidad = (double.tryParse(parametroPrueba('llama') ?? '') ?? vitalidad).clamp(0.0, 1.0);
+    }
 
     return EstadoCasa(
       kilos: kilos,
@@ -26917,9 +26928,9 @@ class EstadoCasa {
           .where((PiezaTemplo p) => kilos >= p.kilos)
           .toList(),
       siguiente: PiezasDelTemplo.siguienteTras(kilos),
-      momento: DatosMomento.deHora(ahora.hour),
-      estacion: DatosEstacion.delMes(ahora.month),
-      vitalidad: (a.llama(usuario).valor / 100).clamp(0.0, 1.0),
+      momento: momento,
+      estacion: estacion,
+      vitalidad: vitalidad,
       entrenoHoy: a.entrenoEse(usuario, ahora),
     );
   }
@@ -26969,11 +26980,17 @@ class EscenaCasa extends StatefulWidget {
     required this.estado,
     this.altura = 300,
     this.animada = true,
+    this.nueva,
+    this.subida,
   });
 
   final EstadoCasa estado;
   final double altura;
   final bool animada;
+
+  /// Pieza que se levanta delante del usuario (la ceremonia) y su avance.
+  final PiezaTemplo? nueva;
+  final Animation<double>? subida;
 
   @override
   State<EscenaCasa> createState() => _EscenaCasaState();
@@ -27013,626 +27030,1207 @@ class _EscenaCasaState extends State<EscenaCasa>
         width: double.infinity,
         child: RepaintBoundary(
           child: AnimatedBuilder(
-            animation: _c,
+            animation: widget.subida == null ? _c : Listenable.merge(<Listenable>[_c, widget.subida!]),
             builder: (BuildContext context, _) => CustomPaint(
-              painter: _CasaPainter(estado: widget.estado, t: _c.value),
+              painter: _CasaPainter(
+                estado: widget.estado,
+                t: _c.value,
+                nueva: widget.nueva,
+                subida: widget.subida?.value ?? 1,
+              ),
             ),
           ),
         ),
       );
 }
 
+/// Números al azar repetibles (los mismos en cada cuadro y en cada equipo).
+class _Azar {
+  _Azar(int semilla) : _s = semilla % 4294967296;
+  int _s;
+  double call() {
+    _s = (_s * 1664525 + 1013904223) % 4294967296;
+    return _s / 4294967296;
+  }
+}
+
+/// La escena del templo. Desde la 1.9.0 se dibuja sobre un marco de 400 × 360
+/// que se escala sin deformarse y se centra en la sala principal: se ve igual
+/// en el banner de la Casa, en la ceremonia y en la tarjeta del Dojo.
+///
+/// Lo quieto (cielo, montañas, la sala, las piezas) se graba en cuatro capas y
+/// se reutiliza; en cada cuadro solo se dibuja lo que se mueve entre ellas:
+/// nubes, bambú, niebla, agua, koi, el badajo, las luces y lo que cae del cielo.
 class _CasaPainter extends CustomPainter {
-  const _CasaPainter({required this.estado, required this.t});
+  const _CasaPainter({required this.estado, required this.t, this.nueva, this.subida = 1});
 
   final EstadoCasa estado;
   final double t;
+
+  /// Pieza que se está levantando (ceremonia) y cuánto (0–1).
+  final PiezaTemplo? nueva;
+  final double subida;
+
+  static const double _w0 = 400;
+  static const double _h0 = 360;
+  static const double _tau = math.pi * 2;
+  static const Color _blanco = Colors.white;
+  static const Color _negro = Colors.black;
+
+  static final Map<String, ui.Picture> _capas = <String, ui.Picture>{};
+
+  static Color _al(Color c, double a) => c.withValues(alpha: a.clamp(0.0, 1.0));
+  static Color _mx(Color a, Color b, double t) => Color.lerp(a, b, t)!;
+
+  static List<double> _paradas(int n) => <double>[for (int i = 0; i < n; i++) i / (n - 1)];
+
+  static Paint _col(Color c, {double blur = 0, bool suma = false}) {
+    final Paint p = Paint()..color = c;
+    if (blur > 0) p.maskFilter = MaskFilter.blur(BlurStyle.normal, blur);
+    if (suma) p.blendMode = BlendMode.plus;
+    return p;
+  }
+
+  static Paint _lin(Offset a, Offset b, List<Color> cols, [List<double>? paradas]) =>
+      Paint()..shader = ui.Gradient.linear(a, b, cols, paradas ?? _paradas(cols.length));
+
+  static Paint _rad(Offset c, double r, List<Color> cols, [List<double>? paradas]) =>
+      Paint()..shader = ui.Gradient.radial(c, r, cols, paradas ?? _paradas(cols.length));
+
+  static Paint _tr(Color c, double w, {bool redondo = false}) => Paint()
+    ..style = PaintingStyle.stroke
+    ..color = c
+    ..strokeWidth = w
+    ..strokeCap = redondo ? StrokeCap.round : StrokeCap.butt
+    ..strokeJoin = StrokeJoin.round;
+
+  static void _linea(Canvas c, double x0, double y0, double x1, double y1, Paint p) =>
+      c.drawLine(Offset(x0, y0), Offset(x1, y1), p);
+
+  static Rect _ltrb(double l, double t, double r, double b) => Rect.fromLTRB(l, t, r, b);
+  static Rect _cen(double x, double y, double w, double h) =>
+      Rect.fromCenter(center: Offset(x, y), width: w, height: h);
+
+  // ---- Colores del momento ----------------------------------------------
+
+  bool get _luna => estado.momento == MomentoDia.noche || estado.momento == MomentoDia.atardecer;
+  Color get _astro => _luna ? const Color(0xFFE8DCFF) : const Color(0xFFFFE0A8);
+  Color get _tinta => estado.momento.tinta;
+  List<Color> get _cielo => estado.momento.cielo;
+  bool get _nieve => estado.estacion == Estacion.invierno;
+  double get _luz => (estado.vitalidad * estado.momento.fuerzaLuz).clamp(0.0, 1.0);
+
+  /// ¿La pieza está levantada? La que se levanta en la ceremonia va aparte.
+  bool _tiene(String nombre) => estado.tiene(nombre) && nueva?.nombre != nombre;
+
+  static double _loma(double x) =>
+      214 + 7 * math.sin(x * 0.021 + 0.4) + 4 * math.sin(x * 0.053 + 1.3) - 6 * (x / 400);
+
+  ui.Picture _capa(String nombre, void Function(Canvas c) dibujar) {
+    final String clave = '$nombre|${estado.piezas.length}|${nueva?.nombre}|${estado.momento.index}|'
+        '${estado.estacion.index}|${(estado.vitalidad * 20).round()}';
+    final ui.Picture? hecha = _capas.remove(clave);
+    if (hecha != null) {
+      _capas[clave] = hecha;
+      return hecha;
+    }
+    final ui.PictureRecorder r = ui.PictureRecorder();
+    dibujar(Canvas(r));
+    final ui.Picture p = r.endRecording();
+    if (_capas.length >= 24) _capas.remove(_capas.keys.first);
+    _capas[clave] = p;
+    return p;
+  }
 
   @override
   void paint(Canvas canvas, Size size) {
     final double w = size.width;
     final double h = size.height;
-    final double hz = h * 0.60; // línea del horizonte
-    final Color tinta = estado.momento.tinta;
-    final bool nieve = estado.estacion == Estacion.invierno;
+    final double s = math.max(w / _w0, h / _h0);
+    final double tx = (w - _w0 * s) / 2;
+    final double ty = math.min(0.0, math.max(h - _h0 * s, h * 0.66 - 232 * s));
+    canvas.save();
+    canvas.clipRect(Offset.zero & size);
+    canvas.translate(tx, ty);
+    canvas.scale(s);
 
-    _cielo(canvas, w, h);
-    _astro(canvas, w, h);
-    _montanas(canvas, w, h, hz, tinta);
-
-    // Fondo: bambú y pagoda, las piezas grandes.
-    if (estado.tiene('El bosque de bambú')) _bambu(canvas, w, h, hz, tinta);
-    if (estado.tiene('La pagoda')) _pagoda(canvas, w, h, hz, tinta);
-
-    _terreno(canvas, w, h, hz, tinta, nieve);
-
-    if (estado.tiene('El estanque')) _estanque(canvas, w, h, tinta);
-    if (estado.tiene('El jardín seco')) _jardinSeco(canvas, w, h);
-    if (estado.tiene('El sendero')) _sendero(canvas, w, h, nieve);
-
-    _salaPrincipal(canvas, w, h, tinta, nieve);
-
-    if (estado.tiene('El torii')) _torii(canvas, w, h, tinta, nieve);
-    if (estado.tiene('La campana')) _campana(canvas, w, h, tinta, nieve);
-
-    _vegetacionEstacional(canvas, w, h, hz, tinta);
-    _niebla(canvas, w, h, hz);
-    _particulas(canvas, w, h);
+    canvas.drawPicture(_capa('fondo', _fondo));
+    _cieloVivo(canvas);
+    canvas.drawPicture(_capa('lejos', _lejos));
+    _medioVivo(canvas);
+    canvas.drawPicture(_capa('medio', _medio));
+    _frenteVivo(canvas);
+    canvas.drawPicture(_capa('frente', _frente));
+    final PiezaTemplo? n = nueva;
+    if (n != null && subida > 0) _levantar(canvas, n);
+    _aire(canvas);
+    canvas.restore();
 
     // Viñeta inferior: garantiza que el texto encima siempre se lea.
     canvas.drawRect(
       Offset.zero & size,
-      Paint()
-        ..shader = LinearGradient(
-          begin: Alignment.center,
-          end: Alignment.bottomCenter,
-          colors: <Color>[
-            Colors.transparent,
-            ColoresTradicion.negro.withValues(alpha: 0.55),
-          ],
-        ).createShader(Offset.zero & size),
+      _lin(Offset(0, h * 0.5), Offset(0, h),
+          <Color>[_al(ColoresTradicion.negro, 0), _al(ColoresTradicion.negro, 0.6)]),
     );
   }
 
-  // ---- Cielo y astro ----------------------------------------------------
+  // ---- La pieza que se levanta (ceremonia) ---------------------------------
 
-  void _cielo(Canvas c, double w, double h) {
-    c.drawRect(
-      Rect.fromLTWH(0, 0, w, h),
-      Paint()
-        ..shader = LinearGradient(
-          begin: Alignment.topCenter,
-          end: Alignment.bottomCenter,
-          colors: estado.momento.cielo,
-        ).createShader(Rect.fromLTWH(0, 0, w, h)),
-    );
+  void _levantar(Canvas c, PiezaTemplo n) {
+    final double u = Curves.easeOutCubic.transform(subida.clamp(0.0, 1.0));
+    final Rect zona = _zonaDe(n.nombre);
+    c.saveLayer(null, Paint()..color = _al(_blanco, u));
+    c.translate(0, (1 - u) * 26);
+    _dibujarPieza(c, n.nombre);
+    c.restore();
+    // Destello dorado que sube con ella y se apaga.
+    final double brillo = math.sin(u * math.pi);
+    if (brillo > 0.01) {
+      c.drawOval(zona.inflate(18), _col(_al(const Color(0xFFF2C46A), 0.35 * brillo), blur: 18, suma: true));
+      final _Azar r = _Azar(5);
+      for (int i = 0; i < 26; i++) {
+        final double x = zona.left + r() * zona.width;
+        final double y = zona.bottom - (r() * 0.5 + u) * (zona.height + 30);
+        c.drawCircle(Offset(x, y), 0.8 + r() * 1.4, _col(_al(const Color(0xFFFFE6A8), brillo * (0.4 + r() * 0.6))));
+      }
+    }
+  }
 
-    // Estrellas solo de noche.
+  Rect _zonaDe(String nombre) {
+    switch (nombre) {
+      case 'El sendero':
+        return _ltrb(150, 270, 250, 368);
+      case 'El torii':
+        return _ltrb(74, 184, 326, 354);
+      case 'El estanque':
+        return _ltrb(18, 300, 166, 352);
+      case 'La campana':
+        return _ltrb(304, 200, 372, 272);
+      case 'El jardín seco':
+        return _ltrb(244, 302, 410, 372);
+      case 'La pagoda':
+        return _ltrb(56, 90, 104, 226);
+      default:
+        return _ltrb(-14, -10, 416, 262);
+    }
+  }
+
+  void _dibujarPieza(Canvas c, String nombre) {
+    switch (nombre) {
+      case 'El sendero':
+        _sendero(c);
+      case 'El torii':
+        _torii(c);
+      case 'El estanque':
+        _estanque(c);
+      case 'La campana':
+        _campana(c, 338, 272);
+      case 'El jardín seco':
+        _jardin(c);
+      case 'La pagoda':
+        _pagoda(c, 80, _loma(80) + 8);
+      case 'El bosque de bambú':
+        _bambu(c, -14, 52, 41);
+        _bambu(c, 352, 416, 43);
+    }
+  }
+
+  // ---- Cielo ----------------------------------------------------------------
+
+  void _fondo(Canvas c) {
+    final List<Color> cielo = _cielo;
+    c.drawRect(_ltrb(-60, -60, _w0 + 60, _h0 + 60),
+        _lin(Offset.zero, const Offset(0, 250), <Color>[cielo[0], cielo[1], cielo[2]], <double>[0, 0.55, 1]));
+    // Horizonte luminoso.
+    c.drawRect(_ltrb(-60, 120, _w0 + 60, 250), _lin(const Offset(0, 120), const Offset(0, 250),
+        <Color>[_al(cielo[2], 0), _al(_mx(cielo[2], _blanco, 0.15), 0.35)]));
     if (estado.momento == MomentoDia.noche) {
-      final math.Random rnd = math.Random(13);
-      for (int i = 0; i < 46; i++) {
-        final double x = rnd.nextDouble() * w;
-        final double y = rnd.nextDouble() * h * 0.48;
-        final double br =
-            0.35 + 0.35 * math.sin(t * 2 * math.pi * 3 + i.toDouble());
-        c.drawCircle(Offset(x, y), rnd.nextDouble() * 1.1 + 0.35,
-            Paint()..color = Colors.white.withValues(alpha: br * 0.7));
+      // Vía láctea tenue y estrellas.
+      c.save();
+      c.translate(200, 60);
+      c.rotate(-0.42);
+      c.drawOval(_cen(0, 0, 520, 70), _col(_al(const Color(0xFF9C86E8), 0.07), blur: 18));
+      c.drawOval(_cen(10, 0, 380, 26), _col(_al(const Color(0xFFC7B8FF), 0.06), blur: 10));
+      c.restore();
+      final _Azar r = _Azar(13);
+      for (int i = 0; i < 90; i++) {
+        final double x = r() * _w0;
+        final double y = r() * 175;
+        final double z = r();
+        c.drawCircle(Offset(x, y), 0.4 + z * 1.0, _col(_al(_blanco, 0.25 + 0.45 * z)));
+      }
+    }
+    // Luna o sol.
+    const Offset p = Offset(318, 66);
+    const double ra = 19;
+    final Color col = _astro;
+    c.drawCircle(p, ra * 5, _rad(p, ra * 5, <Color>[_al(col, _luna ? 0.22 : 0.32), _al(col, 0)]));
+    c.drawCircle(p, ra * 1.9, _rad(p, ra * 1.9, <Color>[_al(col, 0.25), _al(col, 0)]));
+    c.drawCircle(p, ra, _rad(p.translate(-6, -6), ra * 1.4, <Color>[_mx(col, _blanco, 0.6), _al(col, 0.97)]));
+    if (_luna) {
+      for (final List<double> k in <List<double>>[
+        <double>[-6, -3, 4],
+        <double>[5, 6, 3],
+        <double>[7, -7, 2.2],
+        <double>[-3, 9, 2],
+      ]) {
+        c.drawCircle(p.translate(k[0], k[1]), k[2], _col(_al(const Color(0xFF9C8BC8), 0.18)));
       }
     }
   }
 
-  void _astro(Canvas c, double w, double h) {
-    final bool luna = estado.momento == MomentoDia.noche ||
-        estado.momento == MomentoDia.atardecer;
-    final Offset p = Offset(w * 0.78, h * (luna ? 0.18 : 0.16));
-    final double r = h * 0.055;
-    final Color col = luna ? const Color(0xFFE8DCFF) : const Color(0xFFFFE0A8);
-
-    c.drawCircle(
-      p,
-      r * 4.2,
-      Paint()
-        ..shader = RadialGradient(colors: <Color>[
-          col.withValues(alpha: luna ? 0.26 : 0.34),
-          Colors.transparent,
-        ]).createShader(Rect.fromCircle(center: p, radius: r * 4.2)),
-    );
-    c.drawCircle(p, r, Paint()..color = col.withValues(alpha: 0.94));
-  }
-
-  // ---- Paisaje ----------------------------------------------------------
-
-  void _montanas(Canvas c, double w, double h, double hz, Color tinta) {
-    final Color lejos = Color.lerp(tinta, Colors.white, 0.10)!;
-    c.drawPath(
-      Path()
-        ..moveTo(0, hz)
-        ..lineTo(0, hz - h * 0.14)
-        ..quadraticBezierTo(w * 0.18, hz - h * 0.34, w * 0.38, hz - h * 0.16)
-        ..quadraticBezierTo(w * 0.58, hz - h * 0.38, w * 0.78, hz - h * 0.18)
-        ..quadraticBezierTo(w * 0.90, hz - h * 0.26, w, hz - h * 0.12)
-        ..lineTo(w, hz)
-        ..close(),
-      Paint()..color = lejos.withValues(alpha: 0.85),
-    );
-
-    if (estado.estacion == Estacion.invierno) {
-      c.drawPath(
-        Path()
-          ..moveTo(w * 0.30, hz - h * 0.22)
-          ..quadraticBezierTo(w * 0.38, hz - h * 0.17, w * 0.46, hz - h * 0.21)
-          ..quadraticBezierTo(w * 0.40, hz - h * 0.30, w * 0.30, hz - h * 0.22)
-          ..close(),
-        Paint()..color = Colors.white.withValues(alpha: 0.18),
-      );
-    }
-  }
-
-  void _terreno(
-      Canvas c, double w, double h, double hz, Color tinta, bool nieve) {
-    c.drawRect(
-      Rect.fromLTRB(0, hz, w, h),
-      Paint()
-        ..shader = LinearGradient(
-          begin: Alignment.topCenter,
-          end: Alignment.bottomCenter,
-          colors: <Color>[
-            Color.lerp(tinta, Colors.white, nieve ? 0.14 : 0.04)!,
-            Color.lerp(tinta, Colors.black, 0.45)!,
-          ],
-        ).createShader(Rect.fromLTRB(0, hz, w, h)),
-    );
-
-    // Loma suave delante.
-    c.drawPath(
-      Path()
-        ..moveTo(0, hz + h * 0.06)
-        ..quadraticBezierTo(w * 0.40, hz - h * 0.02, w, hz + h * 0.08)
-        ..lineTo(w, h)
-        ..lineTo(0, h)
-        ..close(),
-      Paint()
-        ..color = Color.lerp(tinta, Colors.black, nieve ? 0.10 : 0.28)!
-            .withValues(alpha: 0.95),
-    );
-  }
-
-  // ---- Piezas del templo -------------------------------------------------
-
-  /// 5 t · el sendero
-  void _sendero(Canvas c, double w, double h, bool nieve) {
-    final Color piedra = nieve
-        ? Colors.white.withValues(alpha: 0.32)
-        : Colors.white.withValues(alpha: 0.13);
-    for (int i = 0; i < 7; i++) {
-      final double p = i / 6;
-      final double x = w * (0.50 - 0.06 * math.sin(p * math.pi)) +
-          (p - 0.5) * w * 0.05;
-      final double y = h * (0.98 - p * 0.20);
-      final double ancho = w * (0.075 - p * 0.035);
-      c.drawOval(
-        Rect.fromCenter(
-            center: Offset(x, y), width: ancho, height: ancho * 0.34),
-        Paint()..color = piedra,
-      );
-    }
-  }
-
-  /// 25 t · el torii
-  void _torii(Canvas c, double w, double h, Color tinta, bool nieve) {
-    final Offset base = Offset(w * 0.20, h * 0.87);
-    final double alto = h * 0.26;
-    final double an = alto * 0.72;
-    final double izq = base.dx - an / 2;
-    final double der = base.dx + an / 2;
-    final double top = base.dy - alto;
-    final Color col = Color.lerp(tinta, const Color(0xFF7A1F2B), 0.45)!;
-
-    Paint p(double g) => Paint()
-      ..color = col
-      ..style = PaintingStyle.stroke
-      ..strokeCap = StrokeCap.round
-      ..strokeWidth = g;
-
-    c.drawPath(
-      Path()
-        ..moveTo(izq - an * 0.14, top + alto * 0.10)
-        ..quadraticBezierTo(
-            base.dx, top - alto * 0.04, der + an * 0.14, top + alto * 0.10),
-      p(alto * 0.085),
-    );
-    c.drawLine(Offset(izq - an * 0.03, top + alto * 0.21),
-        Offset(der + an * 0.03, top + alto * 0.21), p(alto * 0.055));
-    c.drawLine(Offset(izq + an * 0.06, top + alto * 0.42),
-        Offset(der - an * 0.06, top + alto * 0.42), p(alto * 0.048));
-    c.drawLine(Offset(izq + an * 0.02, top + alto * 0.21),
-        Offset(izq + an * 0.07, base.dy), p(alto * 0.07));
-    c.drawLine(Offset(der - an * 0.02, top + alto * 0.21),
-        Offset(der - an * 0.07, base.dy), p(alto * 0.07));
-
-    if (nieve) {
-      c.drawLine(
-        Offset(izq - an * 0.12, top + alto * 0.07),
-        Offset(der + an * 0.12, top + alto * 0.07),
-        Paint()
-          ..color = Colors.white.withValues(alpha: 0.5)
-          ..strokeWidth = alto * 0.03
-          ..strokeCap = StrokeCap.round,
-      );
-    }
-  }
-
-  /// 60 t · el estanque
-  void _estanque(Canvas c, double w, double h, Color tinta) {
-    final Rect r = Rect.fromCenter(
-      center: Offset(w * 0.30, h * 0.955),
-      width: w * 0.40,
-      height: h * 0.13,
-    );
-    c.drawOval(
-      r,
-      Paint()
-        ..shader = LinearGradient(
-          begin: Alignment.topCenter,
-          end: Alignment.bottomCenter,
-          colors: <Color>[
-            Color.lerp(estado.momento.cielo[1], Colors.white, 0.10)!
-                .withValues(alpha: 0.75),
-            Color.lerp(tinta, Colors.black, 0.3)!,
-          ],
-        ).createShader(r),
-    );
-
-    // Ondas.
-    for (int i = 0; i < 3; i++) {
-      final double d = math.sin(t * 2 * math.pi + i * 1.4) * w * 0.012;
-      c.drawLine(
-        Offset(w * 0.22 + d, h * (0.935 + i * 0.017)),
-        Offset(w * 0.38 + d, h * (0.935 + i * 0.017)),
-        Paint()
-          ..color = Colors.white.withValues(alpha: 0.14 - i * 0.035)
-          ..strokeWidth = 1.3
-          ..strokeCap = StrokeCap.round,
-      );
-    }
-  }
-
-  /// 120 t · la campana
-  void _campana(Canvas c, double w, double h, Color tinta, bool nieve) {
-    final Offset base = Offset(w * 0.80, h * 0.86);
-    final double s = h * 0.10;
-    final Color madera = Color.lerp(tinta, Colors.white, 0.06)!;
-
-    // Postes y techo.
-    c.drawLine(Offset(base.dx - s * 0.8, base.dy),
-        Offset(base.dx - s * 0.7, base.dy - s * 1.5), Paint()
-          ..color = madera
-          ..strokeWidth = s * 0.16
-          ..strokeCap = StrokeCap.round);
-    c.drawLine(Offset(base.dx + s * 0.8, base.dy),
-        Offset(base.dx + s * 0.7, base.dy - s * 1.5), Paint()
-          ..color = madera
-          ..strokeWidth = s * 0.16
-          ..strokeCap = StrokeCap.round);
-    c.drawPath(
-      Path()
-        ..moveTo(base.dx - s * 1.15, base.dy - s * 1.45)
-        ..quadraticBezierTo(base.dx, base.dy - s * 2.05, base.dx + s * 1.15,
-            base.dy - s * 1.45)
-        ..close(),
-      Paint()..color = madera,
-    );
-
-    // La campana.
-    c.drawPath(
-      Path()
-        ..moveTo(base.dx - s * 0.42, base.dy - s * 0.25)
-        ..lineTo(base.dx - s * 0.38, base.dy - s * 1.05)
-        ..quadraticBezierTo(
-            base.dx, base.dy - s * 1.45, base.dx + s * 0.38, base.dy - s * 1.05)
-        ..lineTo(base.dx + s * 0.42, base.dy - s * 0.25)
-        ..close(),
-      Paint()..color = const Color(0xFF4A3D22),
-    );
-
-    if (nieve) {
-      c.drawPath(
-        Path()
-          ..moveTo(base.dx - s * 1.1, base.dy - s * 1.48)
-          ..quadraticBezierTo(base.dx, base.dy - s * 1.92, base.dx + s * 1.1,
-              base.dy - s * 1.48)
-          ..close(),
-        Paint()..color = Colors.white.withValues(alpha: 0.45),
-      );
-    }
-  }
-
-  /// 220 t · el jardín seco
-  void _jardinSeco(Canvas c, double w, double h) {
-    final Offset centro = Offset(w * 0.74, h * 0.955);
-    for (int i = 1; i <= 5; i++) {
-      c.drawOval(
-        Rect.fromCenter(
-          center: centro,
-          width: w * 0.055 * i,
-          height: h * 0.016 * i,
-        ),
-        Paint()
-          ..style = PaintingStyle.stroke
-          ..strokeWidth = 1
-          ..color = Colors.white.withValues(alpha: 0.10),
-      );
-    }
-    c.drawOval(
-      Rect.fromCenter(
-          center: centro, width: w * 0.032, height: h * 0.014),
-      Paint()..color = Colors.black.withValues(alpha: 0.55),
-    );
-    c.drawOval(
-      Rect.fromCenter(
-          center: centro.translate(w * 0.07, -h * 0.012),
-          width: w * 0.022,
-          height: h * 0.010),
-      Paint()..color = Colors.black.withValues(alpha: 0.5),
-    );
-  }
-
-  /// 400 t · la pagoda
-  void _pagoda(Canvas c, double w, double h, double hz, Color tinta) {
-    final Offset base = Offset(w * 0.11, hz + h * 0.04);
-    final double s = h * 0.055;
-    final Color col = Color.lerp(tinta, Colors.black, 0.25)!;
-
-    for (int i = 0; i < 5; i++) {
-      final double y = base.dy - s * (0.5 + i * 0.85);
-      final double an = s * (1.15 - i * 0.16);
-      c.drawPath(
-        Path()
-          ..moveTo(base.dx - an, y)
-          ..quadraticBezierTo(base.dx, y - s * 0.42, base.dx + an, y)
-          ..close(),
-        Paint()..color = col,
-      );
-      c.drawRect(
-        Rect.fromLTWH(base.dx - an * 0.42, y, an * 0.84, s * 0.55),
-        Paint()..color = col,
-      );
-    }
-    // Aguja.
-    c.drawLine(
-      Offset(base.dx, base.dy - s * 4.7),
-      Offset(base.dx, base.dy - s * 5.5),
-      Paint()
-        ..color = col
-        ..strokeWidth = s * 0.10
-        ..strokeCap = StrokeCap.round,
-    );
-  }
-
-  /// 750 t · el bosque de bambú
-  void _bambu(Canvas c, double w, double h, double hz, Color tinta) {
-    final Color col = Color.lerp(tinta, const Color(0xFF1E4A32), 0.35)!;
-    for (int i = 0; i < 9; i++) {
-      final double x = w * (0.86 + i * 0.022) - w * 0.02 * (i % 3);
-      final double alto = h * (0.34 + (i % 4) * 0.07);
-      final double meneo = math.sin(t * 2 * math.pi + i) * w * 0.004;
-
-      final Paint canya = Paint()
-        ..color = col
-        ..strokeWidth = w * 0.010
-        ..strokeCap = StrokeCap.round;
-      c.drawLine(Offset(x, hz + h * 0.10),
-          Offset(x + w * 0.008 + meneo, hz + h * 0.10 - alto), canya);
-
-      for (int n = 1; n < 5; n++) {
-        final double y = hz + h * 0.10 - alto * n / 5;
-        c.drawLine(Offset(x - 3, y), Offset(x + 5, y),
-            canya..strokeWidth = w * 0.005);
+  void _cieloVivo(Canvas c) {
+    if (estado.momento == MomentoDia.noche) {
+      // Algunas estrellas titilan.
+      final _Azar r = _Azar(29);
+      for (int i = 0; i < 14; i++) {
+        final double x = r() * _w0;
+        final double y = r() * 160;
+        final double f = r();
+        final double b = 0.5 + 0.5 * math.sin(t * _tau * (4 + (f * 5).round()) + i * 2.3);
+        if (b < 0.15) continue;
+        c.drawCircle(Offset(x, y), 1.2 + 1.4 * b, _col(_al(const Color(0xFFDCD2FF), 0.25 * b), blur: 1.5));
+        final Paint destello = _tr(_al(_blanco, 0.7 * b), 0.6);
+        _linea(c, x - 4 * b, y, x + 4 * b, y, destello);
+        _linea(c, x, y - 4 * b, x, y + 4 * b, destello);
+        c.drawCircle(Offset(x, y), 0.8, _col(_al(_blanco, 0.9)));
       }
     }
-  }
-
-  // ---- La sala principal --------------------------------------------------
-
-  void _salaPrincipal(
-      Canvas c, double w, double h, Color tinta, bool nieve) {
-    final Offset base = Offset(w * 0.50, h * 0.80);
-    final double an = w * 0.17;
-    final double alto = h * 0.15;
-    final Color madera = Color.lerp(tinta, Colors.white, 0.05)!;
-
-    // Plataforma.
-    c.drawRect(
-      Rect.fromLTWH(base.dx - an * 1.15, base.dy, an * 2.3, h * 0.022),
-      Paint()..color = Color.lerp(tinta, Colors.black, 0.35)!,
-    );
-
-    // Cuerpo.
-    c.drawRect(
-      Rect.fromLTWH(base.dx - an, base.dy - alto, an * 2, alto),
-      Paint()..color = madera,
-    );
-
-    // Ventanas. Se encienden con la vitalidad y con la hora.
-    final double luz =
-        (estado.vitalidad * estado.momento.fuerzaLuz).clamp(0.0, 1.0);
+    // Nubes que cruzan: una vuelta exacta por bucle, sin saltos.
+    final Color nube = _al(_mx(_cielo[1], _blanco, _luna ? 0.18 : 0.45), _luna ? 0.16 : 0.3);
     for (int i = 0; i < 4; i++) {
-      final Rect v = Rect.fromLTWH(
-        base.dx - an * 0.78 + i * an * 0.42,
-        base.dy - alto * 0.72,
-        an * 0.28,
-        alto * 0.40,
-      );
-      c.drawRect(
-        v,
-        Paint()
-          ..color = Color.lerp(const Color(0xFF15101F),
-              const Color(0xFFF0B45C), luz * (i == 1 || i == 2 ? 1 : 0.75))!,
-      );
-      if (luz > 0.12) {
-        c.drawRect(
-          v.inflate(an * 0.10),
-          Paint()
-            ..color = const Color(0xFFF0B45C).withValues(alpha: 0.16 * luz)
-            ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 10),
-        );
+      final double x = ((i * 137 + t * 660 * (i == 2 ? 2 : 1)) % 660) - 130;
+      final double y = 40.0 + i * 26 + (i % 2) * 8;
+      final double sc = 0.7 + 0.25 * (i % 3);
+      final Path p = Path();
+      for (final List<double> o in <List<double>>[
+        <double>[0, 0, 90, 12],
+        <double>[22, -5, 50, 12],
+        <double>[-20, -3, 40, 9],
+        <double>[40, 2, 46, 8],
+      ]) {
+        p.addOval(_cen(x + o[0] * sc, y + o[1] * sc, o[2] * sc, o[3] * sc));
       }
+      c.drawPath(p, _col(nube, blur: 3));
     }
+  }
 
-    // Tejado con aleros curvos.
+  // ---- Lejos: montañas, pinos y pagoda --------------------------------------
+
+  void _lejos(Canvas c) {
+    final List<Color> cielo = _cielo;
+    final Color tinta = _tinta;
+    final Color lejos = _mx(cielo[2], tinta, 0.42);
+    final Color lejos2 = _mx(cielo[2], tinta, 0.55);
+    final Color medio = _mx(cielo[2], tinta, 0.78);
+    // El monte principal.
     c.drawPath(
-      Path()
-        ..moveTo(base.dx - an * 1.45, base.dy - alto * 0.94)
-        ..quadraticBezierTo(base.dx - an * 0.7, base.dy - alto * 1.62,
-            base.dx, base.dy - alto * 1.70)
-        ..quadraticBezierTo(base.dx + an * 0.7, base.dy - alto * 1.62,
-            base.dx + an * 1.45, base.dy - alto * 0.94)
-        ..quadraticBezierTo(base.dx, base.dy - alto * 1.16,
-            base.dx - an * 1.45, base.dy - alto * 0.94)
-        ..close(),
-      Paint()..color = Color.lerp(tinta, Colors.black, 0.30)!,
-    );
-
-    if (nieve) {
-      c.drawPath(
         Path()
-          ..moveTo(base.dx - an * 1.38, base.dy - alto * 1.00)
-          ..quadraticBezierTo(base.dx - an * 0.7, base.dy - alto * 1.60,
-              base.dx, base.dy - alto * 1.68)
-          ..quadraticBezierTo(base.dx + an * 0.7, base.dy - alto * 1.60,
-              base.dx + an * 1.38, base.dy - alto * 1.00)
-          ..quadraticBezierTo(base.dx, base.dy - alto * 1.30,
-              base.dx - an * 1.38, base.dy - alto * 1.00)
+          ..moveTo(-10, 238)
+          ..lineTo(-10, 206)
+          ..cubicTo(40, 192, 78, 152, 104, 120)
+          ..quadraticBezierTo(120, 104, 136, 120)
+          ..cubicTo(162, 152, 206, 190, 262, 204)
+          ..lineTo(410, 214)
+          ..lineTo(410, 238)
           ..close(),
-        Paint()..color = Colors.white.withValues(alpha: 0.42),
-      );
+        _lin(const Offset(0, 104), const Offset(0, 238), <Color>[_mx(lejos, _blanco, 0.06), lejos]));
+    c.drawPath(
+        Path()
+          ..moveTo(104, 120)
+          ..quadraticBezierTo(120, 104, 136, 120)
+          ..lineTo(144, 131)
+          ..lineTo(136, 128)
+          ..lineTo(130, 136)
+          ..lineTo(121, 126)
+          ..lineTo(113, 137)
+          ..lineTo(106, 129)
+          ..lineTo(96, 131)
+          ..close(),
+        _col(_al(_blanco, _nieve ? 0.6 : 0.28)));
+    // La cordillera de la derecha.
+    c.drawPath(
+        Path()
+          ..moveTo(196, 238)
+          ..lineTo(228, 202)
+          ..quadraticBezierTo(264, 162, 300, 152)
+          ..quadraticBezierTo(330, 144, 350, 154)
+          ..quadraticBezierTo(372, 132, 396, 140)
+          ..lineTo(410, 150)
+          ..lineTo(410, 238)
+          ..close(),
+        _lin(const Offset(0, 132), const Offset(0, 238), <Color>[_mx(lejos2, _blanco, 0.04), lejos2]));
+    if (_nieve) {
+      c.drawPath(
+          Path()
+            ..moveTo(372, 135)
+            ..quadraticBezierTo(384, 131, 396, 140)
+            ..lineTo(388, 146)
+            ..lineTo(380, 141)
+            ..lineTo(371, 147)
+            ..lineTo(364, 142)
+            ..close(),
+          _col(_al(_blanco, 0.4)));
     }
-
-    // Humo: solo si el templo está vivo.
-    if (estado.vitalidad > 0.35) {
-      for (int i = 0; i < 4; i++) {
-        final double fase = (t * 1.6 + i * 0.25) % 1.0;
-        final double x = base.dx + an * 0.72 +
-            math.sin(fase * 3.2 + i) * w * 0.018;
-        final double y = base.dy - alto * 1.75 - fase * h * 0.16;
-        c.drawCircle(
-          Offset(x, y),
-          w * (0.010 + fase * 0.028),
-          Paint()
-            ..color = Colors.white
-                .withValues(alpha: 0.13 * (1 - fase) * estado.vitalidad)
-            ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 8),
-        );
+    // La loma con pinos.
+    final Path loma = Path()..moveTo(-10, 250);
+    for (double x = -10; x <= 410; x += 10) {
+      loma.lineTo(x, _loma(x));
+    }
+    loma
+      ..lineTo(410, 250)
+      ..close();
+    c.drawPath(loma, _lin(const Offset(0, 200), const Offset(0, 250), <Color>[medio, _mx(medio, _negro, 0.25)]));
+    final _Azar r = _Azar(7);
+    final Path pinos = Path();
+    for (double x = -6; x < 410; x += 7 + r() * 6) {
+      final double y = _loma(x) + 2;
+      final double alto = 9 + r() * 9;
+      final double ancho = alto * 0.42;
+      for (int k = 0; k < 3; k++) {
+        final double yy = y - alto * k * 0.3;
+        final double wk = ancho * (1 - k * 0.25);
+        pinos
+          ..moveTo(x - wk, yy)
+          ..lineTo(x, yy - alto * 0.55)
+          ..lineTo(x + wk, yy)
+          ..close();
       }
+    }
+    c.drawPath(pinos, _col(_mx(medio, _negro, 0.3)));
+    if (_tiene('La pagoda')) _pagoda(c, 80, _loma(80) + 8);
+  }
+
+  /// Tejado con aleros curvos; [y] es la línea del alero.
+  void _techo(Canvas c, double cx, double y, double an, double alto, double curva, Color col, {bool tejas = false}) {
+    final Path p = Path()
+      ..moveTo(cx - an, y - curva)
+      ..quadraticBezierTo(cx - an * 0.78, y + 1.5, cx - an * 0.55, y + 1.2)
+      ..lineTo(cx + an * 0.55, y + 1.2)
+      ..quadraticBezierTo(cx + an * 0.78, y + 1.5, cx + an, y - curva)
+      ..quadraticBezierTo(cx + an * 0.7, y - alto * 0.35, cx + an * 0.45, y - alto)
+      ..lineTo(cx - an * 0.45, y - alto)
+      ..quadraticBezierTo(cx - an * 0.7, y - alto * 0.35, cx - an, y - curva)
+      ..close();
+    c.drawPath(p, _lin(Offset(0, y - alto), Offset(0, y), <Color>[_mx(col, _blanco, 0.10), col]));
+    if (tejas) {
+      c.save();
+      c.clipPath(p);
+      final int n = (an / 3.2).round();
+      final Paint teja = _tr(_al(_negro, 0.3), 0.5);
+      for (int i = -n; i <= n; i++) {
+        final double x = cx + i * an / n;
+        _linea(c, x * 0.98 + cx * 0.02, y - alto, x, y + 2, teja);
+      }
+      c.restore();
+    }
+    c.drawPath(
+        Path()
+          ..moveTo(cx - an, y - curva)
+          ..quadraticBezierTo(cx - an * 0.78, y + 1.5, cx - an * 0.55, y + 1.2)
+          ..lineTo(cx + an * 0.55, y + 1.2)
+          ..quadraticBezierTo(cx + an * 0.78, y + 1.5, cx + an, y - curva),
+        _tr(_mx(col, _negro, 0.5), 1.3, redondo: true));
+    _linea(c, cx - an * 0.45, y - alto, cx + an * 0.45, y - alto, _tr(_al(_astro, 0.25), 1));
+    if (_nieve) {
+      c.drawPath(
+          Path()
+            ..moveTo(cx - an * 0.92, y - curva - 0.5)
+            ..quadraticBezierTo(cx - an * 0.7, y - alto * 0.35, cx - an * 0.45, y - alto)
+            ..lineTo(cx + an * 0.45, y - alto)
+            ..quadraticBezierTo(cx + an * 0.7, y - alto * 0.35, cx + an * 0.92, y - curva - 0.5)
+            ..quadraticBezierTo(cx + an * 0.6, y - alto * 0.45, cx + an * 0.4, y - alto * 0.7)
+            ..lineTo(cx - an * 0.4, y - alto * 0.7)
+            ..quadraticBezierTo(cx - an * 0.6, y - alto * 0.45, cx - an * 0.92, y - curva - 0.5)
+            ..close(),
+          _col(_al(_blanco, 0.55)));
     }
   }
 
-  // ---- Estación y ambiente ------------------------------------------------
-
-  void _vegetacionEstacional(
-      Canvas c, double w, double h, double hz, Color tinta) {
-    final Color copa = estado.estacion.follaje;
-
-    void arbol(double cx, double base, double escala) {
-      c.drawLine(
-        Offset(cx, base),
-        Offset(cx - w * 0.008, base - h * 0.11 * escala),
-        Paint()
-          ..color = Color.lerp(tinta, Colors.black, 0.4)!
-          ..strokeWidth = w * 0.011 * escala
-          ..strokeCap = StrokeCap.round,
-      );
-      for (int i = 0; i < 4; i++) {
-        final double a = -0.5 - i * 0.55;
-        final Offset p = Offset(
-          cx - w * 0.008 + math.cos(a) * w * 0.035 * escala,
-          base - h * 0.11 * escala + math.sin(a) * h * 0.022 * escala,
-        );
-        c.drawCircle(p, w * 0.030 * escala,
-            Paint()..color = copa.withValues(alpha: 0.30));
-      }
+  /// 400 t · la pagoda de cinco pisos.
+  void _pagoda(Canvas c, double cx, double base) {
+    final Color madera = _mx(_tinta, const Color(0xFF6A2A2E), 0.45);
+    final Color techo = _mx(_tinta, const Color(0xFF2C2538), 0.5);
+    c.drawRect(_ltrb(cx - 16, base - 5, cx + 16, base), _col(_mx(_tinta, _blanco, 0.08)));
+    double y = base - 5;
+    for (int i = 0; i < 5; i++) {
+      final double bw = 12 - i * 1.4;
+      final double th = 15 - i * 0.6;
+      final double an = 24 - i * 2.8;
+      c.drawRect(_ltrb(cx - bw, y - th, cx + bw, y), _lin(Offset(cx - bw, 0), Offset(cx + bw, 0),
+          <Color>[_mx(madera, _blanco, 0.12), madera, _mx(madera, _negro, 0.35)]));
+      _linea(c, cx - bw, y - th * 0.35, cx + bw, y - th * 0.35, _tr(_al(_negro, 0.4), 0.6));
+      c.drawRect(_ltrb(cx - 2.4, y - th * 0.85, cx + 2.4, y - th * 0.4),
+          _col(_mx(const Color(0xFF15101F), const Color(0xFFF0B45C), _luz * (i == 0 ? 0.9 : 0.5))));
+      _techo(c, cx, y - th, an, 6.5, 3.2, techo);
+      y -= th + 5.5;
     }
-
-    arbol(w * 0.90, hz + h * 0.12, 1.0);
-    arbol(w * 0.06, hz + h * 0.16, 0.85);
+    // El sōrin: aguja con anillos.
+    _linea(c, cx, y + 4, cx, y - 24, _tr(_mx(const Color(0xFFB08A3A), _tinta, 0.35), 1.6));
+    final Paint anillo = _tr(_mx(const Color(0xFFC9A24A), _tinta, 0.3), 0.9);
+    for (int k = 0; k < 7; k++) {
+      _linea(c, cx - 2.6, y - 2 - k * 2.6, cx + 2.6, y - 2 - k * 2.6, anillo);
+    }
+    c.drawCircle(Offset(cx, y - 26), 1.8, _col(_mx(const Color(0xFFE8C46A), _tinta, 0.2)));
   }
 
-  void _niebla(Canvas c, double w, double h, double hz) {
+  // ---- Medio vivo: bambú y niebla --------------------------------------------
+
+  /// 750 t · el bosque de bambú, que se mece.
+  void _bambu(Canvas c, double x0, double x1, int semilla) {
+    final _Azar r = _Azar(semilla);
+    const Color base = Color(0xFF2F5E42);
+    for (int i = 0; i < 11; i++) {
+      final double x = x0 + (x1 - x0) * r();
+      final double grosor = 2.4 + r() * 3.2;
+      final double prof = r();
+      final Color col = _mx(_mx(_tinta, base, 0.42), _negro, prof * 0.35);
+      final double meneo = math.sin(t * _tau * 2 + i * 1.3) * 0.012 * (1 - prof * 0.5);
+      c.save();
+      c.translate(x, 262);
+      c.rotate(meneo);
+      final double alto = 270 + r() * 60;
+      c.drawRect(_ltrb(-grosor / 2, -alto, grosor / 2, 0), _lin(Offset(-grosor / 2, 0), Offset(grosor / 2, 0),
+          <Color>[_mx(col, _blanco, 0.18), col, _mx(col, _negro, 0.3)]));
+      final Paint nudo = _tr(_mx(col, _negro, 0.4), 1);
+      for (int k = 1; k < 9; k++) {
+        final double y = -k * alto / 9;
+        _linea(c, -grosor / 2 - 0.5, y, grosor / 2 + 0.5, y, nudo);
+      }
+      final Paint hojaP = _col(_mx(col, _blanco, 0.08));
+      for (int k = 0; k < 5; k++) {
+        final double y = -alto * (0.45 + 0.11 * k);
+        final double sd = (k + i).isOdd ? 1 : -1;
+        c.save();
+        c.translate(0, y);
+        c.rotate(sd * (0.5 + r() * 0.4) + math.sin(t * _tau * 3 + i + k) * 0.06);
+        for (int q = 0; q < 3; q++) {
+          c.drawPath(
+              Path()
+                ..moveTo(0, 0)
+                ..quadraticBezierTo(sd * 9, -2.0 - q * 2, sd * 20, 2.0 + q * 4)
+                ..quadraticBezierTo(sd * 10, 1.0 + q * 2, 0, 0)
+                ..close(),
+              hojaP);
+        }
+        c.restore();
+      }
+      c.restore();
+    }
+  }
+
+  void _medioVivo(Canvas c) {
+    if (_tiene('El bosque de bambú')) {
+      _bambu(c, -14, 52, 41);
+      _bambu(c, 352, 416, 43);
+    }
     // A menos vitalidad, más niebla. Es el castigo visual, sin una palabra.
     final int bandas = (5 - 3.6 * estado.vitalidad).round().clamp(1, 5);
     for (int i = 0; i < bandas; i++) {
-      final double fase = (t + i * 0.22) % 1.0;
-      final double x = -w * 0.5 + fase * w * 2.0;
-      final double y = hz - h * 0.02 + i * h * 0.045;
-      c.drawRRect(
-        RRect.fromRectAndRadius(
-          Rect.fromLTWH(x, y, w * 0.68, h * 0.05),
-          Radius.circular(h * 0.03),
-        ),
-        Paint()
-          ..color = Colors.white
-              .withValues(alpha: 0.030 + 0.055 * (1 - estado.vitalidad))
-          ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 14),
-      );
+      final double f = (t + i * 0.22) % 1.0;
+      c.drawRRect(RRect.fromRectAndRadius(Rect.fromLTWH(-280 + f * 700, 226.0 + i * 9, 260, 14), const Radius.circular(7)),
+          _col(_al(_blanco, 0.035 + 0.05 * (1 - estado.vitalidad)), blur: 9));
     }
   }
 
-  void _particulas(Canvas c, double w, double h) {
-    final math.Random rnd = math.Random(37);
+  // ---- Medio: terreno, campana, sala, sendero, jardín y estanque ------------
 
+  void _medio(Canvas c) {
+    final Color tinta = _tinta;
+    final Color suelo = _mx(tinta, _blanco, _nieve ? 0.16 : 0.05);
+    c.drawPath(
+        Path()
+          ..moveTo(-10, 250)
+          ..cubicTo(70, 238, 150, 236, 200, 240)
+          ..cubicTo(260, 244, 330, 236, 410, 242)
+          ..lineTo(410, 370)
+          ..lineTo(-10, 370)
+          ..close(),
+        _lin(const Offset(0, 236), const Offset(0, 360), <Color>[suelo, _mx(tinta, _negro, 0.5)]));
+    final _Azar r = _Azar(5);
+    final Paint brizna = _tr(
+        _al(_nieve ? _blanco : _mx(tinta, const Color(0xFF4A6A4A), 0.5), _nieve ? 0.25 : 0.35), 0.6);
+    for (int i = 0; i < 120; i++) {
+      final double x = r() * _w0;
+      final double y = 262 + r() * 100;
+      _linea(c, x, y, x + (r() - 0.5) * 2, y - 2 - r() * 3, brizna);
+    }
+    if (_tiene('La campana')) _campana(c, 338, 272);
+    _sala(c);
+    if (_tiene('El sendero')) _sendero(c);
+    if (_tiene('El jardín seco')) _jardin(c);
+    if (_tiene('El estanque')) _estanque(c);
+  }
+
+  /// La sala principal: siempre está. Basamento de piedra, pilares bermellón,
+  /// shoji que se encienden con la llama, dos tejados y linternas.
+  void _sala(Canvas c) {
+    final Color tinta = _tinta;
+    final double luz = _luz;
+    final Color piedra = _mx(tinta, _blanco, 0.16);
+    final Color madera = _mx(tinta, const Color(0xFF3A2A30), 0.6);
+    final Color bermellon = _mx(tinta, const Color(0xFF9A2E2E), 0.55);
+    final Color techo = _mx(tinta, const Color(0xFF2C2538), 0.55);
+    // Basamento y escalones.
+    c.drawRect(_ltrb(116, 262, 284, 277), _lin(const Offset(0, 262), const Offset(0, 277),
+        <Color>[_mx(piedra, _blanco, 0.08), _mx(piedra, _negro, 0.25)]));
+    for (int i = 0; i < 9; i++) {
+      _linea(c, 116.0 + i * 21, 262, 116.0 + i * 21, 277, _tr(_al(_negro, 0.25), 0.5));
+    }
+    _linea(c, 116, 269.5, 284, 269.5, _tr(_al(_negro, 0.2), 0.5));
+    for (int k = 0; k < 3; k++) {
+      final double y = 277 + k * 4.5;
+      c.drawRect(_ltrb(178.0 - k * 5, y, 222.0 + k * 5, y + 4.5),
+          _lin(Offset(0, y), Offset(0, y + 4.5), <Color>[_mx(piedra, _blanco, 0.12), _mx(piedra, _negro, 0.2)]));
+    }
+    // Cuerpo: tablas y shoji.
+    c.drawRect(_ltrb(128, 214, 272, 262), _col(madera));
+    c.drawRect(_ltrb(124, 256, 276, 262), _col(_mx(madera, _negro, 0.25)));
+    const List<List<double>> bahias = <List<double>>[
+      <double>[133, 153],
+      <double>[157, 177],
+      <double>[181, 219],
+      <double>[223, 243],
+      <double>[247, 267],
+    ];
+    final Paint reja = _tr(_al(_mx(madera, _negro, 0.3), 0.9), 0.5);
+    for (int i = 0; i < bahias.length; i++) {
+      final double a = bahias[i][0];
+      final double b = bahias[i][1];
+      final Color encendida = _mx(const Color(0xFF1A1424), const Color(0xFFF2BC66), luz * (i == 2 ? 1 : 0.8));
+      c.drawRect(_ltrb(a, 218, b, 254),
+          _lin(const Offset(0, 218), const Offset(0, 254), <Color>[_mx(encendida, _blanco, 0.08 * luz), encendida]));
+      final int cols = i == 2 ? 4 : 3;
+      for (int q = 1; q < cols; q++) {
+        final double x = a + (b - a) * q / cols;
+        _linea(c, x, 218, x, 254, reja);
+      }
+      for (int q = 1; q < 5; q++) {
+        final double y = 218 + 36 * q / 5;
+        _linea(c, a, y, b, y, reja);
+      }
+      if (i == 2) {
+        // Noren sobre la puerta.
+        c.drawRect(_ltrb(a, 218, b, 226), _col(_mx(const Color(0xFF5A1E2A), tinta, 0.3)));
+        for (int q = 0; q < 4; q++) {
+          final double x = a + (b - a) * (q + 0.5) / 4;
+          _linea(c, x, 218, x, 226, _tr(_al(_negro, 0.4), 0.5));
+        }
+      }
+    }
+    // Pilares bermellón y viga.
+    for (final double x in <double>[129, 155, 179, 221, 245, 271]) {
+      c.drawRect(_ltrb(x - 2.2, 212, x + 2.2, 258), _lin(Offset(x - 2.2, 0), Offset(x + 2.2, 0),
+          <Color>[_mx(bermellon, _blanco, 0.2), bermellon, _mx(bermellon, _negro, 0.4)]));
+    }
+    c.drawRect(_ltrb(124, 210, 276, 215), _col(_mx(bermellon, _negro, 0.2)));
+    // Tejado inferior, cuerpo superior y tejado superior.
+    _techo(c, 200, 212, 104, 30, 9, techo, tejas: true);
+    c.drawRect(_ltrb(158, 182, 242, 188), _col(_mx(madera, _negro, 0.2)));
+    for (int i = 0; i < 7; i++) {
+      final double x = 162 + i * 12.5;
+      c.drawRect(_ltrb(x, 183, x + 6, 187), _col(_mx(const Color(0xFF1A1424), const Color(0xFFF2BC66), luz * 0.6)));
+    }
+    _techo(c, 200, 183, 64, 28, 7, techo, tejas: true);
+    // Frontón con ornamento dorado.
+    final Color oro = _mx(const Color(0xFFD9A441), tinta, 0.25);
+    c.drawPath(
+        Path()
+          ..moveTo(182, 170)
+          ..lineTo(200, 158)
+          ..lineTo(218, 170)
+          ..close(),
+        _col(_mx(madera, _blanco, 0.06)));
+    c.drawPath(
+        Path()
+          ..moveTo(182, 170)
+          ..lineTo(200, 158)
+          ..lineTo(218, 170),
+        _tr(_mx(bermellon, _blanco, 0.1), 1.4));
+    c.drawCircle(const Offset(200, 166), 2.2, _col(oro));
+    c.drawPath(
+        Path()
+          ..moveTo(194, 168)
+          ..quadraticBezierTo(200, 163, 206, 168),
+        _tr(oro, 0.8));
+    // Cumbrera con shibi.
+    c.drawRect(_ltrb(170, 153.5, 230, 157), _col(_mx(techo, _negro, 0.3)));
+    for (final double sd in <double>[-1, 1]) {
+      final double x = 200 + sd * 31;
+      c.drawPath(
+          Path()
+            ..moveTo(x, 157)
+            ..quadraticBezierTo(x + sd * 1, 149, x + sd * 5, 147)
+            ..quadraticBezierTo(x + sd * 2, 152, x + sd * 4, 157)
+            ..close(),
+          _col(oro));
+    }
+    // Placa.
+    c.drawRect(_ltrb(193, 189, 207, 197), _col(_mx(const Color(0xFF2A1A1A), tinta, 0.2)));
+    c.drawRect(_ltrb(193, 189, 207, 197), _tr(oro, 0.8));
+    // Linternas colgantes (chōchin).
+    for (final double x in <double>[150, 250]) {
+      _linea(c, x, 212, x, 219, _tr(_al(_negro, 0.6), 0.6));
+      c.drawOval(_cen(x, 226, 9, 13), _col(_mx(const Color(0xFF7A1E22), const Color(0xFFE8553A), 0.3 + 0.7 * luz)));
+      for (int q = 0; q < 3; q++) {
+        _linea(c, x - 4.2, 222 + q * 2.6, x + 4.2, 222 + q * 2.6, _tr(_al(_negro, 0.3), 0.4));
+      }
+      c.drawRect(_ltrb(x - 2.5, 218.5, x + 2.5, 220), _col(_al(_negro, 0.7)));
+      c.drawRect(_ltrb(x - 2.5, 232, x + 2.5, 233.5), _col(_al(_negro, 0.7)));
+    }
+    // Incensario.
+    final Color bronce = _mx(const Color(0xFF6B5A2E), tinta, 0.35);
+    c.drawPath(
+        Path()
+          ..moveTo(192, 296)
+          ..quadraticBezierTo(192, 288, 200, 288)
+          ..quadraticBezierTo(208, 288, 208, 296)
+          ..close(),
+        _col(bronce));
+    c.drawRect(_ltrb(195, 296, 205, 300), _col(_mx(bronce, _negro, 0.3)));
+    c.drawRect(_ltrb(190, 286, 210, 288.5), _col(_mx(bronce, _blanco, 0.12)));
+  }
+
+  /// Linterna de piedra (tōrō).
+  void _toro(Canvas c, double x, double base) {
+    final Color piedra = _mx(_tinta, _blanco, 0.2);
+    final Color osc = _mx(piedra, _negro, 0.3);
+    c.drawRect(_ltrb(x - 6, base - 3, x + 6, base), _col(osc));
+    c.drawRect(_ltrb(x - 2, base - 15, x + 2, base - 3), _lin(Offset(x - 2, 0), Offset(x + 2, 0), <Color>[piedra, osc]));
+    c.drawRect(_ltrb(x - 5, base - 17, x + 5, base - 15), _col(piedra));
+    c.drawRect(_ltrb(x - 4, base - 24, x + 4, base - 17), _col(osc));
+    c.drawRect(_ltrb(x - 2.2, base - 22.5, x + 2.2, base - 18.5),
+        _col(_mx(const Color(0xFF20182C), const Color(0xFFFFC86E), _luz)));
+    c.drawPath(
+        Path()
+          ..moveTo(x - 8, base - 24)
+          ..quadraticBezierTo(x, base - 31, x + 8, base - 24)
+          ..close(),
+        _col(piedra));
+    c.drawCircle(Offset(x, base - 31.5), 1.6, _col(piedra));
+    if (_nieve) {
+      c.drawPath(
+          Path()
+            ..moveTo(x - 7, base - 24.5)
+            ..quadraticBezierTo(x, base - 31, x + 7, base - 24.5)
+            ..quadraticBezierTo(x, base - 28, x - 7, base - 24.5)
+            ..close(),
+          _col(_al(_blanco, 0.7)));
+    }
+  }
+
+  /// 5 t · el sendero: piedras hasta los escalones y dos linternas.
+  void _sendero(Canvas c) {
+    final Color piedra = _mx(_tinta, _blanco, _nieve ? 0.34 : 0.22);
+    c.drawPath(
+        Path()
+          ..moveTo(186, 300)
+          ..lineTo(214, 300)
+          ..lineTo(236, 365)
+          ..lineTo(164, 365)
+          ..close(),
+        _col(_al(_mx(_tinta, _blanco, 0.1), 0.6)));
+    for (int i = 0; i < 8; i++) {
+      final double f = i / 7;
+      final double y = 362 - f * 62;
+      final double an = 30 - f * 16;
+      final double x = 200 + math.sin(i * 1.9) * 3 * (1 - f);
+      c.drawOval(_cen(x + 0.6, y + 1.5, an, an * 0.32), _col(_al(_negro, 0.35)));
+      c.drawOval(_cen(x, y, an, an * 0.32), _lin(Offset(0, y - an * 0.16), Offset(0, y + an * 0.16),
+          <Color>[_mx(piedra, _blanco, 0.15), _mx(piedra, _negro, 0.2)]));
+      if (!_nieve && i % 3 == 1) {
+        c.drawOval(_cen(x - an * 0.38, y + 1, an * 0.25, an * 0.1), _col(_al(const Color(0xFF3E6A44), 0.55)));
+      }
+    }
+    _toro(c, 160, 304);
+    _toro(c, 240, 304);
+  }
+
+  /// 220 t · el jardín seco: arena rastrillada y tres rocas.
+  void _jardin(Canvas c) {
+    final Color g = _mx(_tinta, _blanco, _nieve ? 0.34 : 0.24);
+    final Path zona = Path()
+      ..moveTo(262, 308)
+      ..lineTo(410, 302)
+      ..lineTo(410, 372)
+      ..lineTo(244, 372)
+      ..close();
+    c.drawPath(zona, _col(g));
+    const List<List<double>> rocas = <List<double>>[
+      <double>[300, 334, 16, 9],
+      <double>[352, 322, 11, 7],
+      <double>[384, 348, 13, 7.5],
+    ];
+    final Paint surco = _tr(_al(_mx(g, _negro, 0.35), 0.8), 0.6);
+    c.save();
+    c.clipPath(zona);
+    for (int i = 0; i < 22; i++) {
+      final double y = 306.0 + i * 3.2;
+      c.drawPath(
+          Path()
+            ..moveTo(240, y)
+            ..quadraticBezierTo(330, y - 3, 412, y + 1),
+          surco);
+    }
+    for (final List<double> k in rocas) {
+      for (int q = 1; q <= 4; q++) {
+        c.drawOval(_cen(k[0], k[1] + 1, k[2] * 2 + q * 9, k[3] * 1.2 + q * 5), _col(g));
+      }
+      for (int q = 1; q <= 4; q++) {
+        c.drawOval(_cen(k[0], k[1] + 1, k[2] * 2 + q * 9, k[3] * 1.2 + q * 5), _tr(_al(_mx(g, _negro, 0.35), 0.85), 0.6));
+      }
+    }
+    c.restore();
+    final Paint borde = _tr(_mx(_tinta, _blanco, 0.12), 1.6);
+    _linea(c, 262, 308, 410, 302, borde);
+    _linea(c, 262, 308, 244, 372, borde);
+    final Color roca = _mx(_tinta, const Color(0xFF4A4458), 0.6);
+    for (final List<double> k in rocas) {
+      final double x = k[0], y = k[1], w = k[2], h = k[3];
+      c.drawPath(
+          Path()
+            ..moveTo(x - w, y + h * 0.4)
+            ..quadraticBezierTo(x - w * 0.8, y - h * 1.2, x - w * 0.1, y - h * 1.3)
+            ..quadraticBezierTo(x + w * 0.7, y - h, x + w, y + h * 0.4)
+            ..close(),
+          _lin(Offset(x - w, 0), Offset(x + w, 0), <Color>[_mx(roca, _blanco, 0.18), _mx(roca, _negro, 0.3)]));
+      if (!_nieve) {
+        c.drawPath(
+            Path()
+              ..moveTo(x - w * 0.6, y - h * 0.6)
+              ..quadraticBezierTo(x, y - h * 1.3, x + w * 0.5, y - h * 0.8)
+              ..quadraticBezierTo(x, y - h * 0.9, x - w * 0.6, y - h * 0.6)
+              ..close(),
+            _col(_al(const Color(0xFF4A7A4E), 0.7)));
+      } else {
+        c.drawPath(
+            Path()
+              ..moveTo(x - w * 0.7, y - h * 0.5)
+              ..quadraticBezierTo(x - w * 0.2, y - h * 1.35, x + w * 0.6, y - h * 0.8)
+              ..quadraticBezierTo(x, y - h * 0.8, x - w * 0.7, y - h * 0.5)
+              ..close(),
+            _col(_al(_blanco, 0.7)));
+      }
+    }
+  }
+
+  static const double _ex = 92;
+  static const double _ey = 326;
+
+  Path get _agua => Path()
+    ..moveTo(_ex - 72, _ey)
+    ..cubicTo(_ex - 70, _ey - 20, _ex - 20, _ey - 24, _ex + 18, _ey - 21)
+    ..cubicTo(_ex + 56, _ey - 18, _ex + 74, _ey - 8, _ex + 70, _ey + 4)
+    ..cubicTo(_ex + 66, _ey + 18, _ex + 20, _ey + 24, _ex - 20, _ey + 22)
+    ..cubicTo(_ex - 56, _ey + 20, _ex - 74, _ey + 12, _ex - 72, _ey)
+    ..close();
+
+  /// 60 t · el estanque: piedras, nenúfares y (en movimiento) los koi.
+  void _estanque(Canvas c) {
+    final List<Color> cielo = _cielo;
+    final Color tinta = _tinta;
+    final Path agua = _agua;
+    c.drawPath(agua, _lin(const Offset(0, _ey - 24), const Offset(0, _ey + 24),
+        <Color>[_mx(cielo[1], _blanco, 0.3), _mx(cielo[1], tinta, 0.35), _mx(tinta, _negro, 0.3)], <double>[0, 0.45, 1]));
+    c.save();
+    c.clipPath(agua);
+    c.drawRect(_ltrb(_ex - 80, _ey - 24, _ex + 80, _ey - 14), _col(_al(_mx(cielo[2], _blanco, 0.2), 0.25)));
+    c.restore();
+    final _Azar r = _Azar(11);
+    final Color piedra = _mx(tinta, _blanco, _nieve ? 0.3 : 0.16);
+    for (int i = 0; i < 20; i++) {
+      final double a = i / 20 * _tau;
+      final double x = _ex + math.cos(a) * 72;
+      final double y = _ey + math.sin(a) * 23;
+      final double w = 9 + r() * 7;
+      final double h = 4 + r() * 3;
+      c.drawOval(_cen(x, y, w, h), _lin(Offset(0, y - h / 2), Offset(0, y + h / 2),
+          <Color>[_mx(piedra, _blanco, 0.12), _mx(piedra, _negro, 0.3)]));
+    }
+    final Paint hoja = _col(_mx(const Color(0xFF2F6A44), tinta, 0.35));
+    for (final List<double> k in <List<double>>[
+      <double>[_ex - 30, _ey + 6, 14],
+      <double>[_ex + 20, _ey - 8, 11],
+      <double>[_ex + 34, _ey + 9, 9],
+    ]) {
+      final double x = k[0], y = k[1], w = k[2];
+      c.drawPath(
+          Path()
+            ..moveTo(x, y)
+            ..lineTo(x + w * 0.5, y - w * 0.06)
+            ..quadraticBezierTo(x + w * 0.4, y - w * 0.32, x, y - w * 0.32)
+            ..quadraticBezierTo(x - w * 0.55, y - w * 0.3, x - w * 0.5, y)
+            ..quadraticBezierTo(x - w * 0.5, y + w * 0.32, x, y + w * 0.3)
+            ..quadraticBezierTo(x + w * 0.55, y + w * 0.3, x + w * 0.5, y + w * 0.06)
+            ..close(),
+          hoja);
+    }
+    if (estado.estacion == Estacion.primavera || estado.estacion == Estacion.verano) {
+      // Una flor de loto.
+      const double x = _ex - 30, y = _ey + 3;
+      for (int k = 0; k < 5; k++) {
+        c.save();
+        c.translate(x, y);
+        c.rotate(-0.9 + k * 0.45);
+        c.drawOval(_cen(0, -3, 2.6, 6), _col(const Color(0xFFF2A7C9)));
+        c.restore();
+      }
+      c.drawCircle(const Offset(x, y - 1), 1.2, _col(const Color(0xFFF7E08A)));
+    }
+  }
+
+  /// 120 t · la campana: pabellón con tejado y campana de bronce.
+  void _campana(Canvas c, double cx, double base) {
+    final Color madera = _mx(_tinta, const Color(0xFF4A2A2A), 0.5);
+    final Color techo = _mx(_tinta, const Color(0xFF2C2538), 0.55);
+    final Color piedra = _mx(_tinta, _blanco, 0.15);
+    c.drawRect(_ltrb(cx - 28, base - 6, cx + 28, base), _lin(Offset(0, base - 6), Offset(0, base),
+        <Color>[_mx(piedra, _blanco, 0.08), _mx(piedra, _negro, 0.25)]));
+    for (final double x in <double>[cx - 21, cx + 21]) {
+      c.drawRect(_ltrb(x - 1.8, base - 52, x + 1.8, base - 6), _lin(Offset(x - 1.8, 0), Offset(x + 1.8, 0),
+          <Color>[_mx(madera, _blanco, 0.15), _mx(madera, _negro, 0.3)]));
+    }
+    c.drawRect(_ltrb(cx - 24, base - 50, cx + 24, base - 47), _col(madera));
+    final Color br = _mx(const Color(0xFF7A6534), _tinta, 0.3);
+    _linea(c, cx, base - 47, cx, base - 44, _tr(_al(_negro, 0.6), 1.2));
+    c.drawPath(
+        Path()
+          ..moveTo(cx - 6.5, base - 43)
+          ..quadraticBezierTo(cx - 7.5, base - 44.5, cx, base - 45)
+          ..quadraticBezierTo(cx + 7.5, base - 44.5, cx + 6.5, base - 43)
+          ..lineTo(cx + 7.5, base - 24)
+          ..quadraticBezierTo(cx + 9, base - 21.5, cx + 9.5, base - 20)
+          ..lineTo(cx - 9.5, base - 20)
+          ..quadraticBezierTo(cx - 9, base - 21.5, cx - 7.5, base - 24)
+          ..close(),
+        _lin(Offset(cx - 9, 0), Offset(cx + 9, 0), <Color>[_mx(br, _blanco, 0.25), br, _mx(br, _negro, 0.4)]));
+    for (final double y in <double>[base - 38, base - 27]) {
+      _linea(c, cx - 7.3, y, cx + 7.3, y, _tr(_mx(br, _negro, 0.5), 0.7));
+    }
+    for (int i = 0; i < 3; i++) {
+      for (int j = 0; j < 3; j++) {
+        c.drawCircle(Offset(cx - 4 + i * 4, base - 41.5 + j * 1.6), 0.45, _col(_mx(br, _blanco, 0.3)));
+      }
+    }
+    c.drawCircle(Offset(cx + 3, base - 29), 1.8, _tr(_mx(br, _blanco, 0.2), 0.6));
+    _techo(c, cx, base - 50, 34, 20, 6, techo, tejas: true);
+  }
+
+  // ---- Frente vivo: luces, humo, badajo y koi ------------------------------
+
+  void _frenteVivo(Canvas c) {
+    final double luz = _luz;
+    if (luz > 0.08) {
+      final double fl = 0.85 + 0.15 * math.sin(t * _tau * 7) * math.sin(t * _tau * 3);
+      c.drawRect(_ltrb(128, 214, 272, 258), _col(_al(const Color(0xFFF0B45C), 0.10 * luz * fl), blur: 10, suma: true));
+      for (final double x in <double>[150, 250]) {
+        c.drawCircle(Offset(x, 226), 15,
+            _rad(Offset(x, 226), 15, <Color>[_al(const Color(0xFFFF8A4A), 0.45 * luz * fl), _al(const Color(0xFFFF8A4A), 0)])
+              ..blendMode = BlendMode.plus);
+      }
+      if (_tiene('El sendero')) {
+        for (final double x in <double>[160, 240]) {
+          c.drawCircle(Offset(x, 284), 11,
+              _rad(Offset(x, 284), 11, <Color>[_al(const Color(0xFFFFC86E), 0.5 * luz * fl), _al(const Color(0xFFFFC86E), 0)])
+                ..blendMode = BlendMode.plus);
+        }
+      }
+      c.drawRect(_ltrb(150, 300, 250, 370), _lin(const Offset(0, 262), const Offset(0, 370),
+          <Color>[_al(const Color(0xFFF0B45C), 0.07 * luz), _al(const Color(0xFFF0B45C), 0)])
+        ..blendMode = BlendMode.plus);
+    }
+    // Humo del incienso: solo si el templo está vivo.
+    if (estado.vitalidad > 0.35) {
+      for (int i = 0; i < 5; i++) {
+        final double f = (t * 4 + i * 0.2) % 1.0;
+        c.drawCircle(Offset(200 + math.sin(f * 5 + i) * 5 * f, 287 - f * 58), 2 + f * 9,
+            _col(_al(_blanco, 0.12 * (1 - f) * estado.vitalidad), blur: 4));
+      }
+    }
+    // El badajo de la campana se mece.
+    if (_tiene('La campana')) {
+      c.save();
+      c.translate(338 - 19, 272 - 47);
+      c.rotate(math.sin(t * _tau * 2) * 0.06);
+      final Paint cuerda = _tr(_al(_negro, 0.6), 0.5);
+      _linea(c, -6, 0, -6, 9, cuerda);
+      _linea(c, 6, 0, 6, 9, cuerda);
+      c.drawRRect(RRect.fromLTRBR(-11, 9, 10, 13, const Radius.circular(2)), _lin(const Offset(0, 9), const Offset(0, 13),
+          <Color>[_mx(const Color(0xFF8A6A4A), _tinta, 0.3), _mx(const Color(0xFF4A3A2A), _tinta, 0.3)]));
+      c.restore();
+    }
+    // El estanque: ondas, koi y un brillo.
+    if (_tiene('El estanque')) {
+      for (int i = 0; i < 3; i++) {
+        final double f = (t * 4 + i / 3) % 1.0;
+        c.drawOval(_cen(_ex + 18, _ey + 2, 8 + f * 34, 3 + f * 10), _tr(_al(_blanco, 0.25 * (1 - f)), 0.8));
+      }
+      for (int k = 0; k < 2; k++) {
+        final double a = t * _tau * (k == 1 ? -1 : 1) + k * 2.4;
+        final double rx = 38.0 * (k == 1 ? 0.7 : 1);
+        final double ry = 10.0 * (k == 1 ? 0.7 : 1);
+        c.save();
+        c.translate(_ex + math.cos(a) * rx, _ey + math.sin(a) * ry);
+        c.rotate(k == 1 ? a - math.pi / 2 : a + math.pi / 2);
+        c.scale(1, 0.55);
+        final Color col = k == 1 ? const Color(0xFFF4F0EA) : const Color(0xFFF07A3A);
+        c.drawPath(
+            Path()
+              ..moveTo(0, -7)
+              ..quadraticBezierTo(3.4, -2, 0, 6)
+              ..quadraticBezierTo(-3.4, -2, 0, -7)
+              ..close(),
+            _col(_al(col, 0.85)));
+        c.drawPath(
+            Path()
+              ..moveTo(0, 5)
+              ..lineTo(-3, 9.5)
+              ..lineTo(3, 9.5)
+              ..close(),
+            _col(_al(col, 0.7)));
+        if (k == 0) {
+          c.drawCircle(const Offset(0.5, -3), 1.3, _col(_al(_blanco, 0.9)));
+        } else {
+          c.drawCircle(const Offset(0, -1), 1.4, _col(_al(const Color(0xFFF07A3A), 0.9)));
+        }
+        c.restore();
+      }
+      c.drawOval(_cen(_ex - 6, _ey - 12, 40, 3), _col(_al(_blanco, 0.07 + 0.05 * math.sin(t * _tau * 2))));
+    }
+  }
+
+  // ---- Frente: torii, pino y el árbol de la estación ------------------------
+
+  /// 25 t · el torii, que enmarca la sala.
+  void _torii(Canvas c) {
+    final Color tinta = _tinta;
+    final Color ber = _mx(tinta, const Color(0xFFC8382E), 0.6);
+    final Color negro = _mx(tinta, const Color(0xFF1A1018), 0.5);
+    for (final double x in <double>[112, 288]) {
+      c.drawPath(
+          Path()
+            ..moveTo(x - 5, 352)
+            ..lineTo(x - 4, 204)
+            ..lineTo(x + 4, 204)
+            ..lineTo(x + 5, 352)
+            ..close(),
+          _lin(Offset(x - 5, 0), Offset(x + 5, 0), <Color>[_mx(ber, _blanco, 0.22), ber, _mx(ber, _negro, 0.45)],
+              <double>[0, 0.4, 1]));
+      c.drawRect(_ltrb(x - 6.5, 340, x + 6.5, 354), _col(negro));
+      c.drawRect(_ltrb(x - 6.5, 338.5, x + 6.5, 340.5), _col(_mx(negro, _blanco, 0.15)));
+    }
+    c.drawRect(_ltrb(96, 220, 304, 226), _lin(const Offset(0, 220), const Offset(0, 226),
+        <Color>[_mx(ber, _blanco, 0.18), _mx(ber, _negro, 0.3)]));
+    c.drawRect(_ltrb(197, 206, 203, 220), _col(ber));
+    c.drawRect(_ltrb(191, 207, 209, 219), _col(negro));
+    c.drawRect(_ltrb(191, 207, 209, 219), _tr(_mx(const Color(0xFFD9A441), tinta, 0.2), 0.9));
+    c.drawRect(_ltrb(92, 199, 308, 206), _lin(const Offset(0, 199), const Offset(0, 206),
+        <Color>[_mx(ber, _blanco, 0.18), _mx(ber, _negro, 0.3)]));
+    final Path filo = Path()
+      ..moveTo(74, 184)
+      ..quadraticBezierTo(90, 193, 120, 193)
+      ..lineTo(280, 193)
+      ..quadraticBezierTo(310, 193, 326, 184);
+    c.drawPath(
+        Path()
+          ..addPath(filo, Offset.zero)
+          ..lineTo(327, 189)
+          ..quadraticBezierTo(310, 199.5, 282, 199.5)
+          ..lineTo(118, 199.5)
+          ..quadraticBezierTo(90, 199.5, 73, 189)
+          ..close(),
+        _lin(const Offset(0, 184), const Offset(0, 200), <Color>[_mx(negro, _blanco, 0.18), negro]));
+    c.drawPath(filo, _tr(_al(_astro, 0.3), 0.8));
+    if (_nieve) {
+      c.drawPath(
+          Path()
+            ..moveTo(76, 184.5)
+            ..quadraticBezierTo(90, 192.5, 120, 192.5)
+            ..lineTo(280, 192.5)
+            ..quadraticBezierTo(310, 192.5, 324, 184.5)
+            ..quadraticBezierTo(310, 190, 280, 190.5)
+            ..lineTo(120, 190.5)
+            ..quadraticBezierTo(90, 190, 76, 184.5)
+            ..close(),
+          _col(_al(_blanco, 0.75)));
+    }
+  }
+
+  /// Pino podado en nubes, a la derecha.
+  void _pino(Canvas c, double x, double base) {
+    final Color verde = _mx(_tinta, const Color(0xFF2E4A3A), 0.5);
+    c.drawPath(
+        Path()
+          ..moveTo(x - 3, base)
+          ..cubicTo(x - 2, base - 20, x + 8, base - 30, x + 2, base - 48)
+          ..lineTo(x + 5, base - 48)
+          ..cubicTo(x + 12, base - 30, x + 3, base - 20, x + 3, base)
+          ..close(),
+        _col(_mx(_tinta, _negro, 0.35)));
+    for (final List<double> k in <List<double>>[
+      <double>[-14, -24, 30, 9],
+      <double>[12, -34, 26, 8],
+      <double>[-4, -50, 24, 8],
+      <double>[6, -62, 16, 6],
+    ]) {
+      final double y = base + k[1];
+      c.drawOval(_cen(x + k[0], y + 1.5, k[2], k[3]), _col(_mx(verde, _negro, 0.4)));
+      c.drawOval(_cen(x + k[0], y, k[2], k[3]),
+          _lin(Offset(0, y - k[3] / 2), Offset(0, y + k[3] / 2), <Color>[_mx(verde, _blanco, 0.14), verde]));
+      if (_nieve) c.drawOval(_cen(x + k[0], y - k[3] * 0.28, k[2] * 0.86, k[3] * 0.45), _col(_al(_blanco, 0.75)));
+    }
+  }
+
+  /// El árbol que enmarca arriba a la izquierda: cerezo, follaje, arce o ramas
+  /// con nieve, según la estación.
+  void _arbol(Canvas c) {
+    final Color copa = estado.estacion.follaje;
+    final Color tronco = _mx(_tinta, _negro, 0.4);
+    c.drawPath(
+        Path()
+          ..moveTo(-12, 372)
+          ..cubicTo(-4, 300, 10, 200, 6, 130)
+          ..cubicTo(4, 90, 20, 58, 46, 40)
+          ..lineTo(50, 46)
+          ..cubicTo(28, 62, 18, 96, 20, 132)
+          ..cubicTo(24, 200, 14, 300, 12, 372)
+          ..close(),
+        _lin(const Offset(-12, 0), const Offset(22, 0), <Color>[_mx(tronco, _blanco, 0.12), tronco]));
+    const List<List<double>> ramas = <List<double>>[
+      <double>[46, 40, 120, 22, 3.2],
+      <double>[30, 60, 96, 58, 2.4],
+      <double>[18, 100, 70, 92, 2],
+      <double>[40, 44, 82, 8, 1.8],
+      <double>[100, 30, 150, 36, 1.4],
+      <double>[72, 56, 128, 70, 1.4],
+    ];
+    Path rama(List<double> k, double dy) => Path()
+      ..moveTo(k[0], k[1] - dy)
+      ..quadraticBezierTo((k[0] + k[2]) / 2, math.min(k[1], k[3]) - 6 - dy, k[2], k[3] - dy);
+    for (final List<double> k in ramas) {
+      c.drawPath(rama(k, 0), _tr(tronco, k[4], redondo: true));
+    }
+    if (_nieve) {
+      for (final List<double> k in ramas) {
+        c.drawPath(rama(k, k[4] * 0.4), _tr(_al(_blanco, 0.7), k[4] * 0.55, redondo: true));
+      }
+      return;
+    }
+    final _Azar r = _Azar(71);
+    final List<List<double>> racimos = <List<double>>[];
+    for (final List<double> k in ramas) {
+      for (int i = 0; i < 13; i++) {
+        final double f = r();
+        racimos.add(<double>[
+          k[0] + (k[2] - k[0]) * f + (r() - 0.5) * 18,
+          k[1] + (k[3] - k[1]) * f - 5 + (r() - 0.5) * 15,
+          3.4 + r() * 4.6,
+        ]);
+      }
+    }
+    final Paint sombra = _col(_al(_mx(copa, _negro, 0.5), 0.85));
+    for (final List<double> q in racimos) {
+      c.drawCircle(Offset(q[0] + 1, q[1] + 2), q[2], sombra);
+    }
+    for (final List<double> q in racimos) {
+      c.drawCircle(
+          Offset(q[0], q[1]),
+          q[2] * 0.9,
+          _rad(Offset(q[0] - q[2] * 0.35, q[1] - q[2] * 0.45), q[2] * 1.3,
+              <Color>[_mx(copa, _blanco, 0.2), copa, _mx(copa, _negro, 0.32)], <double>[0, 0.5, 1]));
+    }
+    final _Azar d = _Azar(99);
+    final Paint brillo = _col(_al(_mx(copa, _blanco, 0.4), 0.75));
+    for (int i = 0; i < 70; i++) {
+      final List<double> q = racimos[(d() * racimos.length).floor()];
+      c.drawCircle(Offset(q[0] + (d() - 0.5) * q[2] * 1.8, q[1] + (d() - 0.5) * q[2] * 1.6), 0.8 + d() * 1.2, brillo);
+    }
+  }
+
+  void _frente(Canvas c) {
+    if (_tiene('El torii')) _torii(c);
+    _pino(c, 384, 318);
+    _arbol(c);
+  }
+
+  // ---- Lo que cae del cielo --------------------------------------------------
+
+  void _aire(Canvas c) {
+    final _Azar r = _Azar(37);
     switch (estado.estacion) {
-      case Estacion.primavera:
-        for (int i = 0; i < 16; i++) {
-          final double s = rnd.nextDouble();
-          final double fase = (t * (0.5 + s * 0.5) + s) % 1.0;
-          final double x =
-              w * rnd.nextDouble() + math.sin(fase * 2 * math.pi + i) * w * 0.05;
-          final double y = -8 + fase * (h + 16);
+      case Estacion.primavera: {
+        final Paint petalo = _col(_al(const Color(0xFFF2B9DA), 0.75));
+        for (int i = 0; i < 22; i++) {
+          final double s = r();
+          final double f = (t * (1 + (s * 2).floor()) + s) % 1.0;
+          final double x = _w0 * r() + math.sin(f * _tau + i) * _w0 * 0.05;
           c.save();
-          c.translate(x, y);
-          c.rotate(fase * 7 + i);
-          c.drawOval(
-            Rect.fromCenter(center: Offset.zero, width: 7, height: 4),
-            Paint()..color = const Color(0xFFE7B9F5).withValues(alpha: 0.50),
-          );
+          c.translate(x, -8 + f * (_h0 + 16));
+          c.rotate(f * 7 + i);
+          c.drawPath(
+              Path()
+                ..moveTo(0, -3.5)
+                ..quadraticBezierTo(3, -1, 0, 3.5)
+                ..quadraticBezierTo(-3, -1, 0, -3.5)
+                ..close(),
+              petalo);
           c.restore();
         }
-      case Estacion.verano:
+      }
+      case Estacion.verano: {
         // Luciérnagas, solo al caer la luz.
-        if (estado.momento == MomentoDia.noche ||
-            estado.momento == MomentoDia.atardecer) {
-          for (int i = 0; i < 14; i++) {
-            final double s = rnd.nextDouble();
-            final double x = w * s +
-                math.sin(t * 2 * math.pi * (0.3 + s) + i) * w * 0.06;
-            final double y = h * (0.62 + rnd.nextDouble() * 0.3) +
-                math.cos(t * 2 * math.pi * (0.25 + s) + i) * h * 0.04;
-            final double br =
-                (0.3 + 0.7 * math.sin(t * 2 * math.pi * 4 + i * 1.7))
-                    .clamp(0.0, 1.0);
-            c.drawCircle(
-              Offset(x, y),
-              w * 0.014,
-              Paint()
-                ..color = const Color(0xFFDDF08A).withValues(alpha: 0.20 * br)
-                ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 6),
-            );
-            c.drawCircle(Offset(x, y), 1.4,
-                Paint()..color = const Color(0xFFF4FFB0).withValues(alpha: br));
+        if (_luna) {
+          for (int i = 0; i < 18; i++) {
+            final double s = r();
+            final double fr = 1.0 + (s * 2).floor();
+            final double x = _w0 * s + math.sin(t * _tau * fr + i) * _w0 * 0.06;
+            final double y = _h0 * (0.6 + r() * 0.32) + math.cos(t * _tau * fr + i) * _h0 * 0.04;
+            final double br = (0.3 + 0.7 * math.sin(t * _tau * 4 + i * 1.7)).clamp(0.0, 1.0);
+            c.drawCircle(Offset(x, y), 5, _col(_al(const Color(0xFFDDF08A), 0.22 * br), blur: 3));
+            c.drawCircle(Offset(x, y), 1.3, _col(_al(const Color(0xFFF4FFB0), br)));
           }
         }
-      case Estacion.otono:
-        for (int i = 0; i < 14; i++) {
-          final double s = rnd.nextDouble();
-          final double fase = (t * (0.4 + s * 0.4) + s) % 1.0;
-          final double x =
-              w * rnd.nextDouble() + math.sin(fase * 2 * math.pi + i) * w * 0.07;
-          final double y = -8 + fase * (h + 16);
+      }
+      case Estacion.otono: {
+        for (int i = 0; i < 16; i++) {
+          final double s = r();
+          final double f = (t * (1 + (s * 2).floor()) + s) % 1.0;
+          final double x = _w0 * r() + math.sin(f * _tau + i) * _w0 * 0.07;
           c.save();
-          c.translate(x, y);
-          c.rotate(fase * 9 + i);
-          c.drawOval(
-            Rect.fromCenter(center: Offset.zero, width: 8, height: 5),
-            Paint()..color = const Color(0xFFD9702E).withValues(alpha: 0.55),
-          );
+          c.translate(x, -8 + f * (_h0 + 16));
+          c.rotate(f * 9 + i);
+          final Path hoja = Path();
+          for (int k = 0; k < 5; k++) {
+            final double a = -math.pi / 2 + (k - 2) * 0.62;
+            final double largo = k == 2 ? 5 : 4;
+            hoja
+              ..moveTo(0, 0)
+              ..lineTo(math.cos(a - 0.2) * 2.4, math.sin(a - 0.2) * 2.4)
+              ..lineTo(math.cos(a) * largo, math.sin(a) * largo)
+              ..lineTo(math.cos(a + 0.2) * 2.4, math.sin(a + 0.2) * 2.4)
+              ..close();
+          }
+          c.drawPath(hoja, _col(_al(i % 3 != 0 ? const Color(0xFFD9622E) : const Color(0xFFE89A3A), 0.8)));
           c.restore();
         }
-      case Estacion.invierno:
-        for (int i = 0; i < 30; i++) {
-          final double s = rnd.nextDouble();
-          final double fase = (t * (0.35 + s * 0.35) + s) % 1.0;
-          final double x =
-              w * rnd.nextDouble() + math.sin(fase * 2 * math.pi + i) * w * 0.03;
-          final double y = -6 + fase * (h + 12);
-          c.drawCircle(Offset(x, y), 1 + s * 1.8,
-              Paint()..color = Colors.white.withValues(alpha: 0.62));
+      }
+      case Estacion.invierno: {
+        final Paint copo = _col(_al(_blanco, 0.7));
+        for (int i = 0; i < 40; i++) {
+          final double s = r();
+          final double f = (t * (1 + (s * 2).floor()) + s) % 1.0;
+          final double x = _w0 * r() + math.sin(f * _tau + i) * _w0 * 0.03;
+          c.drawCircle(Offset(x, -6 + f * (_h0 + 12)), 0.8 + s * 1.6, copo);
         }
+      }
     }
   }
 
   @override
   bool shouldRepaint(_CasaPainter old) =>
       old.t != t ||
+      old.subida != subida ||
+      old.nueva != nueva ||
       old.estado.kilos != estado.kilos ||
       old.estado.momento != estado.momento ||
       old.estado.estacion != estado.estacion ||
@@ -27669,6 +28267,10 @@ class _CeremoniaPiezaState extends State<CeremoniaPieza>
     vsync: this,
     duration: const Duration(milliseconds: 2600),
   );
+
+  /// La pieza nueva se levanta en la escena cuando ya está a la vista.
+  late final Animation<double> _subida =
+      CurvedAnimation(parent: _c, curve: const Interval(0.32, 0.86));
 
   @override
   void initState() {
@@ -27725,7 +28327,7 @@ class _CeremoniaPiezaState extends State<CeremoniaPieza>
                       child: Stack(
                         fit: StackFit.expand,
                         children: <Widget>[
-                          EscenaCasa(estado: widget.estado, altura: 220),
+                          EscenaCasa(estado: widget.estado, altura: 220, nueva: widget.pieza, subida: _subida),
                           IgnorePointer(
                             child: DecoratedBox(
                               decoration: BoxDecoration(
@@ -27829,7 +28431,12 @@ class _CasaScreenState extends State<CasaScreen> {
     _revisado = true;
     final AlmacenCasa a = AlmacenCasa.instancia;
     a.sincronizarSiEsPrimeraVez(usuario);
-    final List<PiezaTemplo> nuevas = a.piezasNuevas(usuario);
+    List<PiezaTemplo> nuevas = a.piezasNuevas(usuario);
+    // ?ceremonia=3: la ceremonia de la pieza 3 (la campana), para revisarla.
+    final int? prueba = vistaPrueba ? int.tryParse(parametroPrueba('ceremonia') ?? '') : null;
+    if (prueba != null && prueba >= 0 && prueba < PiezasDelTemplo.todas.length) {
+      nuevas = <PiezaTemplo>[PiezasDelTemplo.todas[prueba]];
+    }
     if (nuevas.isNotEmpty) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (mounted) setState(() => _porCelebrar = nuevas);
