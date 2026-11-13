@@ -38872,6 +38872,7 @@ class _CabeceraPerfil extends StatelessWidget {
               rangos: p.ranked.rangos,
               total: p.ranked.total,
               general: p.ranked.general,
+              mujer: p.genero == 'mujer',
             ),
           ],
           if (p.biografia.trim().isNotEmpty) ...<Widget>[
@@ -42772,151 +42773,259 @@ class RankedPublico {
 // ---------------------------------------------------------------------------
 // 37.4 LA SILUETA
 //
-// Dibujada sobre una caja de 200×440 y escalada. Cada músculo es un Path: lo
-// mismo que se pinta es lo que se toca.
+// Desde la 1.9.0 hay dos cuerpos, de hombre y de mujer (el género de El
+// Ascenso), cada uno de frente y de espalda. Todo se dibuja sobre una caja de
+// 200×440 y se escala; cada músculo es un Path: lo mismo que se pinta es lo que
+// se toca.
+//
+// Las formas son datos (`_DatosCuerpo`), generados desde un solo archivo de
+// anatomía con su prototipo; el cuerpo de mujer es el de hombre deformado
+// (hombros más estrechos, cintura y caderas) con pecho, abdomen y glúteos
+// propios. Las fibras de cada músculo son segmentos que se recortan con su
+// forma.
+//
+// Cuanto más alto el rango, más vivo el músculo:
+//   Ashigaru  brillo que cruza
+//   Rōnin     + energía que corre por las fibras
+//   Samurái   + resplandor que late y luz que recorre el borde
+//   Hatamoto  + brasas que suben
+//   Daimyō    + llamas
+//   Shōgun    + rayos
+//   Kensei    + rayos dorados detrás y destellos
+//   Kami      + iridiscencia y un aro que se expande
 // ---------------------------------------------------------------------------
 
+/// ¿El cuerpo de Ranked de quien tiene la sesión es de mujer? Sale del género
+/// elegido en El Ascenso. En la vista de prueba, `?genero=mujer`.
+bool cuerpoMujerDeSesion() {
+  if (vistaPrueba) return parametroPrueba('genero') == 'mujer';
+  return SesionTemplo.instancia.actual?.genero == 'mujer';
+}
+
+class _MusculoCuerpo {
+  const _MusculoCuerpo(this.grupo, this.forma, this.fibras);
+  final GrupoMuscular grupo;
+  final List<double> forma;
+
+  /// Segmentos [x0, y0, x1, y1, …] que cubren la caja del músculo.
+  final List<double> fibras;
+}
+
+class _ColaCuerpo {
+  const _ColaCuerpo(this.x, this.y, this.forma);
+
+  /// Nudo alrededor del que se mece.
+  final double x;
+  final double y;
+  final List<double> forma;
+}
+
+class _DatosCuerpo {
+  const _DatosCuerpo({
+    required this.contorno,
+    required this.oreja,
+    required this.detalles,
+    required this.top,
+    required this.pelo,
+    required this.cinta,
+    required this.cola,
+    required this.musculos,
+  });
+
+  /// El borde entero, sin costura en el centro.
+  final List<double> contorno;
+  final List<double> oreja;
+
+  /// Líneas de anatomía (clavícula, rodilla, columna…), lado izquierdo.
+  final List<List<double>> detalles;
+
+  /// Bordes del top deportivo (solo mujer, de frente), lado izquierdo.
+  final List<List<double>> top;
+  final List<double> pelo;
+  final List<double> cinta;
+  final _ColaCuerpo? cola;
+
+  /// Lado izquierdo; el derecho es su reflejo.
+  final List<_MusculoCuerpo> musculos;
+}
+
+/// Lee el formato de los datos: 0 M, 1 L, 2 Q, 3 C, 4 Z, 5 elipse (cx, cy,
+/// ancho, alto, ángulo), 6 rectángulo redondeado (l, t, r, b, radio).
+Path _caminoCuerpo(List<double> a, {bool espejo = false}) {
+  double x(double v) => espejo ? 200 - v : v;
+  final Path p = Path();
+  int i = 0;
+  while (i < a.length) {
+    final int op = a[i++].round();
+    switch (op) {
+      case 0:
+        p.moveTo(x(a[i]), a[i + 1]);
+        i += 2;
+      case 1:
+        p.lineTo(x(a[i]), a[i + 1]);
+        i += 2;
+      case 2:
+        p.quadraticBezierTo(x(a[i]), a[i + 1], x(a[i + 2]), a[i + 3]);
+        i += 4;
+      case 3:
+        p.cubicTo(x(a[i]), a[i + 1], x(a[i + 2]), a[i + 3], x(a[i + 4]), a[i + 5]);
+        i += 6;
+      case 4:
+        p.close();
+      case 5:
+        final double ang = espejo ? -a[i + 4] : a[i + 4];
+        final double c = math.cos(ang);
+        final double s = math.sin(ang);
+        final Path o = Path()..addOval(Rect.fromCenter(center: Offset.zero, width: a[i + 2], height: a[i + 3]));
+        p.addPath(
+            o.transform(Float64List.fromList(<double>[
+              c, s, 0, 0, //
+              -s, c, 0, 0, //
+              0, 0, 1, 0, //
+              x(a[i]), a[i + 1], 0, 1,
+            ])),
+            Offset.zero);
+        i += 5;
+      case 6:
+        final double l = espejo ? 200 - a[i + 2] : a[i];
+        final double r = espejo ? 200 - a[i] : a[i + 2];
+        p.addRRect(RRect.fromLTRBR(l, a[i + 1], r, a[i + 3], Radius.circular(a[i + 4])));
+        i += 5;
+      default:
+        return p;
+    }
+  }
+  return p;
+}
+
+Path _fibrasCuerpo(List<double> f, {bool espejo = false}) {
+  final Path p = Path();
+  for (int i = 0; i + 3 < f.length; i += 4) {
+    p
+      ..moveTo(espejo ? 200 - f[i] : f[i], f[i + 1])
+      ..lineTo(espejo ? 200 - f[i + 2] : f[i + 2], f[i + 3]);
+  }
+  return p;
+}
+
+/// Un músculo ya armado: sus partes de los dos lados, juntas.
+class _GrupoCuerpo {
+  _GrupoCuerpo(this.grupo);
+  final GrupoMuscular grupo;
+
+  /// Todas las partes, de los dos lados (para tocar, recortar y brillar).
+  final Path forma = Path();
+  final Path fibras = Path();
+  final List<Path> partes = <Path>[];
+  final List<Rect> cajasPartes = <Rect>[];
+
+  /// Caja de cada lado: [izquierdo, derecho].
+  final List<Rect> lados = <Rect>[];
+
+  List<ui.PathMetric>? _metricas;
+  List<ui.PathMetric> get metricas => _metricas ??= forma.computeMetrics().toList();
+}
+
 class _FormasCuerpo {
-  const _FormasCuerpo._();
+  _FormasCuerpo._(_DatosCuerpo d) {
+    contorno = _caminoCuerpo(d.contorno);
+    oreja = Path()
+      ..addPath(_caminoCuerpo(d.oreja), Offset.zero)
+      ..addPath(_caminoCuerpo(d.oreja, espejo: true), Offset.zero);
+    for (final List<double> l in d.detalles) {
+      detalles
+        ..addPath(_caminoCuerpo(l), Offset.zero)
+        ..addPath(_caminoCuerpo(l, espejo: true), Offset.zero);
+    }
+    conTop = d.top.isNotEmpty;
+    for (final List<double> l in d.top) {
+      top
+        ..addPath(_caminoCuerpo(l), Offset.zero)
+        ..addPath(_caminoCuerpo(l, espejo: true), Offset.zero);
+    }
+    pelo = _caminoCuerpo(d.pelo);
+    cinta = _caminoCuerpo(d.cinta);
+    final _ColaCuerpo? c = d.cola;
+    if (c != null) {
+      cola = _caminoCuerpo(c.forma);
+      nudoCola = Offset(c.x, c.y);
+    }
+    final Map<GrupoMuscular, List<Rect>> cajas = <GrupoMuscular, List<Rect>>{};
+    for (final _MusculoCuerpo m in d.musculos) {
+      final _GrupoCuerpo g = grupos.putIfAbsent(m.grupo, () => _GrupoCuerpo(m.grupo));
+      for (final bool espejo in <bool>[false, true]) {
+        final Path p = _caminoCuerpo(m.forma, espejo: espejo);
+        final Rect r = p.getBounds();
+        g.forma.addPath(p, Offset.zero);
+        g.fibras.addPath(_fibrasCuerpo(m.fibras, espejo: espejo), Offset.zero);
+        g.partes.add(p);
+        g.cajasPartes.add(r);
+        final List<Rect> cs = cajas.putIfAbsent(m.grupo, () => <Rect>[Rect.zero, Rect.zero]);
+        final int k = espejo ? 1 : 0;
+        cs[k] = cs[k] == Rect.zero ? r : cs[k].expandToInclude(r);
+      }
+    }
+    cajas.forEach((GrupoMuscular g, List<Rect> cs) => grupos[g]!.lados.addAll(cs));
+  }
 
   static const double ancho = 200;
   static const double alto = 440;
 
-  static Path _ovalo(double cx, double cy, double w, double h, [double angulo = 0]) {
-    final Path p = Path()..addOval(Rect.fromCenter(center: Offset.zero, width: w, height: h));
-    final double c = math.cos(angulo);
-    final double s = math.sin(angulo);
-    return p.transform(Float64List.fromList(<double>[
-      c, s, 0, 0, //
-      -s, c, 0, 0, //
-      0, 0, 1, 0, //
-      cx, cy, 0, 1,
-    ]));
-  }
+  late final Path contorno;
+  late final Path oreja;
+  final Path detalles = Path();
+  final Path top = Path();
+  bool conTop = false;
+  late final Path pelo;
+  late final Path cinta;
+  Path? cola;
+  Offset? nudoCola;
+  final Map<GrupoMuscular, _GrupoCuerpo> grupos = <GrupoMuscular, _GrupoCuerpo>{};
 
-  static Path _espejo(Path p) => p.transform(Float64List.fromList(<double>[
-        -1, 0, 0, 0, //
-        0, 1, 0, 0, //
-        0, 0, 1, 0, //
-        ancho, 0, 0, 1,
-      ]));
+  static final Map<String, _FormasCuerpo> _hechas = <String, _FormasCuerpo>{};
 
-  static Path _par(Path izquierda) => Path()
-    ..addPath(izquierda, Offset.zero)
-    ..addPath(_espejo(izquierda), Offset.zero);
+  static _FormasCuerpo de({required bool mujer, required bool espalda}) =>
+      _hechas.putIfAbsent('${mujer ? 'm' : 'h'}${espalda ? 'e' : 'f'}', () {
+        if (mujer) return _FormasCuerpo._(espalda ? _cuerpoMujerEspalda : _cuerpoMujerFrente);
+        return _FormasCuerpo._(espalda ? _cuerpoHombreEspalda : _cuerpoHombreFrente);
+      });
 
-  /// Torso y cabeza (relleno base).
-  static Path torso() {
-    final Path izq = Path()
-      ..moveTo(100, 74)
-      ..lineTo(80, 77)
-      ..quadraticBezierTo(60, 82, 55, 96)
-      ..quadraticBezierTo(56, 116, 60, 132)
-      ..quadraticBezierTo(66, 180, 70, 228)
-      ..quadraticBezierTo(64, 248, 66, 262)
-      ..lineTo(100, 266)
-      ..close();
-    return _par(izq)
-      ..addOval(Rect.fromCenter(center: const Offset(100, 36), width: 36, height: 44))
-      ..addRRect(RRect.fromLTRBR(90, 54, 110, 78, const Radius.circular(6)));
-  }
-
-  /// Extremidades como trazos gruesos: [desde, hasta, grosor].
-  static const List<List<double>> extremidades = <List<double>>[
-    <double>[55, 94, 46, 188, 26], // brazo
-    <double>[45, 192, 35, 282, 21], // antebrazo
-    <double>[82, 264, 78, 352, 40], // muslo
-    <double>[78, 354, 80, 428, 26], // pierna
-  ];
-
-  static Map<GrupoMuscular, Path> musculos({required bool espalda}) {
-    final Map<GrupoMuscular, Path> m = <GrupoMuscular, Path>{};
-    m[GrupoMuscular.hombros] = _par(_ovalo(57, 100, 26, 32, 0.25));
-    m[GrupoMuscular.antebrazos] = _par(_ovalo(40, 236, 17, 64, 0.11));
-    if (!espalda) {
-      m[GrupoMuscular.pecho] = _par(Path()
-        ..moveTo(99, 88)
-        ..lineTo(78, 86)
-        ..quadraticBezierTo(64, 92, 64, 110)
-        ..quadraticBezierTo(66, 128, 84, 132)
-        ..quadraticBezierTo(96, 132, 99, 126)
-        ..close());
-      m[GrupoMuscular.biceps] = _par(_ovalo(50, 142, 18, 48, 0.12));
-      m[GrupoMuscular.abdomen] = Path()
-        ..addRRect(RRect.fromLTRBR(84, 138, 116, 230, const Radius.circular(12)));
-      m[GrupoMuscular.piernas] = _par(Path()
-        ..moveTo(68, 268)
-        ..quadraticBezierTo(62, 304, 72, 344)
-        ..quadraticBezierTo(81, 352, 91, 344)
-        ..quadraticBezierTo(99, 304, 97, 268)
-        ..close());
-      m[GrupoMuscular.pantorrillas] = _par(_ovalo(77, 390, 16, 54, -0.03));
-    } else {
-      m[GrupoMuscular.espalda] = _par(Path()
-        ..moveTo(99, 76)
-        ..lineTo(84, 80)
-        ..quadraticBezierTo(66, 86, 62, 98)
-        ..quadraticBezierTo(62, 142, 77, 196)
-        ..quadraticBezierTo(88, 210, 99, 212)
-        ..close());
-      m[GrupoMuscular.triceps] = _par(_ovalo(49, 144, 18, 46, 0.12));
-      m[GrupoMuscular.piernas] = _par(Path()
-        ..addOval(Rect.fromCenter(center: const Offset(84, 268), width: 32, height: 34))
-        ..moveTo(68, 288)
-        ..quadraticBezierTo(63, 320, 73, 346)
-        ..quadraticBezierTo(82, 353, 91, 346)
-        ..quadraticBezierTo(99, 320, 97, 288)
-        ..close());
-      m[GrupoMuscular.pantorrillas] = _par(_ovalo(78, 384, 22, 56, -0.03));
+  /// El músculo bajo un punto (en coordenadas de la caja). Los pequeños
+  /// primero: un toque en el bíceps no debe caer en el hombro.
+  GrupoMuscular? tocado(Offset p) {
+    const List<GrupoMuscular> orden = <GrupoMuscular>[
+      GrupoMuscular.biceps,
+      GrupoMuscular.triceps,
+      GrupoMuscular.antebrazos,
+      GrupoMuscular.hombros,
+      GrupoMuscular.pantorrillas,
+      GrupoMuscular.abdomen,
+      GrupoMuscular.pecho,
+      GrupoMuscular.espalda,
+      GrupoMuscular.piernas,
+    ];
+    for (final GrupoMuscular g in orden) {
+      final _GrupoCuerpo? f = grupos[g];
+      if (f != null && f.forma.contains(p)) return g;
     }
-    return m;
-  }
-
-  static final Map<GrupoMuscular, Path> frente = musculos(espalda: false);
-  static final Map<GrupoMuscular, Path> detras = musculos(espalda: true);
-  static final Path cuerpo = torso();
-
-  static Path _capsula(Offset a, Offset b, double r) {
-    final Offset d = b - a;
-    final Offset n = Offset(-d.dy, d.dx) / d.distance * r;
-    return Path()
-      ..addPolygon(<Offset>[a + n, b + n, b - n, a - n], true)
-      ..addOval(Rect.fromCircle(center: a, radius: r))
-      ..addOval(Rect.fromCircle(center: b, radius: r));
-  }
-
-  /// La silueta entera (torso, cabeza, extremidades, manos y pies): para el
-  /// halo de detrás y para recortar la línea de escaneo.
-  static final Path contorno = () {
-    final Path p = Path()..addPath(cuerpo, Offset.zero);
-    for (final List<double> e in extremidades) {
-      for (final bool espejo in <bool>[false, true]) {
-        p.addPath(
-            _capsula(Offset(espejo ? 200 - e[0] : e[0], e[1]), Offset(espejo ? 200 - e[2] : e[2], e[3]), e[4] / 2),
-            Offset.zero);
+    // Margen de 6 unidades: los músculos delgados son difíciles de atinar.
+    double mejor = 6;
+    GrupoMuscular? cerca;
+    for (final GrupoMuscular g in orden) {
+      final _GrupoCuerpo? f = grupos[g];
+      if (f == null) continue;
+      for (final Rect r in f.cajasPartes) {
+        final double dx = math.max(0, math.max(r.left - p.dx, p.dx - r.right));
+        final double dy = math.max(0, math.max(r.top - p.dy, p.dy - r.bottom));
+        final double d = math.sqrt(dx * dx + dy * dy);
+        if (d < mejor && f.forma.contains(Offset(p.dx.clamp(r.left, r.right), p.dy.clamp(r.top, r.bottom)))) {
+          mejor = d;
+          cerca = g;
+        }
       }
     }
-    for (final bool espejo in <bool>[false, true]) {
-      double x(double v) => espejo ? 200 - v : v;
-      p
-        ..addOval(Rect.fromCenter(center: Offset(x(32), 298), width: 15, height: 24))
-        ..addOval(Rect.fromCenter(center: Offset(x(80), 436), width: 24, height: 10));
-    }
-    return p;
-  }();
-
-  /// Centro de cada músculo del lado izquierdo (el derecho es su espejo).
-  static const Map<GrupoMuscular, Offset> centros = <GrupoMuscular, Offset>{
-    GrupoMuscular.hombros: Offset(57, 100),
-    GrupoMuscular.antebrazos: Offset(40, 236),
-    GrupoMuscular.pecho: Offset(82, 110),
-    GrupoMuscular.biceps: Offset(50, 142),
-    GrupoMuscular.triceps: Offset(49, 144),
-    GrupoMuscular.abdomen: Offset(100, 184),
-    GrupoMuscular.piernas: Offset(83, 306),
-    GrupoMuscular.pantorrillas: Offset(77, 388),
-    GrupoMuscular.espalda: Offset(80, 140),
-  };
+    return cerca;
+  }
 }
 
 /// Cómo se ve cada músculo en la silueta.
@@ -42925,6 +43034,12 @@ class _LuzSilueta {
   final int rango;
   final bool dormido;
   final bool aPunto;
+
+  @override
+  bool operator ==(Object o) => o is _LuzSilueta && o.rango == rango && o.dormido == dormido && o.aPunto == aPunto;
+
+  @override
+  int get hashCode => Object.hash(rango, dormido, aPunto);
 }
 
 class SiluetaRanked extends StatefulWidget {
@@ -42939,6 +43054,7 @@ class SiluetaRanked extends StatefulWidget {
     this.bendicion,
     this.altura = 360,
     this.animada = true,
+    this.mujer,
   });
 
   final Map<GrupoMuscular, int> rangos;
@@ -42951,6 +43067,9 @@ class SiluetaRanked extends StatefulWidget {
   final double altura;
   final bool animada;
 
+  /// Cuerpo de mujer. Sin dato, el de quien tiene la sesión.
+  final bool? mujer;
+
   @override
   State<SiluetaRanked> createState() => _SiluetaRankedState();
 }
@@ -42961,6 +43080,8 @@ class _SiluetaRankedState extends State<SiluetaRanked>
   // las brasas avanzan sin frenar en los extremos.
   late final AnimationController _c =
       AnimationController(vsync: this, duration: const Duration(milliseconds: 4000));
+
+  bool get _mujer => widget.mujer ?? cuerpoMujerDeSesion();
 
   @override
   void didChangeDependencies() {
@@ -42987,27 +43108,10 @@ class _SiluetaRankedState extends State<SiluetaRanked>
     final double dx = (s.width - _FormasCuerpo.ancho * k) / 2;
     final double dy = (s.height - _FormasCuerpo.alto * k) / 2;
     final Offset local = Offset((p.dx - dx) / k, (p.dy - dy) / k);
-    final Map<GrupoMuscular, Path> formas =
-        widget.espalda ? _FormasCuerpo.detras : _FormasCuerpo.frente;
-    // Los pequeños primero: un toque en el bíceps no debe caer en el hombro.
-    const List<GrupoMuscular> orden = <GrupoMuscular>[
-      GrupoMuscular.biceps,
-      GrupoMuscular.triceps,
-      GrupoMuscular.antebrazos,
-      GrupoMuscular.hombros,
-      GrupoMuscular.pantorrillas,
-      GrupoMuscular.abdomen,
-      GrupoMuscular.pecho,
-      GrupoMuscular.espalda,
-      GrupoMuscular.piernas,
-    ];
-    for (final GrupoMuscular g in orden) {
-      final Path? f = formas[g];
-      if (f != null && f.contains(local)) {
-        HapticFeedback.selectionClick();
-        cb(g);
-        return;
-      }
+    final GrupoMuscular? g = _FormasCuerpo.de(mujer: _mujer, espalda: widget.espalda).tocado(local);
+    if (g != null) {
+      HapticFeedback.selectionClick();
+      cb(g);
     }
   }
 
@@ -43021,6 +43125,7 @@ class _SiluetaRankedState extends State<SiluetaRanked>
           aPunto: widget.aPunto.contains(g),
         ),
     };
+    final bool mujer = _mujer;
     return SizedBox(
       height: widget.altura,
       child: LayoutBuilder(
@@ -43038,6 +43143,7 @@ class _SiluetaRankedState extends State<SiluetaRanked>
                     luces: luces,
                     seleccion: widget.seleccion,
                     espalda: widget.espalda,
+                    mujer: mujer,
                     t: _c.value,
                     bendicion: widget.bendicion,
                   ),
@@ -43056,6 +43162,7 @@ class _SiluetaPainter extends CustomPainter {
     required this.luces,
     required this.seleccion,
     required this.espalda,
+    required this.mujer,
     required this.t,
     required this.bendicion,
   });
@@ -43063,12 +43170,33 @@ class _SiluetaPainter extends CustomPainter {
   final Map<GrupoMuscular, _LuzSilueta> luces;
   final Set<GrupoMuscular> seleccion;
   final bool espalda;
+  final bool mujer;
 
   /// 0–1 del bucle de 4 s.
   final double t;
   final GrupoMuscular? bendicion;
 
   static const double _tau = math.pi * 2;
+  static const Color _borde = Color(0xFF4A3C6E);
+  static const Color _cinta = Color(0xFFD9435A);
+
+  // Lo quieto se graba una vez (el cuerpo base, los músculos con sus fibras,
+  // la cabeza) y en cada cuadro solo se dibuja lo que se mueve.
+  static final Map<String, ui.Picture> _grabados = <String, ui.Picture>{};
+
+  static ui.Picture _grabado(String clave, void Function(Canvas c) dibujar) {
+    final ui.Picture? hecho = _grabados.remove(clave);
+    if (hecho != null) {
+      _grabados[clave] = hecho; // al final: el más reciente
+      return hecho;
+    }
+    final ui.PictureRecorder r = ui.PictureRecorder();
+    dibujar(Canvas(r));
+    final ui.Picture p = r.endRecording();
+    if (_grabados.length >= 14) _grabados.remove(_grabados.keys.first);
+    _grabados[clave] = p;
+    return p;
+  }
 
   static double _hash(double a, double b) {
     final double x = math.sin(a * 127.1 + b * 311.7) * 43758.5453;
@@ -43076,6 +43204,9 @@ class _SiluetaPainter extends CustomPainter {
   }
 
   static Color _al(Color c, double a) => c.withValues(alpha: a.clamp(0.0, 1.0));
+  static Color _mezcla(Color a, Color b, double t) => Color.lerp(a, b, t)!;
+
+  static int _tier(int r) => r < 0 ? -1 : RangosRanked.tierDe(r).tier.index;
 
   void _glow(Canvas c, Offset p, double r, Color col, double a) {
     if (r <= 0 || a <= 0) return;
@@ -43087,28 +43218,237 @@ class _SiluetaPainter extends CustomPainter {
               .createShader(Rect.fromCircle(center: p, radius: r)));
   }
 
+  Paint _trazo(Color col, double w) => Paint()
+    ..style = PaintingStyle.stroke
+    ..color = col
+    ..strokeWidth = w
+    ..strokeCap = StrokeCap.round
+    ..strokeJoin = StrokeJoin.round;
+
+  Color _colorDe(GrupoMuscular g) {
+    final _LuzSilueta l = luces[g]!;
+    Color col = RangosRanked.color(l.rango);
+    if (l.rango < 0) col = ColoresTradicion.bordeVivo;
+    if (l.dormido) col = _mezcla(col, ColoresTradicion.textoTenue, 0.6);
+    return col;
+  }
+
+  // ---- Lo quieto --------------------------------------------------------
+
+  void _base(Canvas c, _FormasCuerpo f) {
+    c.drawPath(
+        f.contorno,
+        Paint()
+          ..color = _al(ColoresTradicion.violeta, 0.25)
+          ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 8));
+    c.drawPath(f.contorno, _trazo(_borde, 2.6));
+    c.drawPath(f.oreja, _trazo(_borde, 2.6));
+    final Paint relleno = Paint()
+      ..shader = ui.Gradient.linear(const Offset(0, 10), const Offset(0, 440),
+          const <Color>[Color(0xFF2E2449), Color(0xFF211A35), Color(0xFF15101F)], const <double>[0, 0.55, 1]);
+    c.drawPath(f.contorno, relleno);
+    c.drawPath(f.oreja, relleno);
+    // Luz de borde desde arriba a la izquierda.
+    c.save();
+    c.clipPath(f.contorno);
+    c.drawPath(
+        f.contorno,
+        Paint()
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 5
+          ..shader = ui.Gradient.linear(const Offset(30, 40), const Offset(170, 300), <Color>[
+            _al(const Color(0xFFC9B6FF), 0.55),
+            _al(ColoresTradicion.violeta, 0.18),
+            _al(ColoresTradicion.violeta, 0),
+          ], const <double>[0, 0.5, 1]));
+    c.restore();
+    c.drawPath(f.detalles, _trazo(_al(ColoresTradicion.violetaClaro, 0.22), 1));
+  }
+
+  void _musculos(Canvas c, _FormasCuerpo f) {
+    f.grupos.forEach((GrupoMuscular g, _GrupoCuerpo m) {
+      final _LuzSilueta l = luces[g]!;
+      final Color col = _colorDe(g);
+      final int tr = _tier(l.rango);
+      final bool elegido = seleccion.contains(g);
+      final double a = l.rango < 0 ? 0.42 : 0.97;
+      for (int i = 0; i < m.partes.length; i++) {
+        final Rect b = m.cajasPartes[i];
+        c.drawPath(
+            m.partes[i],
+            Paint()
+              ..shader = ui.Gradient.linear(Offset(0, b.top), Offset(0, b.bottom), <Color>[
+                _al(_mezcla(col, Colors.white, elegido ? 0.42 : 0.28), a),
+                _al(col, a),
+                _al(_mezcla(col, Colors.black, 0.45), a),
+              ], const <double>[0, 0.55, 1]));
+      }
+      c.save();
+      c.clipPath(m.forma);
+      c.drawPath(m.fibras, _trazo(_al(_mezcla(col, Colors.black, 0.55), l.rango < 0 ? 0.22 : 0.28), 0.5));
+      c.save();
+      c.translate(0.6, -0.4);
+      c.drawPath(m.fibras, _trazo(_al(Colors.white, l.rango < 0 ? 0.04 : 0.10 + 0.015 * math.max(0, tr)), 0.35));
+      c.restore();
+      for (int i = 0; i < m.partes.length; i++) {
+        final Rect b = m.cajasPartes[i];
+        final bool derecho = b.center.dx > 100;
+        _glow(c, Offset(b.center.dx + (derecho ? 4 : -4), b.top + b.height * 0.3), math.max(b.width, b.height) * 0.55,
+            Colors.white, l.rango < 0 ? 0.05 : 0.20);
+      }
+      c.restore();
+      final Paint borde =
+          _trazo(l.rango < 0 ? _al(ColoresTradicion.violetaClaro, 0.28) : _al(_mezcla(col, Colors.black, 0.55), 0.9), 0.9);
+      for (final Path p in m.partes) {
+        c.drawPath(p, borde);
+      }
+    });
+  }
+
+  void _cabeza(Canvas c, _FormasCuerpo f) {
+    if (f.conTop) {
+      c.drawPath(f.top, _trazo(_al(const Color(0xFF2A2142), 0.95), 2.2));
+      c.drawPath(f.top, _trazo(_al(const Color(0xFFC9B6FF), 0.55), 0.8));
+    }
+    if (!espalda) {
+      // Rostro sereno: los ojos cerrados, concentrado.
+      for (final double s in <double>[-1, 1]) {
+        c.drawArc(Rect.fromCircle(center: Offset(100 + 6.5 * s, 37), radius: 3.2), 0.15 * math.pi, 0.7 * math.pi, false,
+            _trazo(_al(const Color(0xFFC9B6FF), 0.6), 1.3));
+        if (mujer) {
+          c.drawLine(Offset(100 + 9.6 * s, 38.2), Offset(100 + 11.4 * s, 37.2), _trazo(_al(const Color(0xFFC9B6FF), 0.6), 0.9));
+        }
+        c.drawPath(
+            Path()
+              ..moveTo(100 + 3.5 * s, 31.5)
+              ..quadraticBezierTo(100 + 7 * s, 30, 100 + 10.5 * s, mujer ? 31.5 : 31.8),
+            _trazo(_al(const Color(0xFFC9B6FF), 0.35), mujer ? 0.9 : 1.2));
+      }
+      c.drawPath(
+          Path()
+            ..moveTo(97.5, 48.5)
+            ..quadraticBezierTo(100, 49.5, 102.5, 48.5),
+          _trazo(_al(const Color(0xFFC9B6FF), 0.25), 1));
+    }
+    // Pelo con brillo.
+    c.drawPath(f.pelo, _trazo(_borde, 1.2));
+    c.drawPath(
+        f.pelo,
+        Paint()
+          ..shader = ui.Gradient.linear(
+              const Offset(0, 0), const Offset(0, 56), const <Color>[Color(0xFF2B2245), Color(0xFF110D1B)]));
+    c.save();
+    c.clipPath(f.pelo);
+    c.drawPath(
+        f.pelo,
+        Paint()
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 3
+          ..shader = ui.Gradient.linear(const Offset(85, 6), const Offset(115, 30),
+              <Color>[_al(const Color(0xFFA78BFA), 0.6), _al(ColoresTradicion.violeta, 0)]));
+    final Paint brillo = _trazo(_al(const Color(0xFFC9B6FF), 0.35), 1.2);
+    c.drawPath(
+        Path()
+          ..moveTo(88, 14)
+          ..quadraticBezierTo(94, 9, 101, 10),
+        brillo);
+    c.drawPath(
+        Path()
+          ..moveTo(104, 10.5)
+          ..quadraticBezierTo(108, 10.5, 111, 13),
+        brillo);
+    c.restore();
+    // La cinta (hachimaki).
+    c.drawPath(f.cinta, Paint()..color = _cinta);
+    c.drawPath(f.cinta, _trazo(_al(const Color(0xFF6B1424), 0.9), 0.6));
+    if (f.cola != null && !espalda) {
+      c.save();
+      c.translate(110, 12.5);
+      c.rotate(0.5);
+      c.drawOval(Rect.fromCenter(center: Offset.zero, width: 5.2, height: 4), Paint()..color = _cinta);
+      c.restore();
+    }
+  }
+
+  void _cola(Canvas c, _FormasCuerpo f, double giro) {
+    final Path? p = f.cola;
+    final Offset? n = f.nudoCola;
+    if (p == null || n == null) return;
+    c.save();
+    c.translate(n.dx, n.dy);
+    c.rotate(giro);
+    c.translate(-n.dx, -n.dy);
+    c.drawPath(p, _trazo(const Color(0xFF5A4A86), 1.2));
+    c.drawPath(p, Paint()..color = const Color(0xFF1E1830));
+    c.drawPath(
+        Path()
+          ..moveTo(n.dx + (espalda ? 1 : 6), n.dy + 6)
+          ..quadraticBezierTo(n.dx + (espalda ? 2 : 14), n.dy + 30, n.dx + (espalda ? 1 : 10), n.dy + 52),
+        _trazo(_al(const Color(0xFFA78BFA), 0.25), 1));
+    c.restore();
+  }
+
+  // ---- Lo que se mueve --------------------------------------------------
+
+  void _estrella(Canvas c, Offset p, double r, Color col) {
+    c.drawPath(
+        Path()
+          ..moveTo(p.dx, p.dy - r)
+          ..quadraticBezierTo(p.dx, p.dy, p.dx + r, p.dy)
+          ..quadraticBezierTo(p.dx, p.dy, p.dx, p.dy + r)
+          ..quadraticBezierTo(p.dx, p.dy, p.dx - r, p.dy)
+          ..quadraticBezierTo(p.dx, p.dy, p.dx, p.dy - r)
+          ..close(),
+        Paint()..color = col);
+  }
+
+  /// Luz que recorre el borde del músculo (trazos de 10 cada 36).
+  void _bordeVivo(Canvas c, _GrupoCuerpo m, Paint p) {
+    final double avance = t * 180;
+    for (final ui.PathMetric pm in m.metricas) {
+      double d = (avance % 36) - 36;
+      while (d < pm.length) {
+        final double a = math.max(0, d);
+        final double b = math.min(pm.length, d + 10);
+        if (b > a) c.drawPath(pm.extractPath(a, b), p);
+        d += 36;
+      }
+    }
+  }
+
   @override
   void paint(Canvas canvas, Size size) {
     final double k = math.min(size.width / _FormasCuerpo.ancho, size.height / _FormasCuerpo.alto);
+    final _FormasCuerpo f = _FormasCuerpo.de(mujer: mujer, espalda: espalda);
     canvas.save();
-    canvas.translate(
-      (size.width - _FormasCuerpo.ancho * k) / 2,
-      (size.height - _FormasCuerpo.alto * k) / 2,
-    );
+    canvas.translate((size.width - _FormasCuerpo.ancho * k) / 2, (size.height - _FormasCuerpo.alto * k) / 2);
     canvas.scale(k);
     final double pulso = 0.5 + 0.5 * math.sin(t * _tau);
     final double resp = math.sin(t * _tau);
 
-    // -- Anillo del suelo con marcas que giran ------------------------------
+    int mejor = -1;
+    for (final _LuzSilueta l in luces.values) {
+      if (!l.dormido) mejor = math.max(mejor, l.rango);
+    }
+    final int tm = _tier(mejor);
+    final Color colM = mejor < 0 ? ColoresTradicion.violeta : RangosRanked.color(mejor);
+
+    // -- Anillo del suelo, con el color del mejor rango ------------------------
     canvas.save();
     canvas.translate(100, 432);
     canvas.scale(1, 0.16);
-    _glow(canvas, Offset.zero, 80, ColoresTradicion.violeta, 0.35 + 0.1 * pulso);
-    canvas.drawCircle(Offset.zero, 70, _avTrazo(_al(ColoresTradicion.violetaClaro, 0.45), 3));
+    _glow(canvas, Offset.zero, 86, colM, 0.30 + 0.1 * pulso);
+    _glow(canvas, Offset.zero, 60, ColoresTradicion.violeta, 0.35);
+    canvas.drawCircle(Offset.zero, 70, _trazo(_al(ColoresTradicion.violetaClaro, 0.45), 3));
     for (int i = 0; i < 24; i++) {
       final double a = t * _tau * 0.25 + i * _tau / 24;
       canvas.drawArc(Rect.fromCircle(center: Offset.zero, radius: 80), a, 0.08, false,
-          _avTrazo(_al(ColoresTradicion.violetaClaro, i % 4 == 0 ? 0.7 : 0.3), 5)..strokeCap = StrokeCap.butt);
+          _trazo(i % 4 == 0 ? _al(colM, 0.8) : _al(ColoresTradicion.violetaClaro, 0.3), 5)..strokeCap = StrokeCap.butt);
+    }
+    for (int i = 0; i < 18; i++) {
+      final double a = -t * _tau * 0.15 + i * _tau / 18;
+      canvas.drawArc(Rect.fromCircle(center: Offset.zero, radius: 94), a, 0.18, false,
+          _trazo(_al(ColoresTradicion.violetaClaro, 0.25), 2)..strokeCap = StrokeCap.butt);
     }
     canvas.restore();
 
@@ -43116,163 +43456,270 @@ class _SiluetaPainter extends CustomPainter {
     canvas.save();
     canvas.translate(0, -resp * 1.2);
 
-    // -- Halo detrás y cuerpo base --------------------------------------------
+    // -- Aura del mejor rango y halo -----------------------------------------
+    if (tm >= 0) {
+      canvas.drawPath(
+          f.contorno,
+          Paint()
+            ..color = _al(colM, 0.07 + 0.025 * tm + 0.04 * pulso)
+            ..maskFilter = MaskFilter.blur(BlurStyle.normal, 10 + tm * 1.5));
+    }
     canvas.drawPath(
-      _FormasCuerpo.contorno,
-      Paint()
-        ..color = _al(ColoresTradicion.violeta, 0.22 + 0.06 * pulso)
-        ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 8),
-    );
-    final Shader degradado = ui.Gradient.linear(
-        const Offset(0, 20), const Offset(0, 440), const <Color>[Color(0xFF2C2346), Color(0xFF16111F)]);
-    const Color bordeCuerpo = Color(0xFF4A3C6E);
-    for (final List<double> e in _FormasCuerpo.extremidades) {
-      for (final bool espejo in <bool>[false, true]) {
-        canvas.drawLine(Offset(espejo ? 200 - e[0] : e[0], e[1]), Offset(espejo ? 200 - e[2] : e[2], e[3]),
-            Paint()
-              ..color = bordeCuerpo
-              ..strokeWidth = e[4] + 2.4
-              ..strokeCap = StrokeCap.round);
-      }
-    }
-    canvas.drawPath(_FormasCuerpo.cuerpo, _avTrazo(bordeCuerpo, 2.4));
-    final Paint base = Paint()..shader = degradado;
-    for (final List<double> e in _FormasCuerpo.extremidades) {
-      for (final bool espejo in <bool>[false, true]) {
-        canvas.drawLine(Offset(espejo ? 200 - e[0] : e[0], e[1]), Offset(espejo ? 200 - e[2] : e[2], e[3]),
-            Paint()
-              ..shader = degradado
-              ..strokeWidth = e[4]
-              ..strokeCap = StrokeCap.round);
-      }
-    }
-    canvas.drawPath(_FormasCuerpo.cuerpo, base);
-    for (final bool espejo in <bool>[false, true]) {
-      double x(double v) => espejo ? 200 - v : v;
-      canvas.drawOval(Rect.fromCenter(center: Offset(x(32), 298), width: 15, height: 24), base);
-      canvas.drawOval(Rect.fromCenter(center: Offset(x(80), 436), width: 24, height: 10), base);
-    }
-    // Rostro sereno (solo de frente): los ojos cerrados, concentrado.
-    if (!espalda) {
-      for (final double s in <double>[-1, 1]) {
-        canvas.drawArc(Rect.fromCircle(center: Offset(100 + 6.5 * s, 38), radius: 3.2), 0.15 * math.pi, 0.7 * math.pi,
-            false, _avTrazo(_al(ColoresTradicion.violetaClaro, 0.55), 1.4));
-      }
-    }
-
-    // -- Músculos -------------------------------------------------------------
-    final Map<GrupoMuscular, Path> formas = espalda ? _FormasCuerpo.detras : _FormasCuerpo.frente;
-    formas.forEach((GrupoMuscular g, Path p) {
-      final _LuzSilueta l = luces[g]!;
-      Color col = RangosRanked.color(l.rango);
-      if (l.rango < 0) col = ColoresTradicion.bordeVivo;
-      if (l.dormido) col = Color.lerp(col, ColoresTradicion.textoTenue, 0.6)!;
-      final bool elegido = seleccion.contains(g);
-      final Offset centro = _FormasCuerpo.centros[g] ?? p.getBounds().center;
-      final List<Offset> lados =
-          g == GrupoMuscular.abdomen ? <Offset>[centro] : <Offset>[centro, Offset(200 - centro.dx, centro.dy)];
-      final Rect r = p.getBounds();
-
-      // Resplandor según el rango (los altos brillan más).
-      if (l.rango >= 0) {
-        final double fuerza = 0.2 + 0.03 * (l.rango ~/ 3) + (l.aPunto ? 0.25 * pulso : 0) + (elegido ? 0.3 : 0);
-        canvas.drawPath(
-          p,
-          Paint()
-            ..color = _al(col, math.min(0.9, fuerza))
-            ..maskFilter = MaskFilter.blur(BlurStyle.normal, 5 + 3 * pulso),
-        );
-      }
-      canvas.drawPath(
-        p,
+        f.contorno,
         Paint()
-          ..shader = ui.Gradient.linear(Offset(0, centro.dy - 40), Offset(0, centro.dy + 40), <Color>[
-            _al(Color.lerp(col, Colors.white, elegido ? 0.35 : 0.2)!, l.rango < 0 ? 0.45 : 0.96),
-            _al(Color.lerp(col, Colors.black, 0.38)!, l.rango < 0 ? 0.45 : 0.96),
-          ]),
-      );
-      // Brillo interior y un destello que cruza el músculo.
-      canvas.save();
-      canvas.clipPath(p);
-      for (final Offset q in lados) {
-        _glow(canvas, q.translate(q.dx < 100 ? -8 : 8, -12), 26, Colors.white, l.rango < 0 ? 0.05 : 0.22);
-      }
-      if (l.rango >= 0) {
-        final double f = (t * 2 + centro.dy / 440) % 1.0;
-        canvas.translate(-60 + f * 320, 0);
-        canvas.rotate(0.5);
-        const Rect banda = Rect.fromLTWH(-14, -300, 28, 900);
-        canvas.drawRect(
-          banda,
-          Paint()
-            ..shader = ui.Gradient.linear(const Offset(-14, 0), const Offset(14, 0),
-                <Color>[_al(Colors.white, 0), _al(Colors.white, 0.22), _al(Colors.white, 0)], const <double>[0, 0.5, 1]),
-        );
-      }
-      canvas.restore();
-      canvas.drawPath(
-          p,
-          _avTrazo(l.rango < 0 ? _al(ColoresTradicion.violetaClaro, 0.25) : _al(Color.lerp(col, Colors.black, 0.5)!, 0.9), 1));
+          ..color = _al(ColoresTradicion.violeta, 0.06 * pulso)
+          ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 8));
 
-      if (elegido) {
-        canvas.drawPath(p, _avTrazo(_al(Colors.white, 0.8 + 0.2 * pulso), 1.8 + 0.8 * pulso));
-        // Onda que se expande desde el borde del músculo.
-        final double fo = (t * 2) % 1.0;
-        canvas.drawPath(p, _avTrazo(_al(Colors.white, 0.35 * (1 - fo)), 1.2 + 14 * fo));
-      }
-      if (g == bendicion && !elegido) {
-        canvas.drawPath(p, _avTrazo(_al(ColoresTradicion.dorado, 0.4 + 0.5 * pulso), 1.4));
-      }
-      // A punto de ascender: dos chispas doradas que lo rondan.
-      if (l.aPunto) {
-        final double rad = math.max(r.height / 2.4, 14);
-        for (final Offset q in lados) {
-          for (int i = 0; i < 2; i++) {
-            final double a = t * _tau * 2 + i * math.pi;
-            final Offset c = q + Offset(math.cos(a) * rad * 0.8, math.sin(a) * rad);
-            _glow(canvas, c, 6, const Color(0xFFF2D493), 0.5);
-            _avCirculo(canvas, c, 1.6, _al(const Color(0xFFFFF4CC), 0.9));
+    final double meneo = math.sin(t * _tau * 2) * 0.08;
+    if (!espalda) _cola(canvas, f, meneo);
+
+    canvas.drawPicture(_grabado('base${mujer ? 'm' : 'h'}${espalda ? 'e' : 'f'}', (Canvas c) => _base(c, f)));
+
+    // -- Detrás de los músculos: resplandor y rayos dorados --------------------
+    f.grupos.forEach((GrupoMuscular g, _GrupoCuerpo m) {
+      final _LuzSilueta l = luces[g]!;
+      if (l.rango < 0) return;
+      final int tr = _tier(l.rango);
+      final Color col = _colorDe(g);
+      final bool elegido = seleccion.contains(g);
+      if (tr >= 6 && !l.dormido) {
+        for (final Rect b in m.lados) {
+          canvas.save();
+          canvas.translate(b.center.dx, b.center.dy);
+          canvas.rotate(t * _tau * 0.125);
+          for (int i = 0; i < 8; i++) {
+            final double a = i * _tau / 8;
+            final double largo = math.max(b.width, b.height) * (0.5 + 0.12 * math.sin(t * _tau * 2 + i)) + 10;
+            final Offset fin = Offset(math.cos(a) * largo, math.sin(a) * largo);
+            canvas.drawPath(
+                Path()
+                  ..moveTo(0, 0)
+                  ..lineTo(math.cos(a - 0.07) * largo, math.sin(a - 0.07) * largo)
+                  ..lineTo(math.cos(a + 0.07) * largo, math.sin(a + 0.07) * largo)
+                  ..close(),
+                Paint()..shader = ui.Gradient.linear(Offset.zero, fin, <Color>[_al(col, 0.30), _al(col, 0)]));
           }
+          canvas.restore();
         }
       }
-      // Brasas que suben de los músculos de rango alto (Hatamoto en adelante).
-      if (l.rango >= 9 && !l.dormido) {
-        final int n = 2 + l.rango ~/ 6;
-        for (int i = 0; i < n; i++) {
-          for (int s = 0; s < lados.length; s++) {
-            final Offset q = lados[s];
-            final double fase = (t * (1.5 + _hash(i.toDouble(), q.dy)) + _hash(q.dy, i.toDouble()) + s * 0.5) % 1.0;
-            _avCirculo(
-                canvas,
-                Offset(q.dx + (_hash(i.toDouble(), 3) - 0.5) * 16 + math.sin(fase * _tau * 2 + i) * 3, q.dy - fase * 46),
-                1.1,
-                _al(col, 0.85 * math.sin(fase * math.pi)));
+      final double fuerza = 0.22 +
+          0.05 * tr +
+          (l.aPunto ? 0.25 * pulso : 0) +
+          (elegido ? 0.3 : 0) +
+          (tr >= 2 ? 0.12 * pulso : 0);
+      canvas.drawPath(
+          m.forma,
+          Paint()
+            ..color = _al(col, math.min(0.95, fuerza))
+            ..maskFilter = MaskFilter.blur(BlurStyle.normal, 4 + tr * 0.8 + 3 * pulso));
+    });
+
+    final StringBuffer clave = StringBuffer('mus${mujer ? 'm' : 'h'}${espalda ? 'e' : 'f'}');
+    for (final GrupoMuscular g in f.grupos.keys) {
+      final _LuzSilueta l = luces[g]!;
+      clave.write('|${l.rango}${l.dormido ? 'd' : ''}${seleccion.contains(g) ? 's' : ''}');
+    }
+    canvas.drawPicture(_grabado(clave.toString(), (Canvas c) => _musculos(c, f)));
+
+    // -- Encima de los músculos: lo que se mueve -------------------------------
+    f.grupos.forEach((GrupoMuscular g, _GrupoCuerpo m) {
+      final _LuzSilueta l = luces[g]!;
+      final Color col = _colorDe(g);
+      final int tr = _tier(l.rango);
+      final bool elegido = seleccion.contains(g);
+      final Rect caja = m.forma.getBounds();
+      if (l.rango >= 0) {
+        canvas.save();
+        canvas.clipPath(m.forma);
+        // Energía que corre por las fibras (Rōnin en adelante).
+        if (tr >= 1 && !l.dormido) {
+          final double fy = caja.bottom - ((t * (1 + tr * 0.15) + _hash(caja.center.dx, caja.center.dy)) % 1.0) * (caja.height + 30) + 15;
+          canvas.drawPath(
+              m.fibras,
+              Paint()
+                ..style = PaintingStyle.stroke
+                ..strokeWidth = 0.9
+                ..shader = ui.Gradient.linear(Offset(0, fy - 8), Offset(0, fy + 8), <Color>[
+                  _al(col, 0),
+                  _al(_mezcla(col, Colors.white, 0.6), 0.5 + 0.05 * tr),
+                  _al(col, 0),
+                ], const <double>[0, 0.5, 1]));
+        }
+        // Kami: iridiscencia que se desliza.
+        if (tr >= 7) {
+          final double d = math.sin(t * _tau) * 20;
+          canvas.drawPath(
+              m.forma,
+              Paint()
+                ..blendMode = BlendMode.overlay
+                ..shader = ui.Gradient.linear(Offset(caja.left - 20 + d, caja.top), Offset(caja.right + 20 + d, caja.bottom), <Color>[
+                  _al(const Color(0xFFFF8FD8), 0.55),
+                  _al(const Color(0xFF8FD8FF), 0.55),
+                  _al(const Color(0xFFB8FF9F), 0.55),
+                  _al(const Color(0xFFFFE58F), 0.55),
+                  _al(const Color(0xFFFF8FD8), 0.55),
+                ], const <double>[0, 0.25, 0.5, 0.75, 1]));
+        }
+        // Un destello que cruza.
+        final double fb = (t * 2 + caja.center.dy / 440) % 1.0;
+        canvas.translate(-60 + fb * 320, 0);
+        canvas.rotate(0.5);
+        canvas.drawRect(
+          const Rect.fromLTWH(-14, -300, 28, 900),
+          Paint()
+            ..shader = ui.Gradient.linear(const Offset(-14, 0), const Offset(14, 0), <Color>[
+              _al(Colors.white, 0),
+              _al(Colors.white, 0.16 + 0.03 * tr),
+              _al(Colors.white, 0),
+            ], const <double>[0, 0.5, 1]),
+        );
+        canvas.restore();
+      }
+      // Luz que recorre el borde (Samurái en adelante).
+      if (tr >= 2 && !l.dormido) {
+        _bordeVivo(canvas, m, _trazo(_al(_mezcla(col, Colors.white, 0.5), 0.55 + 0.05 * tr), 1.1 + 0.15 * tr));
+      }
+      if (elegido) {
+        canvas.drawPath(m.forma, _trazo(_al(Colors.white, 0.8 + 0.2 * pulso), 1.8 + 0.8 * pulso));
+        // Onda que se expande desde el borde del músculo.
+        final double fo = (t * 2) % 1.0;
+        canvas.drawPath(m.forma, _trazo(_al(Colors.white, 0.35 * (1 - fo)), 1.2 + 14 * fo));
+      }
+      if (g == bendicion && !elegido) {
+        canvas.drawPath(m.forma, _trazo(_al(ColoresTradicion.dorado, 0.4 + 0.5 * pulso), 1.4));
+      }
+      if (l.rango < 0 && !l.aPunto) return;
+      for (int lado = 0; lado < m.lados.length; lado++) {
+        final Rect b = m.lados[lado];
+        final double sd = _hash(b.center.dx, b.center.dy) * 10;
+        if (l.aPunto) {
+          // A punto de ascender: dos chispas doradas que lo rondan.
+          final double rad = math.max(b.height / 2.4, 14);
+          for (int i = 0; i < 2; i++) {
+            final double a = t * _tau * 2 + i * math.pi;
+            final Offset q = b.center + Offset(math.cos(a) * rad * 0.8, math.sin(a) * rad);
+            _glow(canvas, q, 6, const Color(0xFFF2D493), 0.5);
+            canvas.drawCircle(q, 1.6, Paint()..color = _al(const Color(0xFFFFF4CC), 0.9));
           }
+        }
+        if (l.dormido || l.rango < 0) continue;
+        // Brasas que suben (Hatamoto en adelante).
+        if (tr >= 3) {
+          final int n = 2 + tr * 2;
+          for (int i = 0; i < n; i++) {
+            final double fase = (t * (1.2 + _hash(i.toDouble(), sd)) + _hash(sd, i.toDouble())) % 1.0;
+            final Offset q = Offset(b.left + _hash(i.toDouble(), sd + 3) * b.width + math.sin(fase * _tau * 2 + i) * 3,
+                b.top + b.height * 0.6 - fase * (40 + tr * 6));
+            final double v = math.sin(fase * math.pi);
+            _glow(canvas, q, 3 + tr * 0.3, col, 0.5 * v);
+            canvas.drawCircle(q, 0.9 + tr * 0.06, Paint()..color = _al(_mezcla(col, Colors.white, 0.5), 0.9 * v));
+          }
+        }
+        // Llamas (Daimyō en adelante).
+        if (tr >= 4) {
+          final int n = 3 + (tr - 4) * 2;
+          final double y0 = b.top + b.height * 0.18;
+          for (int i = 0; i < n; i++) {
+            final double fx = b.left + b.width * (i + 0.5) / n;
+            final double alto = (7 + tr * 1.5) * (0.6 + 0.45 * math.sin(t * _tau * 4 + i * 2.1));
+            canvas.drawPath(
+                Path()
+                  ..moveTo(fx - 4, y0)
+                  ..quadraticBezierTo(fx - 3, y0 - alto * 0.5, fx + math.sin(t * _tau * 3 + i) * 3, y0 - alto)
+                  ..quadraticBezierTo(fx + 3, y0 - alto * 0.5, fx + 4, y0)
+                  ..close(),
+                Paint()
+                  ..blendMode = BlendMode.plus
+                  ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 1.2)
+                  ..shader = ui.Gradient.linear(Offset(0, y0), Offset(0, y0 - alto),
+                      <Color>[_al(col, 0.30), _al(_mezcla(col, Colors.white, 0.4), 0)]));
+          }
+        }
+        // Rayos (Shōgun en adelante): cambian de forma varias veces por segundo.
+        if (tr >= 5) {
+          final double q = (t * 40).floorToDouble();
+          for (int j = 0; j < 1 + (tr - 5); j++) {
+            if (_hash(q, j + sd) < 0.45) continue;
+            final double a0 = _hash(q, j.toDouble()) * _tau;
+            final double a1 = a0 + 0.5 + _hash(j.toDouble(), q) * 0.8;
+            final double rx = b.width * 0.55 + 3;
+            final double ry = b.height * 0.5 + 3;
+            final Path rayo = Path();
+            for (int s = 0; s <= 5; s++) {
+              final double a = a0 + (a1 - a0) * s / 5;
+              final double jit = (_hash(q + s, j.toDouble()) - 0.5) * 5;
+              final Offset p = Offset(b.center.dx + math.cos(a) * (rx + jit), b.center.dy + math.sin(a) * (ry + jit));
+              if (s == 0) {
+                rayo.moveTo(p.dx, p.dy);
+              } else {
+                rayo.lineTo(p.dx, p.dy);
+              }
+            }
+            canvas.drawPath(rayo, _trazo(_al(col, 0.55), 1.8)..blendMode = BlendMode.plus);
+            canvas.drawPath(rayo, _trazo(_al(Colors.white, 0.85), 0.6)..blendMode = BlendMode.plus);
+          }
+        }
+        // Destellos (Kensei en adelante).
+        if (tr >= 6) {
+          for (int i = 0; i < 3 + (tr - 6) * 3; i++) {
+            final double ph = (t * 1.5 + _hash(i.toDouble(), sd + 7)) % 1.0;
+            final double v = math.sin(ph * math.pi);
+            _estrella(
+                canvas,
+                Offset(b.left - 6 + _hash(i.toDouble(), sd + 1) * (b.width + 12),
+                    b.top - 6 + _hash(i.toDouble(), sd + 2) * (b.height + 12)),
+                2 + 4 * v,
+                _al(_mezcla(col, Colors.white, 0.6), v));
+          }
+        }
+        // Kami: un aro que se expande.
+        if (tr >= 7) {
+          final double fo = (t * 1.5) % 1.0;
+          canvas.save();
+          canvas.translate(b.center.dx, b.center.dy);
+          canvas.scale(1, b.height / math.max(1, b.width));
+          canvas.drawCircle(Offset.zero, b.width * (0.5 + fo * 0.5),
+              _trazo(_al(const Color(0xFFFFF4D6), 0.7 * (1 - fo)), 1.4 * (1 - fo) + 0.3));
+          canvas.restore();
         }
       }
     });
 
-    // -- Detalles: línea alba del abdomen y columna ---------------------------
-    final Paint linea = _avTrazo(_al(ColoresTradicion.negro, 0.35), 1);
-    if (!espalda) {
-      canvas.drawLine(const Offset(100, 142), const Offset(100, 226), linea);
-      for (final double y in <double>[162, 184, 206]) {
-        canvas.drawLine(Offset(86, y), Offset(114, y), linea);
+    // -- La cabeza -------------------------------------------------------------
+    canvas.drawPicture(_grabado('cab${mujer ? 'm' : 'h'}${espalda ? 'e' : 'f'}', (Canvas c) => _cabeza(c, f)));
+    if (espalda) {
+      // El nudo de la cinta y sus puntas, que ondean.
+      for (final double s in <double>[-1, 1]) {
+        final double w = math.sin(t * _tau * 2 + (s > 0 ? 0.8 : 0)) * 3;
+        canvas.drawPath(
+            Path()
+              ..moveTo(100, 27)
+              ..quadraticBezierTo(100 + s * 8, 36 + w * 0.4, 100 + s * (12 + w * 0.5), 48 + w)
+              ..lineTo(100 + s * (9 + w * 0.5), 49 + w)
+              ..quadraticBezierTo(100 + s * 5, 38, 99, 29)
+              ..close(),
+            Paint()..color = _cinta);
       }
-    } else {
-      canvas.drawLine(const Offset(100, 80), const Offset(100, 210), linea);
+      canvas.drawOval(Rect.fromCenter(center: const Offset(100, 27.5), width: 6.4, height: 5.2),
+          Paint()..color = const Color(0xFFB3304A));
+      if (f.cola != null) {
+        _cola(canvas, f, meneo * 0.6);
+        canvas.drawOval(Rect.fromCenter(center: const Offset(100, 15), width: 8, height: 4.8), Paint()..color = _cinta);
+      }
     }
 
     // -- Línea de escaneo: barre el cuerpo de abajo arriba, como un holograma --
     final double fy = 450 - ((t * 0.5) % 1.0) * 470;
     canvas.save();
-    canvas.clipPath(_FormasCuerpo.contorno);
+    canvas.clipPath(f.contorno);
     canvas.drawRect(
       Rect.fromLTWH(0, fy - 14, 200, 28),
       Paint()
-        ..shader = ui.Gradient.linear(Offset(0, fy - 14), Offset(0, fy + 14),
-            <Color>[_al(ColoresTradicion.violetaClaro, 0), _al(const Color(0xFFD9CCFF), 0.25), _al(ColoresTradicion.violetaClaro, 0)],
-            const <double>[0, 0.5, 1]),
+        ..shader = ui.Gradient.linear(Offset(0, fy - 14), Offset(0, fy + 14), <Color>[
+          _al(ColoresTradicion.violetaClaro, 0),
+          _al(const Color(0xFFD9CCFF), 0.22),
+          _al(ColoresTradicion.violetaClaro, 0),
+        ], const <double>[0, 0.5, 1]),
     );
     canvas.restore();
 
@@ -43284,10 +43731,121 @@ class _SiluetaPainter extends CustomPainter {
   bool shouldRepaint(_SiluetaPainter old) =>
       old.t != t ||
       old.espalda != espalda ||
+      old.mujer != mujer ||
       old.seleccion != seleccion ||
       old.luces != luces ||
       old.bendicion != bendicion;
 }
+
+// Formas de los cuatro cuerpos (generadas; ver el inicio de 37.4).
+const _DatosCuerpo _cuerpoHombreFrente = _DatosCuerpo(
+  contorno: <double>[0, 100, 12, 3, 90, 12, 83, 20, 83, 31, 3, 83, 40, 85, 47, 89, 52, 1, 90, 60, 2, 90, 66, 86, 69, 2, 76, 74, 66, 78, 3, 56, 80, 48, 88, 47, 100, 3, 46, 108, 45, 116, 45, 124, 3, 44, 140, 42, 160, 41, 178, 3, 40, 186, 38, 196, 37, 206, 3, 36, 220, 34, 246, 33, 266, 3, 31, 272, 28, 280, 28, 290, 3, 28, 300, 31, 306, 35, 304, 3, 38, 302, 39, 294, 39, 286, 3, 40, 280, 40, 274, 41, 268, 3, 44, 248, 48, 222, 50, 200, 3, 51, 192, 52, 186, 52, 180, 3, 54, 160, 56, 140, 60, 120, 3, 61, 116, 62, 113, 63, 112, 3, 64, 122, 64, 134, 65, 146, 3, 67, 170, 72, 192, 73, 210, 3, 73, 222, 70, 232, 69, 244, 3, 67, 262, 64, 284, 64, 304, 3, 64, 326, 68, 344, 71, 356, 3, 70, 368, 69, 382, 71, 396, 3, 72, 408, 75, 418, 76, 426, 3, 72, 430, 70, 436, 74, 438, 1, 90, 438, 3, 92, 434, 90, 428, 88, 424, 3, 89, 412, 92, 396, 91, 380, 3, 90, 370, 89, 364, 90, 356, 3, 93, 340, 96, 314, 97, 290, 1, 98, 280, 2, 99, 276, 100, 276, 2, 101, 276, 102, 280, 1, 103, 290, 3, 104, 314, 107, 340, 110, 356, 3, 111, 364, 110, 370, 109, 380, 3, 108, 396, 111, 412, 112, 424, 3, 110, 428, 108, 434, 110, 438, 1, 126, 438, 3, 130, 436, 128, 430, 124, 426, 3, 125, 418, 128, 408, 129, 396, 3, 131, 382, 130, 368, 129, 356, 3, 132, 344, 136, 326, 136, 304, 3, 136, 284, 133, 262, 131, 244, 3, 130, 232, 127, 222, 127, 210, 3, 128, 192, 133, 170, 135, 146, 3, 136, 134, 136, 122, 137, 112, 3, 138, 113, 139, 116, 140, 120, 3, 144, 140, 146, 160, 148, 180, 3, 148, 186, 149, 192, 150, 200, 3, 152, 222, 156, 248, 159, 268, 3, 160, 274, 160, 280, 161, 286, 3, 161, 294, 162, 302, 165, 304, 3, 169, 306, 172, 300, 172, 290, 3, 172, 280, 169, 272, 167, 266, 3, 166, 246, 164, 220, 163, 206, 3, 162, 196, 160, 186, 159, 178, 3, 158, 160, 156, 140, 155, 124, 3, 155, 116, 154, 108, 153, 100, 3, 152, 88, 144, 80, 134, 78, 2, 124, 74, 114, 69, 2, 110, 66, 110, 60, 1, 111, 52, 3, 115, 47, 117, 40, 117, 31, 3, 117, 20, 110, 12, 100, 12, 4],
+  oreja: <double>[5, 83, 35, 5, 10, 0.12],
+  detalles: <List<double>>[<double>[0, 98, 82, 3, 90, 79, 80, 78, 70, 80], <double>[0, 92, 54, 3, 93, 60, 95, 66, 98, 72], <double>[0, 79, 352, 3, 82, 348, 88, 348, 90, 354, 3, 88, 362, 82, 364, 79, 360], <double>[0, 50, 182, 3, 47, 186, 46, 190, 47, 194]],
+  top: <List<double>>[],
+  pelo: <double>[0, 81, 36, 3, 78, 24, 81, 14, 89, 9, 3, 95, 5, 104, 4, 111, 7, 1, 116.5, 3.5, 1, 115.5, 10, 3, 120, 15, 122, 24, 120, 34, 1, 118, 30, 1, 116, 34, 1, 114, 26, 1, 110, 31, 1, 107, 23, 1, 103, 30, 1, 100, 22, 1, 96, 29, 1, 92, 23, 1, 89, 31, 1, 86, 26, 1, 84, 33, 4],
+  cinta: <double>[0, 83, 24, 3, 92, 20, 108, 20, 117, 24, 1, 117.5, 29, 3, 108, 25, 92, 25, 82.5, 29, 4],
+  cola: null,
+  musculos: <_MusculoCuerpo>[
+    _MusculoCuerpo(GrupoMuscular.hombros, <double>[0, 70, 79, 3, 60, 78, 50, 85, 47, 98, 3, 45, 108, 46, 118, 48, 126, 3, 51, 128, 55, 124, 57, 118, 3, 59, 110, 61, 100, 62, 93, 3, 64, 87, 67, 82, 70, 79, 4], <double>[52, 128, -5.1, 128, 52, 128, -5, 124.7, 52, 128, -4.8, 121.5, 52, 128, -4.3, 118.2, 52, 128, -3.6, 115, 52, 128, -2.8, 111.9, 52, 128, -1.8, 108.7, 52, 128, -0.6, 105.7, 52, 128, 0.8, 102.7, 52, 128, 2.3, 99.8, 52, 128, 4, 97, 52, 128, 5.8, 94.3, 52, 128, 7.8, 91.8, 52, 128, 10, 89.3, 52, 128, 12.3, 86.9, 52, 128, 14.7, 84.7, 52, 128, 17.2, 82.7, 52, 128, 19.9, 80.8, 52, 128, 22.6, 79, 52, 128, 25.5, 77.4, 52, 128, 28.4, 76, 52, 128, 31.4, 74.7, 52, 128, 34.5, 73.6, 52, 128, 37.7, 72.7, 52, 128, 40.9, 72, 52, 128, 44.1, 71.4]),
+    _MusculoCuerpo(GrupoMuscular.pecho, <double>[0, 99, 84, 3, 92, 82, 80, 81, 72, 83, 3, 66, 86, 62, 92, 61, 100, 3, 61, 110, 64, 118, 70, 122, 3, 78, 127, 90, 127, 98, 123, 3, 99, 110, 99, 96, 99, 84, 4], <double>[60, 106, 62, 55.7, 60, 106, 65.2, 55.9, 60, 106, 68.4, 56.4, 60, 106, 71.5, 57, 60, 106, 74.6, 57.8, 60, 106, 77.6, 58.9, 60, 106, 80.6, 60.1, 60, 106, 83.5, 61.5, 60, 106, 86.3, 63.1, 60, 106, 88.9, 64.8, 60, 106, 91.5, 66.7, 60, 106, 93.9, 68.8, 60, 106, 96.2, 71.1, 60, 106, 98.4, 73.4, 60, 106, 100.4, 75.9, 60, 106, 102.2, 78.6, 60, 106, 103.9, 81.3, 60, 106, 105.3, 84.1, 60, 106, 106.6, 87.1, 60, 106, 107.7, 90.1, 60, 106, 108.7, 93.1, 60, 106, 109.4, 96.3, 60, 106, 109.9, 99.4, 60, 106, 110.2, 102.6, 60, 106, 110.3, 105.8, 60, 106, 110.2, 109, 60, 106, 109.9, 112.2, 60, 106, 109.4, 115.4, 60, 106, 108.8, 118.5, 60, 106, 107.9, 121.6, 60, 106, 106.8, 124.6, 60, 106, 105.5, 127.5, 60, 106, 104, 130.4, 60, 106, 102.4, 133.1, 60, 106, 100.6, 135.7, 60, 106, 98.6, 138.3, 60, 106, 96.5, 140.7, 60, 106, 94.2, 142.9, 60, 106, 91.8, 145, 60, 106, 89.2, 147, 60, 106, 86.6, 148.7, 60, 106, 83.8, 150.3, 60, 106, 80.9, 151.8, 60, 106, 78, 153, 60, 106, 75, 154, 60, 106, 71.9, 154.9, 60, 106, 68.8, 155.6, 60, 106, 65.6, 156, 60, 106, 62.4, 156.3]),
+    _MusculoCuerpo(GrupoMuscular.biceps, <double>[0, 55, 122, 3, 50, 128, 47, 140, 47, 152, 3, 47, 164, 48, 172, 49, 179, 3, 52, 177, 55, 168, 56, 156, 3, 57, 142, 57, 130, 55, 122, 4], <double>[86.6, 121.5, 81, 185.1, 83.6, 121.2, 78, 184.8, 80.6, 120.9, 75.1, 184.6, 77.6, 120.7, 72.1, 184.3, 74.6, 120.4, 69.1, 184.1, 71.7, 120.2, 66.1, 183.8, 68.7, 119.9, 63.1, 183.5, 65.7, 119.6, 60.1, 183.3, 62.7, 119.4, 57.1, 183, 59.7, 119.1, 54.1, 182.7, 56.7, 118.9, 51.1, 182.5, 53.7, 118.6, 48.2, 182.2, 50.7, 118.3, 45.2, 182, 47.7, 118.1, 42.2, 181.7, 44.8, 117.8, 39.2, 181.4, 41.8, 117.5, 36.2, 181.2, 38.8, 117.3, 33.2, 180.9, 35.8, 117, 30.2, 180.7, 32.8, 116.8, 27.2, 180.4, 29.8, 116.5, 24.2, 180.1, 26.8, 116.2, 21.3, 179.9, 23.8, 116, 18.3, 179.6]),
+    _MusculoCuerpo(GrupoMuscular.antebrazos, <double>[0, 42, 184, 3, 39, 194, 38, 206, 38, 218, 3, 38, 236, 38, 250, 37, 262, 1, 41, 263, 3, 44, 246, 47, 224, 50, 206, 3, 51, 196, 49, 188, 46, 182, 4], <double>[92.5, 183.3, 83.2, 271, 89.5, 182.9, 80.3, 270.7, 86.5, 182.6, 77.3, 270.3, 83.5, 182.3, 74.3, 270, 80.5, 182, 71.3, 269.7, 77.6, 181.7, 68.3, 269.4, 74.6, 181.4, 65.3, 269.1, 71.6, 181.1, 62.4, 268.8, 68.6, 180.7, 59.4, 268.5, 65.6, 180.4, 56.4, 268.1, 62.6, 180.1, 53.4, 267.8, 59.6, 179.8, 50.4, 267.5, 56.7, 179.5, 47.4, 267.2, 53.7, 179.2, 44.5, 266.9, 50.7, 178.9, 41.5, 266.6, 47.7, 178.5, 38.5, 266.3, 44.7, 178.2, 35.5, 266, 41.7, 177.9, 32.5, 265.6, 38.8, 177.6, 29.5, 265.3, 35.8, 177.3, 26.6, 265, 32.8, 177, 23.6, 264.7, 29.8, 176.7, 20.6, 264.4, 26.8, 176.4, 17.6, 264.1, 23.8, 176, 14.6, 263.8, 20.9, 175.7, 11.6, 263.4, 17.9, 175.4, 8.7, 263.1, 14.9, 175.1, 5.7, 262.8, 11.9, 174.8, 2.7, 262.5, 8.9, 174.5, -0.3, 262.2, 5.9, 174.2, -3.3, 261.9]),
+    _MusculoCuerpo(GrupoMuscular.abdomen, <double>[6, 86, 131, 99, 150, 4], <double>[78, 126, 107, 126, 78, 129, 107, 129, 78, 132, 107, 132, 78, 135, 107, 135, 78, 138, 107, 138, 78, 141, 107, 141, 78, 144, 107, 144, 78, 147, 107, 147, 78, 150, 107, 150, 78, 153, 107, 153]),
+    _MusculoCuerpo(GrupoMuscular.abdomen, <double>[6, 85.5, 153, 99, 173, 4], <double>[77.2, 147.9, 107.3, 147.9, 77.2, 150.9, 107.3, 150.9, 77.2, 153.9, 107.3, 153.9, 77.2, 156.9, 107.3, 156.9, 77.2, 159.9, 107.3, 159.9, 77.2, 162.9, 107.3, 162.9, 77.2, 165.9, 107.3, 165.9, 77.2, 168.9, 107.3, 168.9, 77.2, 171.9, 107.3, 171.9, 77.2, 174.9, 107.3, 174.9, 77.2, 177.9, 107.3, 177.9]),
+    _MusculoCuerpo(GrupoMuscular.abdomen, <double>[6, 85.5, 176, 99, 197, 4], <double>[76.8, 171, 107.7, 171, 76.8, 174, 107.7, 174, 76.8, 177, 107.7, 177, 76.8, 180, 107.7, 180, 76.8, 183, 107.7, 183, 76.8, 186, 107.7, 186, 76.8, 189, 107.7, 189, 76.8, 192, 107.7, 192, 76.8, 195, 107.7, 195, 76.8, 198, 107.7, 198, 76.8, 201, 107.7, 201]),
+    _MusculoCuerpo(GrupoMuscular.abdomen, <double>[0, 86, 200, 1, 99, 200, 1, 99, 228, 3, 95, 231, 90, 226, 88, 219, 3, 86.5, 213, 86, 206, 86, 200, 4], <double>[72.7, 195.7, 112.3, 195.7, 72.7, 198.7, 112.3, 198.7, 72.7, 201.7, 112.3, 201.7, 72.7, 204.7, 112.3, 204.7, 72.7, 207.7, 112.3, 207.7, 72.7, 210.7, 112.3, 210.7, 72.7, 213.7, 112.3, 213.7, 72.7, 216.7, 112.3, 216.7, 72.7, 219.7, 112.3, 219.7, 72.7, 222.7, 112.3, 222.7, 72.7, 225.7, 112.3, 225.7, 72.7, 228.7, 112.3, 228.7, 72.7, 231.7, 112.3, 231.7, 72.7, 234.7, 112.3, 234.7]),
+    _MusculoCuerpo(GrupoMuscular.abdomen, <double>[0, 69, 150, 3, 75, 156, 80, 164, 82, 176, 3, 83, 190, 82, 204, 84, 220, 3, 79, 222, 75, 214, 74, 206, 3, 72, 190, 70, 170, 67, 156, 4], <double>[99.4, 134.7, 126.8, 209.9, 96.6, 135.8, 123.9, 210.9, 93.8, 136.8, 121.1, 212, 90.9, 137.8, 118.3, 213, 88.1, 138.8, 115.5, 214, 85.3, 139.9, 112.7, 215, 82.5, 140.9, 109.8, 216.1, 79.7, 141.9, 107, 217.1, 76.8, 143, 104.2, 218.1, 74, 144, 101.4, 219.1, 71.2, 145, 98.6, 220.2, 68.4, 146, 95.7, 221.2, 65.6, 147.1, 92.9, 222.2, 62.8, 148.1, 90.1, 223.2, 59.9, 149.1, 87.3, 224.3, 57.1, 150.1, 84.5, 225.3, 54.3, 151.2, 81.7, 226.3, 51.5, 152.2, 78.8, 227.3, 48.7, 153.2, 76, 228.4, 45.8, 154.2, 73.2, 229.4, 43, 155.3, 70.4, 230.4, 40.2, 156.3, 67.6, 231.4, 37.4, 157.3, 64.7, 232.5, 34.6, 158.3, 61.9, 233.5, 31.7, 159.4, 59.1, 234.5, 28.9, 160.4, 56.3, 235.6, 26.1, 161.4, 53.5, 236.6]),
+    _MusculoCuerpo(GrupoMuscular.abdomen, <double>[0, 65, 124, 3, 69, 123, 73, 125, 75, 128, 3, 72, 130, 68, 130, 65, 129, 4], <double>[81.7, 131.9, 64.6, 138.2, 80.6, 129.1, 63.5, 135.3, 79.6, 126.3, 62.5, 132.5, 78.6, 123.5, 61.5, 129.7, 77.6, 120.7, 60.5, 126.9, 76.5, 117.8, 59.4, 124.1, 75.5, 115, 58.4, 121.3]),
+    _MusculoCuerpo(GrupoMuscular.abdomen, <double>[0, 65, 133, 3, 69, 132, 74, 134, 76, 137, 3, 72, 139, 68, 139, 65.5, 138, 4], <double>[82.7, 141.2, 64.8, 147.7, 81.7, 138.4, 63.8, 144.9, 80.6, 135.6, 62.8, 142.1, 79.6, 132.7, 61.7, 139.2, 78.6, 129.9, 60.7, 136.4, 77.6, 127.1, 59.7, 133.6, 76.5, 124.3, 58.7, 130.8]),
+    _MusculoCuerpo(GrupoMuscular.abdomen, <double>[0, 66, 142, 3, 70, 141, 74, 143, 76, 146, 3, 73, 148, 69, 148, 66.5, 147, 4], <double>[82.7, 149.9, 65.6, 156.2, 81.6, 147.1, 64.5, 153.3, 80.6, 144.3, 63.5, 150.5, 79.6, 141.5, 62.5, 147.7, 78.6, 138.7, 61.5, 144.9, 77.5, 135.8, 60.4, 142.1, 76.5, 133, 59.4, 139.3]),
+    _MusculoCuerpo(GrupoMuscular.piernas, <double>[0, 70, 250, 3, 66, 270, 64, 292, 65, 314, 3, 66, 330, 70, 344, 74, 352, 3, 75, 340, 74, 326, 73, 314, 3, 72, 294, 72, 272, 74, 256, 4], <double>[127.5, 250.6, 119.9, 359, 124.5, 250.4, 116.9, 358.7, 121.5, 250.2, 113.9, 358.5, 118.5, 250, 110.9, 358.3, 115.5, 249.8, 107.9, 358.1, 112.5, 249.6, 104.9, 357.9, 109.5, 249.4, 101.9, 357.7, 106.5, 249.2, 98.9, 357.5, 103.5, 248.9, 95.9, 357.3, 100.5, 248.7, 92.9, 357.1, 97.5, 248.5, 89.9, 356.9, 94.5, 248.3, 87, 356.6, 91.5, 248.1, 84, 356.4, 88.5, 247.9, 81, 356.2, 85.6, 247.7, 78, 356, 82.6, 247.5, 75, 355.8, 79.6, 247.3, 72, 355.6, 76.6, 247.1, 69, 355.4, 73.6, 246.9, 66, 355.2, 70.6, 246.6, 63, 355, 67.6, 246.4, 60, 354.8, 64.6, 246.2, 57, 354.6, 61.6, 246, 54, 354.3, 58.6, 245.8, 51, 354.1, 55.6, 245.6, 48.1, 353.9, 52.6, 245.4, 45.1, 353.7, 49.6, 245.2, 42.1, 353.5, 46.6, 245, 39.1, 353.3, 43.7, 244.8, 36.1, 353.1, 40.7, 244.6, 33.1, 352.9, 37.7, 244.3, 30.1, 352.7, 34.7, 244.1, 27.1, 352.5, 31.7, 243.9, 24.1, 352.3, 28.7, 243.7, 21.1, 352, 25.7, 243.5, 18.1, 351.8, 22.7, 243.3, 15.1, 351.6, 19.7, 243.1, 12.1, 351.4]),
+    _MusculoCuerpo(GrupoMuscular.piernas, <double>[0, 78, 252, 3, 74, 272, 73, 296, 75, 318, 3, 76, 330, 78, 340, 80, 346, 3, 83, 338, 85, 326, 86, 312, 3, 87, 292, 85, 268, 80, 252, 4], <double>[132.3, 250.3, 128.7, 351.3, 129.3, 250.2, 125.7, 351.1, 126.3, 250.1, 122.7, 351, 123.3, 250, 119.7, 350.9, 120.3, 249.9, 116.7, 350.8, 117.3, 249.8, 113.7, 350.7, 114.3, 249.6, 110.7, 350.6, 111.3, 249.5, 107.7, 350.5, 108.3, 249.4, 104.7, 350.4, 105.3, 249.3, 101.7, 350.3, 102.3, 249.2, 98.7, 350.2, 99.3, 249.1, 95.7, 350.1, 96.3, 249, 92.7, 350, 93.3, 248.9, 89.7, 349.9, 90.3, 248.8, 86.8, 349.8, 87.3, 248.7, 83.8, 349.7, 84.3, 248.6, 80.8, 349.6, 81.3, 248.5, 77.8, 349.5, 78.3, 248.4, 74.8, 349.4, 75.3, 248.3, 71.8, 349.3, 72.3, 248.2, 68.8, 349.2, 69.3, 248.1, 65.8, 349.1, 66.3, 248, 62.8, 348.9, 63.3, 247.9, 59.8, 348.8, 60.3, 247.8, 56.8, 348.7, 57.3, 247.7, 53.8, 348.6, 54.3, 247.6, 50.8, 348.5, 51.3, 247.4, 47.8, 348.4, 48.3, 247.3, 44.8, 348.3, 45.3, 247.2, 41.8, 348.2, 42.3, 247.1, 38.8, 348.1, 39.3, 247, 35.8, 348, 36.3, 246.9, 32.8, 347.9, 33.3, 246.8, 29.8, 347.8]),
+    _MusculoCuerpo(GrupoMuscular.piernas, <double>[0, 89, 312, 3, 85, 322, 83, 334, 83, 344, 3, 84, 352, 88, 354, 91, 350, 3, 93, 342, 93, 328, 92, 316, 4], <double>[107.9, 304.5, 116.5, 352.9, 105, 305, 113.5, 353.5, 102, 305.6, 110.6, 354, 99.1, 306.1, 107.6, 354.5, 96.1, 306.6, 104.7, 355, 93.2, 307.1, 101.7, 355.5, 90.2, 307.6, 98.8, 356.1, 87.3, 308.2, 95.8, 356.6, 84.3, 308.7, 92.8, 357.1, 81.4, 309.2, 89.9, 357.6, 78.4, 309.7, 86.9, 358.2, 75.4, 310.2, 84, 358.7, 72.5, 310.8, 81, 359.2, 69.5, 311.3, 78.1, 359.7, 66.6, 311.8, 75.1, 360.2, 63.6, 312.3, 72.2, 360.8, 60.7, 312.9, 69.2, 361.3]),
+    _MusculoCuerpo(GrupoMuscular.piernas, <double>[0, 93, 262, 3, 91, 278, 89, 296, 88, 308, 1, 92, 312, 3, 94, 298, 96, 282, 97, 268, 4], <double>[125.4, 264, 115.5, 319.9, 122.4, 263.4, 112.6, 319.4, 119.5, 262.9, 109.6, 318.9, 116.5, 262.4, 106.7, 318.3, 113.6, 261.9, 103.7, 317.8, 110.6, 261.4, 100.8, 317.3, 107.7, 260.8, 97.8, 316.8, 104.7, 260.3, 94.9, 316.3, 101.8, 259.8, 91.9, 315.7, 98.8, 259.3, 88.9, 315.2, 95.9, 258.8, 86, 314.7, 92.9, 258.2, 83, 314.2, 89.9, 257.7, 80.1, 313.7, 87, 257.2, 77.1, 313.1, 84, 256.7, 74.2, 312.6, 81.1, 256.1, 71.2, 312.1, 78.1, 255.6, 68.3, 311.6, 75.2, 255.1, 65.3, 311, 72.2, 254.6, 62.4, 310.5]),
+    _MusculoCuerpo(GrupoMuscular.pantorrillas, <double>[0, 74, 366, 3, 72, 380, 72, 396, 75, 412, 1, 78, 412, 3, 77, 396, 77, 380, 78, 368, 4], <double>[102.1, 363.7, 100.3, 416.1, 99.1, 363.6, 97.3, 416, 96.1, 363.5, 94.3, 415.9, 93.1, 363.4, 91.3, 415.8, 90.1, 363.3, 88.3, 415.7, 87.1, 363.2, 85.3, 415.6, 84.1, 363.1, 82.3, 415.5, 81.1, 363, 79.3, 415.4, 78.1, 362.9, 76.3, 415.3, 75.1, 362.8, 73.3, 415.2, 72.1, 362.7, 70.3, 415, 69.1, 362.6, 67.3, 414.9, 66.1, 362.5, 64.3, 414.8, 63.1, 362.4, 61.3, 414.7, 60.1, 362.3, 58.3, 414.6, 57.1, 362.2, 55.3, 414.5, 54.1, 362.1, 52.3, 414.4, 51.1, 362, 49.3, 414.3]),
+    _MusculoCuerpo(GrupoMuscular.pantorrillas, <double>[0, 88, 366, 3, 91, 376, 92, 388, 90, 400, 3, 88, 404, 85, 400, 85, 392, 3, 85, 382, 86, 372, 88, 366, 4], <double>[110, 361.9, 111.6, 406.5, 107, 362, 108.6, 406.6, 104, 362.1, 105.6, 406.7, 101, 362.2, 102.6, 406.8, 98, 362.3, 99.6, 406.9, 95, 362.4, 96.6, 407.1, 92, 362.5, 93.6, 407.2, 89, 362.6, 90.6, 407.3, 86, 362.8, 87.6, 407.4, 83, 362.9, 84.6, 407.5, 80, 363, 81.6, 407.6, 77, 363.1, 78.6, 407.7, 74, 363.2, 75.6, 407.8, 71.1, 363.3, 72.6, 407.9, 68.1, 363.4, 69.6, 408]),
+  ],
+);
+
+const _DatosCuerpo _cuerpoHombreEspalda = _DatosCuerpo(
+  contorno: <double>[0, 100, 12, 3, 90, 12, 83, 20, 83, 31, 3, 83, 40, 85, 47, 89, 52, 1, 90, 60, 2, 90, 66, 86, 69, 2, 76, 74, 66, 78, 3, 56, 80, 48, 88, 47, 100, 3, 46, 108, 45, 116, 45, 124, 3, 44, 140, 42, 160, 41, 178, 3, 40, 186, 38, 196, 37, 206, 3, 36, 220, 34, 246, 33, 266, 3, 31, 272, 28, 280, 28, 290, 3, 28, 300, 31, 306, 35, 304, 3, 38, 302, 39, 294, 39, 286, 3, 40, 280, 40, 274, 41, 268, 3, 44, 248, 48, 222, 50, 200, 3, 51, 192, 52, 186, 52, 180, 3, 54, 160, 56, 140, 60, 120, 3, 61, 116, 62, 113, 63, 112, 3, 64, 122, 64, 134, 65, 146, 3, 67, 170, 72, 192, 73, 210, 3, 73, 222, 70, 232, 69, 244, 3, 67, 262, 64, 284, 64, 304, 3, 64, 326, 68, 344, 71, 356, 3, 70, 368, 69, 382, 71, 396, 3, 72, 408, 75, 418, 76, 426, 3, 72, 430, 70, 436, 74, 438, 1, 90, 438, 3, 92, 434, 90, 428, 88, 424, 3, 89, 412, 92, 396, 91, 380, 3, 90, 370, 89, 364, 90, 356, 3, 93, 340, 96, 314, 97, 290, 1, 98, 280, 2, 99, 276, 100, 276, 2, 101, 276, 102, 280, 1, 103, 290, 3, 104, 314, 107, 340, 110, 356, 3, 111, 364, 110, 370, 109, 380, 3, 108, 396, 111, 412, 112, 424, 3, 110, 428, 108, 434, 110, 438, 1, 126, 438, 3, 130, 436, 128, 430, 124, 426, 3, 125, 418, 128, 408, 129, 396, 3, 131, 382, 130, 368, 129, 356, 3, 132, 344, 136, 326, 136, 304, 3, 136, 284, 133, 262, 131, 244, 3, 130, 232, 127, 222, 127, 210, 3, 128, 192, 133, 170, 135, 146, 3, 136, 134, 136, 122, 137, 112, 3, 138, 113, 139, 116, 140, 120, 3, 144, 140, 146, 160, 148, 180, 3, 148, 186, 149, 192, 150, 200, 3, 152, 222, 156, 248, 159, 268, 3, 160, 274, 160, 280, 161, 286, 3, 161, 294, 162, 302, 165, 304, 3, 169, 306, 172, 300, 172, 290, 3, 172, 280, 169, 272, 167, 266, 3, 166, 246, 164, 220, 163, 206, 3, 162, 196, 160, 186, 159, 178, 3, 158, 160, 156, 140, 155, 124, 3, 155, 116, 154, 108, 153, 100, 3, 152, 88, 144, 80, 134, 78, 2, 124, 74, 114, 69, 2, 110, 66, 110, 60, 1, 111, 52, 3, 115, 47, 117, 40, 117, 31, 3, 117, 20, 110, 12, 100, 12, 4],
+  oreja: <double>[5, 83, 35, 5, 10, 0.12],
+  detalles: <List<double>>[<double>[0, 100, 64, 1, 100, 236], <double>[0, 72, 92, 3, 78, 100, 84, 116, 86, 132], <double>[0, 80, 356, 3, 84, 352, 88, 354, 90, 358], <double>[0, 84, 408, 3, 84, 416, 84, 422, 85, 428]],
+  top: <List<double>>[],
+  pelo: <double>[0, 81, 36, 3, 78, 24, 81, 14, 89, 9, 3, 95, 5, 104, 4, 111, 7, 1, 116.5, 3.5, 1, 115.5, 10, 3, 120, 15, 121, 26, 119, 36, 3, 119, 42, 117, 46, 114, 48, 1, 111, 44, 1, 108, 50, 1, 104, 45, 1, 100, 52, 1, 96, 45, 1, 92, 50, 1, 89, 44, 1, 86, 48, 3, 84, 46, 82, 42, 82, 34, 4],
+  cinta: <double>[0, 82.5, 25, 3, 92, 22, 108, 22, 117.5, 25, 1, 117, 30, 3, 108, 27, 92, 27, 83, 30, 4],
+  cola: null,
+  musculos: <_MusculoCuerpo>[
+    _MusculoCuerpo(GrupoMuscular.espalda, <double>[0, 100, 62, 3, 96, 66, 91, 70, 86, 72, 3, 78, 75, 71, 78, 67, 82, 3, 73, 88, 80, 96, 86, 108, 3, 92, 124, 96, 142, 100, 162, 4], <double>[100, 110, 64.9, 165.4, 100, 110, 62.2, 163.6, 100, 110, 59.6, 161.6, 100, 110, 57.1, 159.6, 100, 110, 54.7, 157.4, 100, 110, 52.4, 155.1, 100, 110, 50.2, 152.7, 100, 110, 48.2, 150.2, 100, 110, 46.3, 147.6, 100, 110, 44.5, 144.9, 100, 110, 42.8, 142.1, 100, 110, 41.3, 139.3, 100, 110, 39.9, 136.3, 100, 110, 38.7, 133.3, 100, 110, 37.6, 130.3, 100, 110, 36.7, 127.2, 100, 110, 35.9, 124, 100, 110, 35.3, 120.9, 100, 110, 34.9, 117.7, 100, 110, 34.6, 114.4, 100, 110, 34.4, 111.2, 100, 110, 34.4, 108, 100, 110, 34.6, 104.7, 100, 110, 35, 101.5, 100, 110, 35.5, 98.3, 100, 110, 36.1, 95.2, 100, 110, 36.9, 92, 100, 110, 37.9, 88.9, 100, 110, 39, 85.9, 100, 110, 40.3, 82.9, 100, 110, 41.7, 80, 100, 110, 43.2, 77.2, 100, 110, 44.9, 74.4, 100, 110, 46.7, 71.7, 100, 110, 48.7, 69.1, 100, 110, 50.8, 66.7, 100, 110, 53, 64.3, 100, 110, 55.3, 62, 100, 110, 57.7, 59.9, 100, 110, 60.2, 57.9, 100, 110, 62.8, 56]),
+    _MusculoCuerpo(GrupoMuscular.espalda, <double>[0, 65, 114, 3, 65, 130, 67, 150, 70, 172, 3, 74, 190, 80, 204, 88, 214, 3, 92, 208, 94, 198, 95, 188, 3, 91, 172, 86, 152, 82, 134, 3, 78, 124, 72, 116, 65, 114, 4], <double>[100.2, 88.6, 155.4, 184.2, 97.6, 90.1, 152.8, 185.7, 95, 91.6, 150.2, 187.2, 92.4, 93.1, 147.6, 188.7, 89.8, 94.6, 145, 190.2, 87.2, 96.1, 142.4, 191.7, 84.6, 97.6, 139.8, 193.2, 82, 99.1, 137.2, 194.7, 79.4, 100.6, 134.6, 196.2, 76.8, 102.1, 132, 197.7, 74.2, 103.6, 129.4, 199.2, 71.6, 105.1, 126.8, 200.7, 69, 106.6, 124.2, 202.2, 66.4, 108.1, 121.6, 203.7, 63.8, 109.6, 119, 205.2, 61.2, 111.1, 116.4, 206.7, 58.6, 112.6, 113.8, 208.2, 56, 114.1, 111.2, 209.7, 53.4, 115.6, 108.6, 211.2, 50.8, 117.1, 106, 212.7, 48.2, 118.6, 103.4, 214.2, 45.6, 120.1, 100.8, 215.7, 43, 121.6, 98.2, 217.2, 40.4, 123.1, 95.7, 218.7, 37.9, 124.6, 93.1, 220.2, 35.3, 126.1, 90.5, 221.7, 32.7, 127.6, 87.9, 223.2, 30.1, 129.1, 85.3, 224.7, 27.5, 130.6, 82.7, 226.2, 24.9, 132.1, 80.1, 227.7, 22.3, 133.6, 77.5, 229.2, 19.7, 135.1, 74.9, 230.7, 17.1, 136.6, 72.3, 232.2, 14.5, 138.1, 69.7, 233.7, 11.9, 139.6, 67.1, 235.2, 9.3, 141.1, 64.5, 236.7, 6.7, 142.6, 61.9, 238.2]),
+    _MusculoCuerpo(GrupoMuscular.espalda, <double>[0, 66, 106, 3, 72, 102, 80, 104, 84, 110, 3, 80, 116, 72, 116, 66, 113, 4], <double>[66.4, 90.5, 93.5, 100.4, 65.4, 93.4, 92.4, 103.2, 64.3, 96.2, 91.4, 106, 63.3, 99, 90.4, 108.8, 62.3, 101.8, 89.4, 111.7, 61.3, 104.6, 88.3, 114.5, 60.2, 107.5, 87.3, 117.3, 59.2, 110.3, 86.3, 120.1, 58.2, 113.1, 85.3, 122.9, 57.2, 115.9, 84.2, 125.8]),
+    _MusculoCuerpo(GrupoMuscular.espalda, <double>[0, 92, 170, 3, 90, 192, 90, 214, 92, 236, 1, 99, 236, 1, 99, 170, 4], <double>[130.8, 166.7, 130.8, 239.3, 127.8, 166.7, 127.8, 239.3, 124.8, 166.7, 124.8, 239.3, 121.8, 166.7, 121.8, 239.3, 118.8, 166.7, 118.8, 239.3, 115.8, 166.7, 115.8, 239.3, 112.8, 166.7, 112.8, 239.3, 109.8, 166.7, 109.8, 239.3, 106.8, 166.7, 106.8, 239.3, 103.8, 166.7, 103.8, 239.3, 100.8, 166.7, 100.8, 239.3, 97.8, 166.7, 97.8, 239.3, 94.8, 166.7, 94.8, 239.3, 91.8, 166.7, 91.8, 239.3, 88.8, 166.7, 88.8, 239.3, 85.8, 166.7, 85.8, 239.3, 82.8, 166.7, 82.8, 239.3, 79.8, 166.7, 79.8, 239.3, 76.8, 166.7, 76.8, 239.3, 73.8, 166.7, 73.8, 239.3, 70.8, 166.7, 70.8, 239.3, 67.8, 166.7, 67.8, 239.3, 64.8, 166.7, 64.8, 239.3, 61.8, 166.7, 61.8, 239.3, 58.8, 166.7, 58.8, 239.3]),
+    _MusculoCuerpo(GrupoMuscular.hombros, <double>[0, 67, 80, 3, 58, 80, 50, 86, 47, 98, 3, 45, 108, 46, 118, 48, 126, 3, 52, 124, 56, 116, 60, 108, 3, 63, 100, 66, 92, 68, 86, 4], <double>[50, 126, -3.4, 126, 50, 126, -3.3, 122.7, 50, 126, -3, 119.5, 50, 126, -2.5, 116.3, 50, 126, -1.8, 113.1, 50, 126, -0.9, 110, 50, 126, 0.1, 106.9, 50, 126, 1.4, 103.9, 50, 126, 2.8, 101, 50, 126, 4.4, 98.2, 50, 126, 6.2, 95.4, 50, 126, 8.2, 92.8, 50, 126, 10.3, 90.3, 50, 126, 12.5, 88, 50, 126, 14.9, 85.8, 50, 126, 17.4, 83.7, 50, 126, 20, 81.8, 50, 126, 22.8, 80.1, 50, 126, 25.6, 78.5, 50, 126, 28.6, 77.1, 50, 126, 31.6, 75.9, 50, 126, 34.7, 74.8, 50, 126, 37.8, 74, 50, 126, 41, 73.4, 50, 126, 44.2, 72.9]),
+    _MusculoCuerpo(GrupoMuscular.triceps, <double>[0, 47, 124, 3, 44, 138, 43, 154, 44, 170, 3, 46, 166, 48, 152, 50, 138, 3, 51, 132, 50, 126, 47, 124, 4], <double>[75.5, 123.1, 70.9, 175.5, 72.6, 122.8, 68, 175.3, 69.6, 122.5, 65, 175, 66.6, 122.3, 62, 174.8, 63.6, 122, 59, 174.5, 60.6, 121.7, 56, 174.2, 57.6, 121.5, 53, 174, 54.6, 121.2, 50, 173.7, 51.6, 121, 47, 173.4, 48.6, 120.7, 44.1, 173.2, 45.7, 120.4, 41.1, 172.9, 42.7, 120.2, 38.1, 172.7, 39.7, 119.9, 35.1, 172.4, 36.7, 119.7, 32.1, 172.1, 33.7, 119.4, 29.1, 171.9, 30.7, 119.1, 26.1, 171.6, 27.7, 118.9, 23.1, 171.4, 24.7, 118.6, 20.1, 171.1]),
+    _MusculoCuerpo(GrupoMuscular.triceps, <double>[0, 57, 124, 3, 53, 136, 51, 152, 51, 166, 3, 50, 174, 49, 180, 47, 184, 3, 51, 182, 54, 176, 55, 168, 3, 57, 154, 59, 138, 57, 124, 4], <double>[89.4, 123.5, 83.5, 190.4, 86.4, 123.2, 80.5, 190.1, 83.4, 122.9, 77.6, 189.9, 80.4, 122.7, 74.6, 189.6, 77.4, 122.4, 71.6, 189.3, 74.5, 122.2, 68.6, 189.1, 71.5, 121.9, 65.6, 188.8, 68.5, 121.6, 62.6, 188.6, 65.5, 121.4, 59.6, 188.3, 62.5, 121.1, 56.6, 188, 59.5, 120.8, 53.7, 187.8, 56.5, 120.6, 50.7, 187.5, 53.5, 120.3, 47.7, 187.3, 50.5, 120.1, 44.7, 187, 47.6, 119.8, 41.7, 186.7, 44.6, 119.5, 38.7, 186.5, 41.6, 119.3, 35.7, 186.2, 38.6, 119, 32.7, 185.9, 35.6, 118.8, 29.7, 185.7, 32.6, 118.5, 26.8, 185.4, 29.6, 118.2, 23.8, 185.2, 26.6, 118, 20.8, 184.9, 23.6, 117.7, 17.8, 184.6]),
+    _MusculoCuerpo(GrupoMuscular.antebrazos, <double>[0, 41, 186, 3, 38, 196, 37, 208, 37, 220, 3, 37, 238, 37, 252, 36, 262, 1, 40, 263, 3, 43, 246, 46, 224, 49, 206, 3, 50, 196, 48, 188, 45, 183, 4], <double>[90.9, 184.2, 81.8, 270.9, 87.9, 183.9, 78.8, 270.6, 85, 183.6, 75.8, 270.3, 82, 183.2, 72.9, 270, 79, 182.9, 69.9, 269.7, 76, 182.6, 66.9, 269.4, 73, 182.3, 63.9, 269, 70, 182, 60.9, 268.7, 67.1, 181.7, 57.9, 268.4, 64.1, 181.4, 55, 268.1, 61.1, 181.1, 52, 267.8, 58.1, 180.7, 49, 267.5, 55.1, 180.4, 46, 267.2, 52.1, 180.1, 43, 266.9, 49.2, 179.8, 40, 266.5, 46.2, 179.5, 37.1, 266.2, 43.2, 179.2, 34.1, 265.9, 40.2, 178.9, 31.1, 265.6, 37.2, 178.5, 28.1, 265.3, 34.2, 178.2, 25.1, 265, 31.3, 177.9, 22.1, 264.7, 28.3, 177.6, 19.2, 264.3, 25.3, 177.3, 16.2, 264, 22.3, 177, 13.2, 263.7, 19.3, 176.7, 10.2, 263.4, 16.3, 176.3, 7.2, 263.1, 13.4, 176, 4.2, 262.8, 10.4, 175.7, 1.3, 262.5, 7.4, 175.4, -1.7, 262.1, 4.4, 175.1, -4.7, 261.8]),
+    _MusculoCuerpo(GrupoMuscular.piernas, <double>[0, 99, 238, 3, 92, 236, 80, 238, 73, 246, 3, 67, 256, 67, 270, 72, 280, 3, 80, 288, 92, 288, 99, 283, 4], <double>[100, 262, 63.9, 290.5, 100, 262, 61.9, 287.9, 100, 262, 60.2, 285.1, 100, 262, 58.7, 282.3, 100, 262, 57.4, 279.3, 100, 262, 56.3, 276.3, 100, 262, 55.4, 273.2, 100, 262, 54.7, 270, 100, 262, 54.2, 266.8, 100, 262, 54, 263.6, 100, 262, 54, 260.4, 100, 262, 54.2, 257.2, 100, 262, 54.7, 254, 100, 262, 55.4, 250.8, 100, 262, 56.3, 247.7, 100, 262, 57.4, 244.7, 100, 262, 58.7, 241.7, 100, 262, 60.2, 238.9, 100, 262, 61.9, 236.1, 100, 262, 63.9, 233.5]),
+    _MusculoCuerpo(GrupoMuscular.piernas, <double>[0, 70, 232, 3, 67, 238, 67, 246, 69, 250, 3, 73, 244, 77, 239, 82, 237, 4], <double>[79.9, 220.9, 94.6, 246.4, 77.3, 222.4, 92, 247.9, 74.7, 223.9, 89.4, 249.4, 72.1, 225.4, 86.8, 250.9, 69.5, 226.9, 84.2, 252.4, 66.9, 228.4, 81.6, 253.9, 64.3, 229.9, 79, 255.4, 61.7, 231.4, 76.4, 256.9, 59.1, 232.9, 73.8, 258.4, 56.5, 234.4, 71.2, 259.9]),
+    _MusculoCuerpo(GrupoMuscular.piernas, <double>[0, 70, 291, 3, 67, 307, 67, 325, 71, 343, 3, 74, 347, 78, 345, 79, 337, 3, 79, 321, 78, 305, 76, 291, 4], <double>[105.7, 288.5, 103.5, 351.7, 102.7, 288.4, 100.5, 351.6, 99.7, 288.3, 97.5, 351.5, 96.7, 288.2, 94.5, 351.4, 93.7, 288.1, 91.5, 351.3, 90.7, 288, 88.5, 351.2, 87.7, 287.9, 85.5, 351.1, 84.7, 287.8, 82.5, 351, 81.7, 287.7, 79.5, 350.9, 78.7, 287.5, 76.5, 350.8, 75.7, 287.4, 73.5, 350.7, 72.7, 287.3, 70.5, 350.6, 69.7, 287.2, 67.5, 350.5, 66.7, 287.1, 64.5, 350.4, 63.7, 287, 61.5, 350.3, 60.7, 286.9, 58.5, 350.1, 57.7, 286.8, 55.5, 350, 54.8, 286.7, 52.5, 349.9, 51.8, 286.6, 49.5, 349.8, 48.8, 286.5, 46.5, 349.7, 45.8, 286.4, 43.5, 349.6, 42.8, 286.3, 40.6, 349.5]),
+    _MusculoCuerpo(GrupoMuscular.piernas, <double>[0, 80, 291, 3, 80, 307, 81, 325, 84, 341, 3, 87, 347, 92, 343, 92, 335, 3, 93, 319, 94, 303, 95, 291, 4], <double>[118.4, 285.9, 120.6, 349.9, 115.4, 286, 117.6, 350, 112.4, 286.1, 114.6, 350.1, 109.4, 286.2, 111.6, 350.2, 106.4, 286.3, 108.6, 350.3, 103.4, 286.4, 105.6, 350.4, 100.4, 286.5, 102.6, 350.5, 97.4, 286.6, 99.6, 350.6, 94.4, 286.8, 96.6, 350.7, 91.4, 286.9, 93.6, 350.8, 88.4, 287, 90.6, 350.9, 85.4, 287.1, 87.6, 351, 82.4, 287.2, 84.6, 351.1, 79.4, 287.3, 81.6, 351.2, 76.4, 287.4, 78.6, 351.3, 73.4, 287.5, 75.6, 351.4, 70.4, 287.6, 72.6, 351.5, 67.4, 287.7, 69.6, 351.6, 64.4, 287.8, 66.6, 351.7, 61.4, 287.9, 63.6, 351.8, 58.4, 288, 60.6, 351.9, 55.4, 288.1, 57.6, 352]),
+    _MusculoCuerpo(GrupoMuscular.pantorrillas, <double>[0, 72, 362, 3, 69, 374, 69, 388, 73, 400, 3, 76, 404, 80, 400, 80, 392, 3, 80, 380, 79, 370, 76, 362, 4], <double>[100.1, 359.2, 98.3, 408.6, 97.1, 359.1, 95.3, 408.5, 94.1, 359, 92.3, 408.3, 91.1, 358.9, 89.3, 408.2, 88.1, 358.8, 86.3, 408.1, 85.1, 358.6, 83.3, 408, 82.1, 358.5, 80.3, 407.9, 79.1, 358.4, 77.3, 407.8, 76.1, 358.3, 74.3, 407.7, 73.1, 358.2, 71.3, 407.6, 70.1, 358.1, 68.3, 407.5, 67.1, 358, 65.4, 407.4, 64.1, 357.9, 62.4, 407.3, 61.1, 357.8, 59.4, 407.2, 58.1, 357.7, 56.4, 407.1, 55.1, 357.6, 53.4, 407, 52.1, 357.5, 50.4, 406.9]),
+    _MusculoCuerpo(GrupoMuscular.pantorrillas, <double>[0, 82, 362, 3, 86, 370, 92, 380, 91, 394, 3, 90, 404, 84, 406, 82, 400, 3, 80, 388, 80, 374, 82, 362, 4], <double>[110.9, 357.3, 112.7, 408.9, 107.9, 357.4, 109.7, 409, 104.9, 357.5, 106.7, 409.1, 101.9, 357.6, 103.7, 409.2, 98.9, 357.7, 100.7, 409.3, 95.9, 357.8, 97.7, 409.4, 92.9, 357.9, 94.7, 409.5, 89.9, 358, 91.7, 409.6, 86.9, 358.1, 88.7, 409.7, 83.9, 358.3, 85.7, 409.8, 80.9, 358.4, 82.7, 409.9, 77.9, 358.5, 79.7, 410, 74.9, 358.6, 76.7, 410.1, 71.9, 358.7, 73.7, 410.2, 68.9, 358.8, 70.7, 410.4, 65.9, 358.9, 67.7, 410.5, 62.9, 359, 64.7, 410.6, 59.9, 359.1, 61.7, 410.7]),
+  ],
+);
+
+const _DatosCuerpo _cuerpoMujerFrente = _DatosCuerpo(
+  contorno: <double>[0, 100, 12, 3, 90, 12, 83, 20, 83, 31, 3, 83, 40, 85, 47, 89, 52, 1, 90, 60, 2, 90.76, 66, 87.22, 69, 2, 78.56, 74, 70.16, 78, 3, 61.84, 80, 55.12, 88, 54.24, 100, 3, 53.32, 108, 52.4, 116, 52.32, 124, 3, 51.32, 140, 49.44, 160, 48.42, 178, 3, 47.53, 186, 45.83, 196, 44.97, 206, 3, 44.1, 220, 42.36, 246, 41.48, 266, 3, 39.86, 272, 37.43, 280, 37.53, 290, 3, 37.64, 300, 40.16, 306, 43.52, 304, 3, 46.04, 302, 46.82, 294, 46.73, 286, 3, 47.51, 280, 47.44, 274, 48.22, 268, 3, 50.76, 248, 54.17, 222, 55.9, 200, 3, 56.76, 192, 57.61, 186, 57.64, 180, 3, 59.52, 160, 61.4, 140, 64.96, 120, 3, 65.84, 116, 66.71, 113, 67.56, 112, 3, 68.21, 122, 67.64, 134, 67.98, 146, 3, 70.5, 170, 75.77, 192, 75.39, 210, 3, 74.21, 222, 69.91, 232, 66.86, 244, 3, 65.35, 262, 63.33, 284, 63.89, 304, 3, 64.29, 326, 68.4, 344, 71.43, 356, 3, 70.51, 368, 69.6, 382, 71.64, 396, 3, 72.68, 408, 75.65, 418, 76.66, 426, 3, 72.79, 430, 70.88, 436, 74.77, 438, 1, 90.3, 438, 3, 92.23, 434, 90.28, 428, 88.33, 424, 3, 89.27, 412, 92.18, 396, 91.17, 380, 3, 90.17, 370, 89.18, 364, 90.15, 356, 3, 93.08, 340, 96.01, 314, 96.97, 290, 1, 97.95, 280, 2, 98.97, 276, 100, 276, 2, 101.03, 276, 102.05, 280, 1, 103.03, 290, 3, 103.99, 314, 106.92, 340, 109.85, 356, 3, 110.82, 364, 109.83, 370, 108.83, 380, 3, 107.82, 396, 110.73, 412, 111.67, 424, 3, 109.72, 428, 107.77, 434, 109.7, 438, 1, 125.23, 438, 3, 129.12, 436, 127.21, 430, 123.34, 426, 3, 124.35, 418, 127.32, 408, 128.36, 396, 3, 130.4, 382, 129.49, 368, 128.57, 356, 3, 131.6, 344, 135.71, 326, 136.11, 304, 3, 136.67, 284, 134.65, 262, 133.14, 244, 3, 130.09, 232, 125.79, 222, 124.61, 210, 3, 124.23, 192, 129.5, 170, 132.02, 146, 3, 132.36, 134, 131.79, 122, 132.44, 112, 3, 133.29, 113, 134.16, 116, 135.04, 120, 3, 138.6, 140, 140.48, 160, 142.36, 180, 3, 142.39, 186, 143.24, 192, 144.1, 200, 3, 145.83, 222, 149.24, 248, 151.78, 268, 3, 152.56, 274, 152.49, 280, 153.27, 286, 3, 153.18, 294, 153.96, 302, 156.48, 304, 3, 159.84, 306, 162.36, 300, 162.47, 290, 3, 162.57, 280, 160.14, 272, 158.52, 266, 3, 157.64, 246, 155.9, 220, 155.03, 206, 3, 154.17, 196, 152.47, 186, 151.58, 178, 3, 150.56, 160, 148.68, 140, 147.68, 124, 3, 147.6, 116, 146.68, 108, 145.76, 100, 3, 144.88, 88, 138.16, 80, 129.84, 78, 2, 121.44, 74, 112.78, 69, 2, 109.24, 66, 110, 60, 1, 111, 52, 3, 115, 47, 117, 40, 117, 31, 3, 117, 20, 110, 12, 100, 12, 4],
+  oreja: <double>[5, 83, 35, 5, 10, 0.12],
+  detalles: <List<double>>[<double>[0, 98.26, 82, 3, 91.26, 79, 82.44, 78, 73.9, 80], <double>[0, 92, 54, 3, 93, 60, 95, 66, 98, 72], <double>[0, 79.29, 352, 3, 82.24, 348, 88.16, 348, 90.14, 354, 3, 88.19, 362, 82.29, 364, 79.32, 360], <double>[0, 55.94, 182, 3, 53.41, 186, 52.56, 190, 53.39, 194]],
+  top: <List<double>>[<double>[0, 85, 71, 3, 85, 78, 85.5, 84, 86.5, 88], <double>[0, 99, 92, 3, 95, 88, 90, 87, 86.5, 88], <double>[0, 69, 118, 3, 76, 124, 88, 127, 100, 126]],
+  pelo: <double>[0, 82, 36, 3, 79, 17, 90, 7, 101, 7, 3, 113, 7, 122, 17, 119, 36, 3, 118, 44, 118, 50, 119, 56, 1, 115, 50, 3, 116, 42, 116, 36, 114, 30, 2, 110, 24, 105, 28, 2, 101, 22, 96, 28, 2, 91, 23, 88, 30, 3, 86, 36, 86, 42, 87, 50, 1, 83, 56, 3, 82, 50, 82, 42, 82, 36, 4],
+  cinta: <double>[0, 83, 24, 3, 92, 20, 108, 20, 117, 24, 1, 117.5, 29, 3, 108, 25, 92, 25, 82.5, 29, 4],
+  cola: _ColaCuerpo(110, 12, <double>[0, 110, 10, 3, 122, 6, 131, 18, 128, 36, 3, 126, 50, 121, 62, 117, 72, 3, 120, 56, 121, 40, 116, 26, 3, 114, 20, 112, 15, 109, 13, 4]),
+  musculos: <_MusculoCuerpo>[
+    _MusculoCuerpo(GrupoMuscular.hombros, <double>[0, 73.78, 79, 3, 64.89, 78, 56.5, 85, 53.89, 98, 3, 52.15, 108, 52.59, 118, 53.8, 126, 3, 56.34, 128, 60.14, 124, 62.25, 118, 3, 64.33, 110, 66.07, 100, 66.94, 93, 3, 68.68, 87, 71.29, 82, 73.78, 79, 4], <double>[57.2, 128, 0.6, 128, 57.2, 128, 0.7, 124.8, 57.2, 128, 0.9, 121.6, 57.2, 128, 1.4, 118.4, 57.2, 128, 2, 115.3, 57.2, 128, 2.8, 112.2, 57.2, 128, 3.8, 109.1, 57.2, 128, 4.9, 106.2, 57.2, 128, 6.3, 103.2, 57.2, 128, 7.7, 100.4, 57.2, 128, 9.4, 97.6, 57.2, 128, 11.2, 95, 57.2, 128, 13.1, 92.4, 57.2, 128, 15.2, 90, 57.2, 128, 17.4, 87.7, 57.2, 128, 19.7, 85.5, 57.2, 128, 22.2, 83.5, 57.2, 128, 24.8, 81.5, 57.2, 128, 27.4, 79.8, 57.2, 128, 30.2, 78.2, 57.2, 128, 33.1, 76.7, 57.2, 128, 36, 75.5, 57.2, 128, 39, 74.3, 57.2, 128, 42.1, 73.4, 57.2, 128, 45.2, 72.6, 57.2, 128, 48.3, 72, 57.2, 128, 51.5, 71.6]),
+    _MusculoCuerpo(GrupoMuscular.biceps, <double>[0, 60.74, 122, 3, 56.48, 128, 53.84, 140, 53.72, 152, 3, 53.6, 164, 54.36, 172, 55.13, 179, 3, 57.67, 177, 60.28, 168, 61.24, 156, 3, 62.22, 142, 62.34, 130, 60.74, 122, 4], <double>[92.5, 121.6, 86.9, 185, 89.5, 121.3, 83.9, 184.7, 86.5, 121, 80.9, 184.5, 83.5, 120.8, 77.9, 184.2, 80.5, 120.5, 75, 183.9, 77.5, 120.3, 72, 183.7, 74.5, 120, 69, 183.4, 71.5, 119.7, 66, 183.2, 68.5, 119.5, 63, 182.9, 65.6, 119.2, 60, 182.6, 62.6, 118.9, 57, 182.4, 59.6, 118.7, 54, 182.1, 56.6, 118.4, 51, 181.8, 53.6, 118.2, 48.1, 181.6, 50.6, 117.9, 45.1, 181.3, 47.6, 117.6, 42.1, 181.1, 44.6, 117.4, 39.1, 180.8, 41.7, 117.1, 36.1, 180.5, 38.7, 116.9, 33.1, 180.3, 35.7, 116.6, 30.1, 180, 32.7, 116.3, 27.1, 179.8, 29.7, 116.1, 24.1, 179.5]),
+    _MusculoCuerpo(GrupoMuscular.antebrazos, <double>[0, 49.22, 184, 3, 46.67, 194, 45.81, 206, 45.78, 218, 3, 45.74, 236, 45.71, 250, 44.85, 262, 1, 48.21, 263, 3, 50.76, 246, 53.33, 224, 55.89, 206, 3, 56.75, 196, 55.09, 188, 52.58, 182, 4], <double>[99.1, 183.4, 89.9, 270.8, 96.1, 183.1, 86.9, 270.5, 93.1, 182.8, 83.9, 270.2, 90.1, 182.5, 81, 269.8, 87.2, 182.1, 78, 269.5, 84.2, 181.8, 75, 269.2, 81.2, 181.5, 72, 268.9, 78.2, 181.2, 69, 268.6, 75.2, 180.9, 66, 268.3, 72.2, 180.6, 63, 268, 69.3, 180.3, 60.1, 267.7, 66.3, 179.9, 57.1, 267.3, 63.3, 179.6, 54.1, 267, 60.3, 179.3, 51.1, 266.7, 57.3, 179, 48.1, 266.4, 54.3, 178.7, 45.1, 266.1, 51.3, 178.4, 42.2, 265.8, 48.4, 178.1, 39.2, 265.5, 45.4, 177.8, 36.2, 265.1, 42.4, 177.4, 33.2, 264.8, 39.4, 177.1, 30.2, 264.5, 36.4, 176.8, 27.2, 264.2, 33.4, 176.5, 24.3, 263.9, 30.5, 176.2, 21.3, 263.6, 27.5, 175.9, 18.3, 263.3, 24.5, 175.6, 15.3, 262.9, 21.5, 175.2, 12.3, 262.6, 18.5, 174.9, 9.3, 262.3, 15.5, 174.6, 6.4, 262, 12.6, 174.3, 3.4, 261.7]),
+    _MusculoCuerpo(GrupoMuscular.piernas, <double>[0, 68.01, 250, 3, 64.69, 270, 63.68, 292, 65.07, 314, 3, 66.34, 330, 70.38, 344, 74.36, 352, 3, 75.3, 340, 74.21, 326, 73.05, 314, 3, 71.78, 294, 71, 272, 72.49, 256, 4], <double>[127.5, 250.6, 119.9, 359, 124.5, 250.4, 116.9, 358.8, 121.5, 250.2, 113.9, 358.6, 118.5, 250, 110.9, 358.4, 115.5, 249.8, 107.9, 358.2, 112.5, 249.5, 104.9, 357.9, 109.5, 249.3, 101.9, 357.7, 106.5, 249.1, 98.9, 357.5, 103.5, 248.9, 96, 357.3, 100.5, 248.7, 93, 357.1, 97.5, 248.5, 90, 356.9, 94.6, 248.3, 87, 356.7, 91.6, 248.1, 84, 356.5, 88.6, 247.9, 81, 356.3, 85.6, 247.7, 78, 356.1, 82.6, 247.5, 75, 355.8, 79.6, 247.2, 72, 355.6, 76.6, 247, 69, 355.4, 73.6, 246.8, 66, 355.2, 70.6, 246.6, 63, 355, 67.6, 246.4, 60, 354.8, 64.6, 246.2, 57, 354.6, 61.6, 246, 54.1, 354.4, 58.6, 245.8, 51.1, 354.2, 55.6, 245.6, 48.1, 354, 52.7, 245.4, 45.1, 353.8, 49.7, 245.2, 42.1, 353.5, 46.7, 244.9, 39.1, 353.3, 43.7, 244.7, 36.1, 353.1, 40.7, 244.5, 33.1, 352.9, 37.7, 244.3, 30.1, 352.7, 34.7, 244.1, 27.1, 352.5, 31.7, 243.9, 24.1, 352.3, 28.7, 243.7, 21.1, 352.1, 25.7, 243.5, 18.1, 351.9, 22.7, 243.3, 15.1, 351.7, 19.7, 243.1, 12.2, 351.5]),
+    _MusculoCuerpo(GrupoMuscular.piernas, <double>[0, 76.6, 252, 3, 73.07, 272, 72.81, 296, 75.1, 318, 3, 76.24, 330, 78.26, 340, 80.26, 346, 3, 83.19, 338, 85.12, 326, 86.01, 312, 3, 86.88, 292, 84.38, 268, 78.73, 252, 4], <double>[132.1, 250.3, 128.6, 351.3, 129.1, 250.2, 125.6, 351.2, 126.1, 250.1, 122.6, 351, 123.1, 250, 119.6, 350.9, 120.1, 249.9, 116.6, 350.8, 117.1, 249.7, 113.6, 350.7, 114.1, 249.6, 110.6, 350.6, 111.1, 249.5, 107.6, 350.5, 108.1, 249.4, 104.6, 350.4, 105.1, 249.3, 101.6, 350.3, 102.1, 249.2, 98.6, 350.2, 99.1, 249.1, 95.6, 350.1, 96.1, 249, 92.6, 350, 93.1, 248.9, 89.6, 349.9, 90.1, 248.8, 86.6, 349.8, 87.1, 248.7, 83.6, 349.7, 84.1, 248.6, 80.6, 349.6, 81.1, 248.5, 77.6, 349.5, 78.1, 248.4, 74.6, 349.4, 75.1, 248.3, 71.6, 349.3, 72.1, 248.2, 68.6, 349.2, 69.1, 248.1, 65.6, 349.1, 66.1, 248, 62.6, 349, 63.1, 247.9, 59.6, 348.8, 60.1, 247.8, 56.6, 348.7, 57.1, 247.7, 53.6, 348.6, 54.2, 247.5, 50.6, 348.5, 51.2, 247.4, 47.6, 348.4, 48.2, 247.3, 44.6, 348.3, 45.2, 247.2, 41.6, 348.2, 42.2, 247.1, 38.6, 348.1, 39.2, 247, 35.6, 348, 36.2, 246.9, 32.6, 347.9, 33.2, 246.8, 29.6, 347.8]),
+    _MusculoCuerpo(GrupoMuscular.piernas, <double>[0, 89.01, 312, 3, 85.09, 322, 83.18, 334, 83.21, 344, 3, 84.22, 352, 88.17, 354, 91.12, 350, 3, 93.09, 342, 93.06, 328, 92.02, 316, 4], <double>[108.1, 304.5, 116.6, 352.9, 105.1, 305.1, 113.6, 353.5, 102.2, 305.6, 110.7, 354, 99.2, 306.1, 107.7, 354.5, 96.3, 306.6, 104.8, 355, 93.3, 307.1, 101.8, 355.5, 90.3, 307.7, 98.9, 356.1, 87.4, 308.2, 95.9, 356.6, 84.4, 308.7, 93, 357.1, 81.5, 309.2, 90, 357.6, 78.5, 309.7, 87.1, 358.1, 75.6, 310.3, 84.1, 358.7, 72.6, 310.8, 81.2, 359.2, 69.7, 311.3, 78.2, 359.7, 66.7, 311.8, 75.2, 360.2, 63.8, 312.3, 72.3, 360.7, 60.8, 312.9, 69.3, 361.3]),
+    _MusculoCuerpo(GrupoMuscular.piernas, <double>[0, 92.65, 262, 3, 90.76, 278, 88.92, 296, 87.99, 308, 1, 92.01, 312, 3, 93.96, 298, 95.91, 282, 96.88, 268, 4], <double>[125.3, 264, 115.5, 319.9, 122.4, 263.4, 112.5, 319.4, 119.4, 262.9, 109.6, 318.8, 116.5, 262.4, 106.6, 318.3, 113.5, 261.9, 103.6, 317.8, 110.6, 261.4, 100.7, 317.3, 107.6, 260.8, 97.7, 316.8, 104.6, 260.3, 94.8, 316.2, 101.7, 259.8, 91.8, 315.7, 98.7, 259.3, 88.9, 315.2, 95.8, 258.8, 85.9, 314.7, 92.8, 258.2, 83, 314.2, 89.9, 257.7, 80, 313.6, 86.9, 257.2, 77.1, 313.1, 84, 256.7, 74.1, 312.6, 81, 256.2, 71.1, 312.1, 78.1, 255.6, 68.2, 311.6, 75.1, 255.1, 65.2, 311, 72.1, 254.6, 62.3, 310.5]),
+    _MusculoCuerpo(GrupoMuscular.pantorrillas, <double>[0, 74.43, 366, 3, 72.53, 380, 72.62, 396, 75.62, 412, 1, 78.55, 412, 3, 77.51, 396, 77.44, 380, 78.37, 368, 4], <double>[102.6, 363.7, 100.8, 416.1, 99.6, 363.6, 97.8, 416, 96.6, 363.5, 94.8, 415.9, 93.6, 363.4, 91.8, 415.8, 90.6, 363.3, 88.8, 415.7, 87.6, 363.2, 85.8, 415.6, 84.6, 363.1, 82.8, 415.5, 81.6, 363, 79.8, 415.4, 78.6, 362.9, 76.8, 415.3, 75.7, 362.8, 73.8, 415.2, 72.7, 362.7, 70.8, 415, 69.7, 362.6, 67.8, 414.9, 66.7, 362.5, 64.8, 414.8, 63.7, 362.4, 61.8, 414.7, 60.7, 362.3, 58.8, 414.6, 57.7, 362.2, 55.8, 414.5, 54.7, 362.1, 52.8, 414.4, 51.7, 362, 49.8, 414.3]),
+    _MusculoCuerpo(GrupoMuscular.pantorrillas, <double>[0, 88.2, 366, 3, 91.17, 376, 92.16, 388, 90.23, 400, 3, 88.28, 404, 85.34, 400, 85.32, 392, 3, 85.29, 382, 86.25, 372, 88.2, 366, 4], <double>[110.2, 361.9, 111.8, 406.5, 107.2, 362, 108.8, 406.6, 104.2, 362.1, 105.8, 406.7, 101.2, 362.2, 102.8, 406.8, 98.3, 362.3, 99.8, 406.9, 95.3, 362.5, 96.8, 407, 92.3, 362.6, 93.8, 407.1, 89.3, 362.7, 90.8, 407.2, 86.3, 362.8, 87.8, 407.4, 83.3, 362.9, 84.8, 407.5, 80.3, 363, 81.8, 407.6, 77.3, 363.1, 78.8, 407.7, 74.3, 363.2, 75.8, 407.8, 71.3, 363.3, 72.8, 407.9, 68.3, 363.4, 69.8, 408]),
+    _MusculoCuerpo(GrupoMuscular.pecho, <double>[0, 99, 91, 3, 95, 87, 88, 85, 82, 86, 3, 74, 88, 69, 95, 68, 104, 3, 68, 114, 72, 121, 80, 123, 3, 88, 125, 95, 122, 99, 117, 4], <double>[66, 102, 71.2, 58.1, 66, 102, 74.4, 58.6, 66, 102, 77.5, 59.3, 66, 102, 80.6, 60.3, 66, 102, 83.7, 61.5, 66, 102, 86.6, 62.9, 66, 102, 89.4, 64.5, 66, 102, 92.1, 66.3, 66, 102, 94.6, 68.3, 66, 102, 97, 70.5, 66, 102, 99.3, 72.9, 66, 102, 101.3, 75.4, 66, 102, 103.2, 78, 66, 102, 104.8, 80.8, 66, 102, 106.3, 83.7, 66, 102, 107.5, 86.8, 66, 102, 108.5, 89.8, 66, 102, 109.3, 93, 66, 102, 109.8, 96.2, 66, 102, 110.1, 99.4, 66, 102, 110.2, 102.7, 66, 102, 110.1, 105.9, 66, 102, 109.6, 109.1, 66, 102, 109, 112.3, 66, 102, 108.1, 115.4, 66, 102, 107, 118.5, 66, 102, 105.7, 121.5, 66, 102, 104.2, 124.3, 66, 102, 102.4, 127.1, 66, 102, 100.5, 129.7, 66, 102, 98.4, 132.1, 66, 102, 96.1, 134.4, 66, 102, 93.6, 136.5, 66, 102, 91, 138.5, 66, 102, 88.3, 140.2, 66, 102, 85.4, 141.7, 66, 102, 82.4, 143.1, 66, 102, 79.4, 144.2, 66, 102, 76.2, 145, 66, 102, 73.1, 145.7, 66, 102, 69.8, 146.1]),
+    _MusculoCuerpo(GrupoMuscular.abdomen, <double>[6, 88, 132, 99, 152, 5], <double>[79.1, 127.6, 107.9, 127.6, 79.1, 130.6, 107.9, 130.6, 79.1, 133.6, 107.9, 133.6, 79.1, 136.6, 107.9, 136.6, 79.1, 139.6, 107.9, 139.6, 79.1, 142.6, 107.9, 142.6, 79.1, 145.6, 107.9, 145.6, 79.1, 148.6, 107.9, 148.6, 79.1, 151.6, 107.9, 151.6, 79.1, 154.6, 107.9, 154.6]),
+    _MusculoCuerpo(GrupoMuscular.abdomen, <double>[6, 87.5, 155, 99, 176, 5], <double>[78.3, 150.5, 108.2, 150.5, 78.3, 153.5, 108.2, 153.5, 78.3, 156.5, 108.2, 156.5, 78.3, 159.5, 108.2, 159.5, 78.3, 162.5, 108.2, 162.5, 78.3, 165.5, 108.2, 165.5, 78.3, 168.5, 108.2, 168.5, 78.3, 171.5, 108.2, 171.5, 78.3, 174.5, 108.2, 174.5, 78.3, 177.5, 108.2, 177.5]),
+    _MusculoCuerpo(GrupoMuscular.abdomen, <double>[0, 88, 179, 1, 99, 179, 1, 99, 222, 3, 95, 226, 91, 220, 89, 212, 3, 88, 202, 88, 190, 88, 179, 4], <double>[66.4, 175.4, 120.6, 175.4, 66.4, 178.4, 120.6, 178.4, 66.4, 181.4, 120.6, 181.4, 66.4, 184.4, 120.6, 184.4, 66.4, 187.4, 120.6, 187.4, 66.4, 190.4, 120.6, 190.4, 66.4, 193.4, 120.6, 193.4, 66.4, 196.4, 120.6, 196.4, 66.4, 199.4, 120.6, 199.4, 66.4, 202.4, 120.6, 202.4, 66.4, 205.4, 120.6, 205.4, 66.4, 208.4, 120.6, 208.4, 66.4, 211.4, 120.6, 211.4, 66.4, 214.4, 120.6, 214.4, 66.4, 217.4, 120.6, 217.4, 66.4, 220.4, 120.6, 220.4, 66.4, 223.4, 120.6, 223.4, 66.4, 226.4, 120.6, 226.4, 66.4, 229.4, 120.6, 229.4]),
+    _MusculoCuerpo(GrupoMuscular.abdomen, <double>[0, 73, 150, 3, 78, 158, 82, 168, 84, 180, 3, 85, 194, 84, 206, 86, 218, 3, 81, 218, 78, 210, 77, 202, 3, 76, 186, 74, 168, 71, 156, 4], <double>[101.1, 135.5, 127, 206.6, 98.3, 136.6, 124.2, 207.6, 95.5, 137.6, 121.3, 208.7, 92.6, 138.6, 118.5, 209.7, 89.8, 139.6, 115.7, 210.7, 87, 140.7, 112.9, 211.7, 84.2, 141.7, 110.1, 212.8, 81.4, 142.7, 107.2, 213.8, 78.5, 143.7, 104.4, 214.8, 75.7, 144.8, 101.6, 215.8, 72.9, 145.8, 98.8, 216.9, 70.1, 146.8, 96, 217.9, 67.3, 147.8, 93.1, 218.9, 64.5, 148.9, 90.3, 219.9, 61.6, 149.9, 87.5, 221, 58.8, 150.9, 84.7, 222, 56, 151.9, 81.9, 223, 53.2, 153, 79, 224, 50.4, 154, 76.2, 225.1, 47.5, 155, 73.4, 226.1, 44.7, 156.1, 70.6, 227.1, 41.9, 157.1, 67.8, 228.1, 39.1, 158.1, 65, 229.2, 36.3, 159.1, 62.1, 230.2, 33.4, 160.2, 59.3, 231.2, 30.6, 161.2, 56.5, 232.3]),
+  ],
+);
+
+const _DatosCuerpo _cuerpoMujerEspalda = _DatosCuerpo(
+  contorno: <double>[0, 100, 12, 3, 90, 12, 83, 20, 83, 31, 3, 83, 40, 85, 47, 89, 52, 1, 90, 60, 2, 90.76, 66, 87.22, 69, 2, 78.56, 74, 70.16, 78, 3, 61.84, 80, 55.12, 88, 54.24, 100, 3, 53.32, 108, 52.4, 116, 52.32, 124, 3, 51.32, 140, 49.44, 160, 48.42, 178, 3, 47.53, 186, 45.83, 196, 44.97, 206, 3, 44.1, 220, 42.36, 246, 41.48, 266, 3, 39.86, 272, 37.43, 280, 37.53, 290, 3, 37.64, 300, 40.16, 306, 43.52, 304, 3, 46.04, 302, 46.82, 294, 46.73, 286, 3, 47.51, 280, 47.44, 274, 48.22, 268, 3, 50.76, 248, 54.17, 222, 55.9, 200, 3, 56.76, 192, 57.61, 186, 57.64, 180, 3, 59.52, 160, 61.4, 140, 64.96, 120, 3, 65.84, 116, 66.71, 113, 67.56, 112, 3, 68.21, 122, 67.64, 134, 67.98, 146, 3, 70.5, 170, 75.77, 192, 75.39, 210, 3, 74.21, 222, 69.91, 232, 66.86, 244, 3, 65.35, 262, 63.33, 284, 63.89, 304, 3, 64.29, 326, 68.4, 344, 71.43, 356, 3, 70.51, 368, 69.6, 382, 71.64, 396, 3, 72.68, 408, 75.65, 418, 76.66, 426, 3, 72.79, 430, 70.88, 436, 74.77, 438, 1, 90.3, 438, 3, 92.23, 434, 90.28, 428, 88.33, 424, 3, 89.27, 412, 92.18, 396, 91.17, 380, 3, 90.17, 370, 89.18, 364, 90.15, 356, 3, 93.08, 340, 96.01, 314, 96.97, 290, 1, 97.95, 280, 2, 98.97, 276, 100, 276, 2, 101.03, 276, 102.05, 280, 1, 103.03, 290, 3, 103.99, 314, 106.92, 340, 109.85, 356, 3, 110.82, 364, 109.83, 370, 108.83, 380, 3, 107.82, 396, 110.73, 412, 111.67, 424, 3, 109.72, 428, 107.77, 434, 109.7, 438, 1, 125.23, 438, 3, 129.12, 436, 127.21, 430, 123.34, 426, 3, 124.35, 418, 127.32, 408, 128.36, 396, 3, 130.4, 382, 129.49, 368, 128.57, 356, 3, 131.6, 344, 135.71, 326, 136.11, 304, 3, 136.67, 284, 134.65, 262, 133.14, 244, 3, 130.09, 232, 125.79, 222, 124.61, 210, 3, 124.23, 192, 129.5, 170, 132.02, 146, 3, 132.36, 134, 131.79, 122, 132.44, 112, 3, 133.29, 113, 134.16, 116, 135.04, 120, 3, 138.6, 140, 140.48, 160, 142.36, 180, 3, 142.39, 186, 143.24, 192, 144.1, 200, 3, 145.83, 222, 149.24, 248, 151.78, 268, 3, 152.56, 274, 152.49, 280, 153.27, 286, 3, 153.18, 294, 153.96, 302, 156.48, 304, 3, 159.84, 306, 162.36, 300, 162.47, 290, 3, 162.57, 280, 160.14, 272, 158.52, 266, 3, 157.64, 246, 155.9, 220, 155.03, 206, 3, 154.17, 196, 152.47, 186, 151.58, 178, 3, 150.56, 160, 148.68, 140, 147.68, 124, 3, 147.6, 116, 146.68, 108, 145.76, 100, 3, 144.88, 88, 138.16, 80, 129.84, 78, 2, 121.44, 74, 112.78, 69, 2, 109.24, 66, 110, 60, 1, 111, 52, 3, 115, 47, 117, 40, 117, 31, 3, 117, 20, 110, 12, 100, 12, 4],
+  oreja: <double>[5, 83, 35, 5, 10, 0.12],
+  detalles: <List<double>>[<double>[0, 100, 64, 1, 100, 236], <double>[0, 75.64, 92, 3, 80.86, 100, 86, 116, 87.45, 132], <double>[0, 80.29, 356, 3, 84.22, 352, 88.17, 354, 90.15, 358], <double>[0, 84.39, 408, 3, 84.41, 416, 84.43, 422, 85.42, 428]],
+  top: <List<double>>[],
+  pelo: <double>[0, 83, 36, 3, 80, 17, 90, 7, 100, 7, 3, 111, 7, 121, 17, 118, 36, 3, 118, 44, 116, 50, 113, 54, 3, 108, 56, 92, 56, 87, 54, 3, 84, 50, 82, 44, 83, 36, 4],
+  cinta: <double>[0, 82.5, 25, 3, 92, 22, 108, 22, 117.5, 25, 1, 117, 30, 3, 108, 27, 92, 27, 83, 30, 4],
+  cola: _ColaCuerpo(100, 14, <double>[0, 96, 14, 3, 91, 28, 92, 50, 96, 74, 3, 98, 82, 102, 82, 104, 74, 3, 108, 50, 109, 28, 104, 14, 4]),
+  musculos: <_MusculoCuerpo>[
+    _MusculoCuerpo(GrupoMuscular.espalda, <double>[0, 100, 62, 3, 96.3, 66, 91.82, 70, 87.38, 72, 3, 80.43, 75, 74.54, 78, 71.29, 82, 3, 76.51, 88, 82.6, 96, 87.82, 108, 3, 92.91, 124, 96.36, 142, 100, 162, 4], <double>[100, 110, 69.4, 165.5, 100, 110, 66.6, 163.9, 100, 110, 63.8, 162.1, 100, 110, 61.2, 160.2, 100, 110, 58.7, 158.1, 100, 110, 56.3, 155.9, 100, 110, 54, 153.6, 100, 110, 51.8, 151.2, 100, 110, 49.8, 148.7, 100, 110, 47.9, 146.1, 100, 110, 46.1, 143.4, 100, 110, 44.5, 140.6, 100, 110, 43, 137.7, 100, 110, 41.6, 134.8, 100, 110, 40.4, 131.7, 100, 110, 39.4, 128.7, 100, 110, 38.5, 125.5, 100, 110, 37.8, 122.4, 100, 110, 37.3, 119.2, 100, 110, 36.9, 116, 100, 110, 36.7, 112.7, 100, 110, 36.6, 109.5, 100, 110, 36.7, 106.2, 100, 110, 37, 103, 100, 110, 37.4, 99.8, 100, 110, 38, 96.6, 100, 110, 38.8, 93.4, 100, 110, 39.7, 90.3, 100, 110, 40.8, 87.3, 100, 110, 42.1, 84.3, 100, 110, 43.4, 81.4, 100, 110, 45, 78.5, 100, 110, 46.7, 75.7, 100, 110, 48.5, 73, 100, 110, 50.4, 70.5, 100, 110, 52.5, 68, 100, 110, 54.7, 65.6, 100, 110, 57.1, 63.3, 100, 110, 59.5, 61.2, 100, 110, 62.1, 59.2, 100, 110, 64.7, 57.3, 100, 110, 67.5, 55.6]),
+    _MusculoCuerpo(GrupoMuscular.espalda, <double>[0, 69.46, 114, 3, 68.72, 130, 69.64, 150, 73.26, 172, 3, 77.44, 190, 82.21, 204, 88.89, 214, 3, 92.77, 208, 94.8, 198, 95.65, 188, 3, 91.98, 172, 87.16, 152, 83.82, 134, 3, 80.51, 124, 75.49, 116, 69.46, 114, 4], <double>[102.2, 89.2, 157, 184.1, 99.6, 90.7, 154.4, 185.6, 97, 92.2, 151.8, 187.1, 94.4, 93.7, 149.2, 188.6, 91.8, 95.2, 146.6, 190.1, 89.2, 96.7, 144, 191.6, 86.6, 98.2, 141.4, 193.1, 84, 99.7, 138.8, 194.6, 81.5, 101.2, 136.2, 196.1, 78.9, 102.7, 133.6, 197.6, 76.3, 104.2, 131, 199.1, 73.7, 105.7, 128.4, 200.6, 71.1, 107.2, 125.8, 202.1, 68.5, 108.7, 123.2, 203.6, 65.9, 110.2, 120.6, 205.1, 63.3, 111.7, 118, 206.6, 60.7, 113.2, 115.4, 208.1, 58.1, 114.7, 112.8, 209.6, 55.5, 116.2, 110.3, 211.1, 52.9, 117.7, 107.7, 212.6, 50.3, 119.2, 105.1, 214.1, 47.7, 120.7, 102.5, 215.6, 45.1, 122.2, 99.9, 217.1, 42.5, 123.7, 97.3, 218.6, 39.9, 125.2, 94.7, 220.1, 37.3, 126.7, 92.1, 221.6, 34.7, 128.2, 89.5, 223.1, 32.1, 129.7, 86.9, 224.6, 29.5, 131.2, 84.3, 226.1, 26.9, 132.7, 81.7, 227.6, 24.3, 134.2, 79.1, 229.1, 21.7, 135.7, 76.5, 230.6, 19.1, 137.2, 73.9, 232.1, 16.5, 138.7, 71.3, 233.6, 13.9, 140.2, 68.7, 235.1, 11.3, 141.7, 66.1, 236.6, 8.7, 143.2, 63.5, 238.1]),
+    _MusculoCuerpo(GrupoMuscular.espalda, <double>[0, 70.42, 106, 3, 75.64, 102, 82.6, 104, 86.08, 110, 3, 82.49, 116, 75.49, 116, 70.38, 113, 4], <double>[70.1, 91.7, 95.6, 100.9, 69.1, 94.5, 94.5, 103.7, 68.1, 97.3, 93.5, 106.6, 67.1, 100.1, 92.5, 109.4, 66, 102.9, 91.5, 112.2, 65, 105.8, 90.4, 115, 64, 108.6, 89.4, 117.8, 63, 111.4, 88.4, 120.7, 61.9, 114.2, 87.3, 123.5, 60.9, 117, 86.3, 126.3]),
+    _MusculoCuerpo(GrupoMuscular.espalda, <double>[0, 92.85, 170, 3, 91.35, 192, 90.74, 214, 91.8, 236, 1, 98.97, 236, 1, 99.11, 170, 4], <double>[131.2, 166.7, 131.2, 239.3, 128.2, 166.7, 128.2, 239.3, 125.2, 166.7, 125.2, 239.3, 122.2, 166.7, 122.2, 239.3, 119.2, 166.7, 119.2, 239.3, 116.2, 166.7, 116.2, 239.3, 113.2, 166.7, 113.2, 239.3, 110.2, 166.7, 110.2, 239.3, 107.2, 166.7, 107.2, 239.3, 104.2, 166.7, 104.2, 239.3, 101.2, 166.7, 101.2, 239.3, 98.2, 166.7, 98.2, 239.3, 95.2, 166.7, 95.2, 239.3, 92.2, 166.7, 92.2, 239.3, 89.2, 166.7, 89.2, 239.3, 86.2, 166.7, 86.2, 239.3, 83.2, 166.7, 83.2, 239.3, 80.2, 166.7, 80.2, 239.3, 77.2, 166.7, 77.2, 239.3, 74.2, 166.7, 74.2, 239.3, 71.2, 166.7, 71.2, 239.3, 68.2, 166.7, 68.2, 239.3, 65.2, 166.7, 65.2, 239.3, 62.2, 166.7, 62.2, 239.3, 59.2, 166.7, 59.2, 239.3]),
+    _MusculoCuerpo(GrupoMuscular.hombros, <double>[0, 71.29, 80, 3, 63.46, 80, 56.5, 86, 53.89, 98, 3, 52.15, 108, 52.59, 118, 53.8, 126, 3, 57.48, 124, 61.49, 116, 65.2, 108, 3, 67.81, 100, 70.42, 92, 72.16, 86, 4], <double>[55.6, 126, 2.7, 126, 55.6, 126, 2.8, 122.7, 55.6, 126, 3.1, 119.4, 55.6, 126, 3.6, 116.2, 55.6, 126, 4.3, 112.9, 55.6, 126, 5.2, 109.8, 55.6, 126, 6.3, 106.7, 55.6, 126, 7.6, 103.6, 55.6, 126, 9.1, 100.7, 55.6, 126, 10.8, 97.9, 55.6, 126, 12.6, 95.1, 55.6, 126, 14.6, 92.5, 55.6, 126, 16.8, 90, 55.6, 126, 19.1, 87.7, 55.6, 126, 21.6, 85.5, 55.6, 126, 24.2, 83.4, 55.6, 126, 26.9, 81.6, 55.6, 126, 29.7, 79.9, 55.6, 126, 32.6, 78.3, 55.6, 126, 35.7, 77, 55.6, 126, 38.7, 75.9, 55.6, 126, 41.9, 74.9, 55.6, 126, 45.1, 74.1, 55.6, 126, 48.4, 73.6, 55.6, 126, 51.6, 73.2]),
+    _MusculoCuerpo(GrupoMuscular.triceps, <double>[0, 54, 124, 3, 51.34, 138, 50.34, 154, 51.02, 170, 3, 52.74, 166, 54.56, 152, 56.38, 138, 3, 57.28, 132, 56.5, 126, 54, 124, 4], <double>[82.3, 123.1, 77.7, 175.4, 79.3, 122.9, 74.7, 175.2, 76.3, 122.6, 71.7, 174.9, 73.3, 122.3, 68.7, 174.7, 70.3, 122.1, 65.7, 174.4, 67.3, 121.8, 62.7, 174.1, 64.3, 121.6, 59.8, 173.9, 61.3, 121.3, 56.8, 173.6, 58.4, 121, 53.8, 173.4, 55.4, 120.8, 50.8, 173.1, 52.4, 120.5, 47.8, 172.8, 49.4, 120.3, 44.8, 172.6, 46.4, 120, 41.8, 172.3, 43.4, 119.7, 38.8, 172.1, 40.4, 119.5, 35.8, 171.8, 37.4, 119.2, 32.9, 171.5, 34.4, 118.9, 29.9, 171.3, 31.5, 118.7, 26.9, 171]),
+    _MusculoCuerpo(GrupoMuscular.triceps, <double>[0, 62.4, 124, 3, 58.92, 136, 57.08, 152, 56.94, 166, 3, 56.02, 174, 55.12, 180, 53.42, 184, 3, 56.78, 182, 59.36, 176, 60.28, 168, 3, 62.1, 154, 63.94, 138, 62.4, 124, 4], <double>[94.9, 123.6, 89.1, 190.2, 91.9, 123.3, 86.1, 190, 88.9, 123.1, 83.1, 189.7, 86, 122.8, 80.1, 189.5, 83, 122.5, 77.1, 189.2, 80, 122.3, 74.1, 188.9, 77, 122, 71.2, 188.7, 74, 121.8, 68.2, 188.4, 71, 121.5, 65.2, 188.2, 68, 121.2, 62.2, 187.9, 65, 121, 59.2, 187.6, 62.1, 120.7, 56.2, 187.4, 59.1, 120.4, 53.2, 187.1, 56.1, 120.2, 50.2, 186.8, 53.1, 119.9, 47.3, 186.6, 50.1, 119.7, 44.3, 186.3, 47.1, 119.4, 41.3, 186.1, 44.1, 119.1, 38.3, 185.8, 41.1, 118.9, 35.3, 185.5, 38.1, 118.6, 32.3, 185.3, 35.2, 118.4, 29.3, 185, 32.2, 118.1, 26.3, 184.8, 29.2, 117.8, 23.3, 184.5]),
+    _MusculoCuerpo(GrupoMuscular.antebrazos, <double>[0, 48.37, 186, 3, 45.83, 196, 44.96, 208, 44.94, 220, 3, 44.9, 238, 44.87, 252, 44.01, 262, 1, 47.37, 263, 3, 49.92, 246, 52.49, 224, 55.05, 206, 3, 55.91, 196, 54.25, 188, 51.74, 183, 4], <double>[97.7, 184.3, 88.6, 270.7, 94.7, 184, 85.6, 270.4, 91.7, 183.7, 82.7, 270.1, 88.8, 183.4, 79.7, 269.8, 85.8, 183.1, 76.7, 269.5, 82.8, 182.8, 73.7, 269.2, 79.8, 182.5, 70.7, 268.9, 76.8, 182.1, 67.7, 268.5, 73.8, 181.8, 64.8, 268.2, 70.9, 181.5, 61.8, 267.9, 67.9, 181.2, 58.8, 267.6, 64.9, 180.9, 55.8, 267.3, 61.9, 180.6, 52.8, 267, 58.9, 180.3, 49.8, 266.7, 55.9, 179.9, 46.9, 266.4, 52.9, 179.6, 43.9, 266, 50, 179.3, 40.9, 265.7, 47, 179, 37.9, 265.4, 44, 178.7, 34.9, 265.1, 41, 178.4, 31.9, 264.8, 38, 178.1, 28.9, 264.5, 35, 177.8, 26, 264.2, 32.1, 177.4, 23, 263.8, 29.1, 177.1, 20, 263.5, 26.1, 176.8, 17, 263.2, 23.1, 176.5, 14, 262.9, 20.1, 176.2, 11, 262.6, 17.1, 175.9, 8.1, 262.3, 14.2, 175.6, 5.1, 262]),
+    _MusculoCuerpo(GrupoMuscular.piernas, <double>[0, 67.6, 232, 3, 64.36, 238, 64.63, 246, 66.94, 250, 3, 70.99, 244, 75.16, 239, 80.56, 237, 4], <double>[78, 220.4, 93.1, 246.5, 75.4, 221.9, 90.5, 248, 72.8, 223.4, 87.9, 249.5, 70.2, 224.9, 85.3, 251, 67.6, 226.4, 82.7, 252.5, 65, 227.9, 80.1, 254, 62.4, 229.4, 77.5, 255.5, 59.8, 230.9, 74.9, 257, 57.2, 232.4, 72.3, 258.5, 54.6, 233.9, 69.7, 260, 52, 235.4, 67.1, 261.5]),
+    _MusculoCuerpo(GrupoMuscular.piernas, <double>[0, 69.72, 291, 3, 66.95, 307, 67.25, 325, 71.36, 343, 3, 74.34, 347, 78.28, 345, 79.24, 337, 3, 79.12, 321, 77.94, 305, 75.77, 291, 4], <double>[105.8, 288.5, 103.6, 351.8, 102.8, 288.4, 100.6, 351.6, 99.8, 288.2, 97.6, 351.5, 96.9, 288.1, 94.6, 351.4, 93.9, 288, 91.6, 351.3, 90.9, 287.9, 88.6, 351.2, 87.9, 287.8, 85.6, 351.1, 84.9, 287.7, 82.6, 351, 81.9, 287.6, 79.6, 350.9, 78.9, 287.5, 76.7, 350.8, 75.9, 287.4, 73.7, 350.7, 72.9, 287.3, 70.7, 350.6, 69.9, 287.2, 67.7, 350.5, 66.9, 287.1, 64.7, 350.4, 63.9, 287, 61.7, 350.3, 60.9, 286.9, 58.7, 350.2, 57.9, 286.8, 55.7, 350.1, 54.9, 286.7, 52.7, 350, 51.9, 286.6, 49.7, 349.9, 48.9, 286.5, 46.7, 349.8, 45.9, 286.4, 43.7, 349.7, 42.9, 286.3, 40.7, 349.6]),
+    _MusculoCuerpo(GrupoMuscular.piernas, <double>[0, 79.81, 291, 3, 79.97, 307, 81.14, 325, 84.19, 341, 3, 87.17, 347, 92.1, 343, 92.09, 335, 3, 93.03, 319, 93.98, 303, 94.95, 291, 4], <double>[118.3, 285.9, 120.5, 349.9, 115.3, 286, 117.5, 350, 112.3, 286.1, 114.5, 350.1, 109.3, 286.2, 111.5, 350.2, 106.3, 286.3, 108.5, 350.3, 103.3, 286.4, 105.5, 350.4, 100.3, 286.5, 102.5, 350.5, 97.3, 286.6, 99.5, 350.6, 94.3, 286.7, 96.5, 350.7, 91.3, 286.8, 93.5, 350.8, 88.3, 286.9, 90.5, 350.9, 85.3, 287, 87.5, 351, 82.3, 287.2, 84.5, 351.1, 79.3, 287.3, 81.5, 351.2, 76.3, 287.4, 78.5, 351.3, 73.3, 287.5, 75.5, 351.4, 70.3, 287.6, 72.5, 351.5, 67.3, 287.7, 69.5, 351.6, 64.3, 287.8, 66.5, 351.8, 61.3, 287.9, 63.5, 351.9, 58.3, 288, 60.5, 352, 55.3, 288.1, 57.5, 352.1]),
+    _MusculoCuerpo(GrupoMuscular.pantorrillas, <double>[0, 72.44, 362, 3, 69.56, 374, 69.64, 388, 73.61, 400, 3, 76.56, 404, 80.45, 400, 80.43, 392, 3, 80.38, 380, 79.36, 370, 76.38, 362, 4], <double>[100.5, 359.2, 98.8, 408.5, 97.6, 359.1, 95.8, 408.4, 94.6, 359, 92.8, 408.3, 91.6, 358.9, 89.8, 408.2, 88.6, 358.8, 86.8, 408.1, 85.6, 358.7, 83.8, 408, 82.6, 358.6, 80.8, 407.9, 79.6, 358.4, 77.8, 407.8, 76.6, 358.3, 74.8, 407.7, 73.6, 358.2, 71.8, 407.6, 70.6, 358.1, 68.8, 407.5, 67.6, 358, 65.8, 407.4, 64.6, 357.9, 62.8, 407.3, 61.6, 357.8, 59.8, 407.2, 58.6, 357.7, 56.9, 407.1, 55.6, 357.6, 53.9, 407, 52.6, 357.5, 50.9, 406.9]),
+    _MusculoCuerpo(GrupoMuscular.pantorrillas, <double>[0, 82.28, 362, 3, 86.24, 370, 92.15, 380, 91.19, 394, 3, 90.23, 404, 84.38, 406, 82.41, 400, 3, 80.41, 388, 80.36, 374, 82.28, 362, 4], <double>[111.1, 357.3, 112.9, 408.9, 108.1, 357.4, 109.9, 409, 105.1, 357.5, 106.9, 409.1, 102.1, 357.7, 103.9, 409.2, 99.1, 357.8, 100.9, 409.3, 96.1, 357.9, 97.9, 409.4, 93.1, 358, 94.9, 409.5, 90.1, 358.1, 91.9, 409.6, 87.1, 358.2, 88.9, 409.7, 84.1, 358.3, 85.9, 409.8, 81.1, 358.4, 82.9, 409.9, 78.1, 358.5, 79.9, 410, 75.1, 358.6, 76.9, 410.1, 72.1, 358.7, 73.9, 410.2, 69.1, 358.8, 70.9, 410.3, 66.1, 358.9, 67.9, 410.4, 63.1, 359, 64.9, 410.5, 60.1, 359.1, 61.9, 410.6]),
+    _MusculoCuerpo(GrupoMuscular.piernas, <double>[0, 99, 236, 3, 90, 233, 76, 236, 70, 248, 3, 65, 260, 66, 276, 74, 284, 3, 83, 291, 94, 290, 99, 285, 4], <double>[100, 262, 61.9, 293.6, 100, 262, 59.9, 291, 100, 262, 58.1, 288.3, 100, 262, 56.5, 285.5, 100, 262, 55, 282.5, 100, 262, 53.8, 279.5, 100, 262, 52.7, 276.5, 100, 262, 51.9, 273.3, 100, 262, 51.2, 270.1, 100, 262, 50.8, 266.9, 100, 262, 50.6, 263.6, 100, 262, 50.6, 260.4, 100, 262, 50.8, 257.1, 100, 262, 51.2, 253.9, 100, 262, 51.9, 250.7, 100, 262, 52.7, 247.5, 100, 262, 53.8, 244.5, 100, 262, 55, 241.5, 100, 262, 56.5, 238.5, 100, 262, 58.1, 235.7, 100, 262, 59.9, 233, 100, 262, 61.9, 230.4]),
+  ],
+);
+
 
 // ---------------------------------------------------------------------------
 // 37.5 EL EMBLEMA
@@ -45144,12 +45702,16 @@ class TarjetaRankedPerfil extends StatefulWidget {
     required this.total,
     required this.general,
     this.onTap,
+    this.mujer,
   });
 
   final Map<GrupoMuscular, int> rangos;
   final int total;
   final int general;
   final VoidCallback? onTap;
+
+  /// Cuerpo de mujer. Sin dato, el de quien tiene la sesión.
+  final bool? mujer;
 
   @override
   State<TarjetaRankedPerfil> createState() => _TarjetaRankedPerfilState();
@@ -45179,6 +45741,7 @@ class _TarjetaRankedPerfilState extends State<TarjetaRankedPerfil> {
                   espalda: _espalda,
                   rangos: widget.rangos,
                   animada: false,
+                  mujer: widget.mujer,
                 ),
                 GestureDetector(
                   onTap: () => setState(() => _espalda = !_espalda),
