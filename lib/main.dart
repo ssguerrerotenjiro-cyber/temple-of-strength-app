@@ -34729,8 +34729,9 @@ class _TenshiScreenState extends State<TenshiScreen> {
   bool _borradorKokoro = false;
 
   /// Cuántos caracteres del borrador se ven ya. La respuesta se revela a
-  /// ritmo de lectura aunque llegue de golpe.
-  int _mostrado = 0;
+  /// ritmo de lectura aunque llegue de golpe. Es un notificador: mientras
+  /// escribe solo se redibuja su burbuja, no toda la conversación.
+  final ValueNotifier<int> _visible = ValueNotifier<int>(0);
   Timer? _revelador;
   Completer<void>? _alcanzado;
 
@@ -34766,6 +34767,7 @@ class _TenshiScreenState extends State<TenshiScreen> {
     _campo.dispose();
     _foco.dispose();
     _lejos.dispose();
+    _visible.dispose();
     super.dispose();
   }
 
@@ -34847,8 +34849,8 @@ class _TenshiScreenState extends State<TenshiScreen> {
   /// mucho, más despacio al final, como quien termina de escribir.
   void _revelar() {
     final int total = (_borrador ?? '').length;
-    if (_reducir) _mostrado = total;
-    if (_mostrado >= total) {
+    if (_reducir) _mostrar(total);
+    if (_visible.value >= total) {
       _revelador?.cancel();
       _revelador = null;
       _avisarAlcanzado();
@@ -34861,7 +34863,7 @@ class _TenshiScreenState extends State<TenshiScreen> {
         return;
       }
       final int objetivo = (_borrador ?? '').length;
-      final int falta = objetivo - _mostrado;
+      final int falta = objetivo - _visible.value;
       if (falta <= 0) {
         t.cancel();
         _revelador = null;
@@ -34869,14 +34871,22 @@ class _TenshiScreenState extends State<TenshiScreen> {
         return;
       }
       final int paso = (falta * 0.06).round().clamp(3, 18);
-      setState(() => _mostrado = math.min(objetivo, _mostrado + paso));
+      _mostrar(math.min(objetivo, _visible.value + paso));
       _bajar();
     });
   }
 
+  /// Mueve el texto visible. Al aparecer la primera letra, la cabecera pasa
+  /// de «Pensando…» a «Escribiendo…».
+  void _mostrar(int n) {
+    final bool empieza = _visible.value == 0 && n > 0;
+    _visible.value = n;
+    if (empieza && mounted) setState(() {});
+  }
+
   Future<void> _esperarRevelado() {
     final int total = (_borrador ?? '').length;
-    if (total == 0 || _mostrado >= total || _reducir) return Future<void>.value();
+    if (total == 0 || _visible.value >= total || _reducir) return Future<void>.value();
     _alcanzado ??= Completer<void>();
     final Future<void> f = _alcanzado!.future;
     _revelar();
@@ -34955,9 +34965,9 @@ class _TenshiScreenState extends State<TenshiScreen> {
       _estado = EstadoAvatar.pensando;
       _chips = const <SugerenciaTenshi>[];
       _borrador = null;
-      _mostrado = 0;
       _borradorKokoro = registro == RegistroTurno.kokoro;
     });
+    _visible.value = 0;
     _bajar(forzar: true);
 
     String crudo = '';
@@ -34980,11 +34990,10 @@ class _TenshiScreenState extends State<TenshiScreen> {
           return;
         }
         crudo += e.delta!;
-        final String visible = InterpreteTenshi.visible(crudo);
-        setState(() {
-          _borrador = visible;
-          _estado = _borradorKokoro ? EstadoAvatar.kokoro : EstadoAvatar.pensando;
-        });
+        _borrador = InterpreteTenshi.visible(crudo);
+        final EstadoAvatar nuevo =
+            _borradorKokoro ? EstadoAvatar.kokoro : EstadoAvatar.pensando;
+        if (nuevo != _estado) setState(() => _estado = nuevo);
         _revelar();
         _bajar();
       },
@@ -35003,16 +35012,16 @@ class _TenshiScreenState extends State<TenshiScreen> {
     if (!mounted) return;
 
     if (_detenido) {
-      final String hecho = _cortar(_borrador ?? '', _mostrado).trimRight();
+      final String hecho = _cortar(_borrador ?? '', _visible.value).trimRight();
       if (hecho.isEmpty) {
         // Se detuvo antes de que llegara nada: no queda turno de Tenshi.
         setState(() {
           _ocupado = false;
           _detenido = false;
           _borrador = null;
-          _mostrado = 0;
           _estado = EstadoAvatar.reposo;
         });
+        _visible.value = 0;
         return;
       }
       fin = InterpreteTenshi.interpretar(hecho, c,
@@ -35038,7 +35047,7 @@ class _TenshiScreenState extends State<TenshiScreen> {
     }
 
     final String id = AlmacenTenshi.nuevoId();
-    if ((_borrador ?? '').isNotEmpty) _sinEntrada.add(id);
+    if (_visible.value > 0) _sinEntrada.add(id);
     a.agregar(
       c.usuario,
       TurnoTenshi(
@@ -35057,11 +35066,11 @@ class _TenshiScreenState extends State<TenshiScreen> {
       _ocupado = false;
       _detenido = false;
       _borrador = null;
-      _mostrado = 0;
       _sinConexion = f.local && TenshiConfig.conectada;
       _estado = r.kokoro ? EstadoAvatar.kokoro : EstadoAvatar.reposo;
       _chips = r.sugerencias;
     });
+    _visible.value = 0;
     _bajar(forzar: true);
   }
 
@@ -35205,7 +35214,7 @@ class _TenshiScreenState extends State<TenshiScreen> {
     final List<TurnoTenshi> turnos = AlmacenTenshi.instancia.de(c.usuario);
     final int nRecuerdos =
         AlmacenTenshi.instancia.recuerdos(c.usuario).length;
-    final bool escribiendo = (_borrador ?? '').isNotEmpty;
+    final bool escribiendo = _ocupado && _visible.value > 0;
     final DateTime ahora = DateTime.now();
 
     // El hilo: la presentación, los días y los turnos.
@@ -35245,16 +35254,19 @@ class _TenshiScreenState extends State<TenshiScreen> {
         key: const ValueKey<String>('en_curso'),
         animar: true,
         deLaDerecha: false,
-        child: _TshTurno(
-          turno: TurnoTenshi(
-            id: 'borrador',
-            autor: AutorTurno.tenshi,
-            texto: escribiendo ? _cortar(_borrador!, _mostrado) : '',
-            creadoEn: ahora,
-            kokoro: _borradorKokoro,
+        child: ValueListenableBuilder<int>(
+          valueListenable: _visible,
+          builder: (BuildContext context, int n, _) => _TshTurno(
+            turno: TurnoTenshi(
+              id: 'borrador',
+              autor: AutorTurno.tenshi,
+              texto: _cortar(_borrador ?? '', n),
+              creadoEn: ahora,
+              kokoro: _borradorKokoro,
+            ),
+            tono: c.tono,
+            enCurso: true,
           ),
-          tono: c.tono,
-          enCurso: true,
         ),
       ));
       hilo.add(const SizedBox(height: 14));
@@ -35513,7 +35525,7 @@ class _TshCabecera extends StatelessWidget {
                               fontSize: 11.5,
                               letterSpacing: 0.2,
                               color: _trabajando
-                                  ? Color.lerp(tono.acento, TempleColors.blancoLuna, 0.3)
+                                  ? _tintaTenshi(tono, 0.3)
                                   : TempleColors.textoSuave,
                             ),
                           ),
@@ -35612,7 +35624,7 @@ class _TshInsigniaIA extends StatelessWidget {
               fontSize: grande ? 11.5 : 10,
               fontWeight: FontWeight.w800,
               letterSpacing: 1.1,
-              color: Color.lerp(tono.acento, TempleColors.blancoLuna, 0.35),
+              color: _tintaTenshi(tono, 0.35),
             ),
           ),
         ],
@@ -35620,6 +35632,11 @@ class _TshInsigniaIA extends StatelessWidget {
     );
   }
 }
+
+/// El acento de la voz, aclarado hacia el texto. En los temas claros se
+/// acerca más al texto: un rosa pálido sobre blanco no se lee.
+Color _tintaTenshi(TonoTenshi tono, double k) =>
+    Color.lerp(tono.acento, TempleColors.blancoLuna, TemaTemplo.paleta.claro ? 0.62 : k)!;
 
 // -- Hoja de recuerdos ------------------------------------------------------
 
@@ -36090,7 +36107,7 @@ class _TshTurno extends StatelessWidget {
                       style: TextStyle(
                         fontSize: 12.5,
                         fontWeight: FontWeight.w600,
-                        color: Color.lerp(tono.acento, TempleColors.blancoLuna, 0.25),
+                        color: _tintaTenshi(tono, 0.25),
                       ),
                     ),
                     const SizedBox(width: 6),
