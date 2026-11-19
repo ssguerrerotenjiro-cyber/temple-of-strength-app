@@ -4215,6 +4215,8 @@ class _PuertaTemploState extends State<PuertaTemplo> {
       if (parametroPrueba('pase') == '1') PaseTemplo.instancia.simularEnVistaPrueba();
       // ?demo=1: una cuenta de ejemplo con semanas de entrenamiento (capturas y videos).
       if (parametroPrueba('demo') == '1') sembrarDemostracion();
+      // ?charla=1: una conversación de ejemplo con Tenshi (capturas del chat).
+      if (parametroPrueba('charla') == '1') sembrarCharlaDePrueba();
       final MarcoSello? marco = MarcoSello.values.where((MarcoSello m) => m.name == parametroPrueba('marco')).firstOrNull;
       if (marco != null) AlmacenIdentidad.instancia.de('Kenji').marco = marco;
       // ?vineta=todo: la última pieza de cada capa del Taller (las más cargadas),
@@ -34683,9 +34685,21 @@ class _AvatarTenshiPainter extends CustomPainter {
 // Sustituye al andamio `TenshiScreen` de la sección 15. Misma firma, así que
 // MainShell no cambia.
 //
-// El avatar NO hace scroll: queda anclado arriba mientras la conversación
-// corre por debajo. Es lo que convierte a Tenshi en una presencia en la sala
-// en lugar de un mensaje más del hilo.
+// Desde la 1.10.0 se ve como lo que es: un chat con una inteligencia
+// artificial, pero con la ropa del templo.
+//
+//   · Cabecera de cristal con el avatar, la insignia «IA» y el estado en vivo
+//     (En línea, Pensando…, Escribiendo…).
+//   · Arriba del hilo, la presentación: quién es Tenshi, qué sabe hacer y que
+//     puede equivocarse.
+//   · Burbujas: las de Tenshi oscuras con su acento y su sello; las tuyas, en
+//     el violeta de las acciones. Cada una con su hora; las de Tenshi se
+//     pueden copiar y reportar.
+//   · Mientras piensa, tres puntos; mientras escribe, el texto aparece a
+//     ritmo de lectura con un cursor, aunque llegue de golpe (en la web llega
+//     entero). El botón de enviar se vuelve «detener».
+//   · Separadores de día, botón para volver abajo y el campo flotante, pegado
+//     a la barra de navegación (antes quedaba un hueco de 68 px) o al teclado.
 // ---------------------------------------------------------------------------
 
 class TenshiScreen extends StatefulWidget {
@@ -34702,6 +34716,9 @@ class _TenshiScreenState extends State<TenshiScreen> {
   final TextEditingController _campo = TextEditingController();
   final FocusNode _foco = FocusNode();
 
+  /// La persona subió a releer: se ofrece el botón para volver abajo.
+  final ValueNotifier<bool> _lejos = ValueNotifier<bool>(false);
+
   EstadoAvatar _estado = EstadoAvatar.reposo;
   bool _ocupado = false;
   bool _iniciado = false;
@@ -34710,6 +34727,21 @@ class _TenshiScreenState extends State<TenshiScreen> {
   /// Texto que está llegando en vivo. Null cuando no hay respuesta en curso.
   String? _borrador;
   bool _borradorKokoro = false;
+
+  /// Cuántos caracteres del borrador se ven ya. La respuesta se revela a
+  /// ritmo de lectura aunque llegue de golpe.
+  int _mostrado = 0;
+  Timer? _revelador;
+  Completer<void>? _alcanzado;
+
+  /// La respuesta en curso, para poder detenerla.
+  StreamSubscription<EventoTenshi>? _flujo;
+  Completer<void>? _corte;
+  bool _detenido = false;
+
+  /// Turnos que ya se vieron como borrador: no vuelven a entrar animados
+  /// (parpadearían).
+  final Set<String> _sinEntrada = <String>{};
 
   List<SugerenciaTenshi> _chips = const <SugerenciaTenshi>[];
 
@@ -34723,14 +34755,27 @@ class _TenshiScreenState extends State<TenshiScreen> {
           : EstadoAvatar.reposo;
       if (nuevo != _estado) setState(() => _estado = nuevo);
     });
+    _scroll.addListener(_medirDistancia);
   }
 
   @override
   void dispose() {
+    _revelador?.cancel();
+    _flujo?.cancel();
     _scroll.dispose();
     _campo.dispose();
     _foco.dispose();
+    _lejos.dispose();
     super.dispose();
+  }
+
+  bool get _reducir => MediaQuery.maybeDisableAnimationsOf(context) ?? false;
+
+  void _medirDistancia() {
+    if (!_scroll.hasClients) return;
+    final ScrollPosition pos = _scroll.position;
+    final bool lejos = pos.maxScrollExtent - pos.pixels > 320;
+    if (lejos != _lejos.value) _lejos.value = lejos;
   }
 
   ContextoTenshi _contexto(BuildContext context) {
@@ -34741,7 +34786,16 @@ class _TenshiScreenState extends State<TenshiScreen> {
   void _abrirSiHaceFalta(ContextoTenshi c) {
     if (_iniciado) return;
     _iniciado = true;
-    if (!AlmacenTenshi.instancia.vacia(c.usuario)) return;
+    if (!AlmacenTenshi.instancia.vacia(c.usuario)) {
+      // Al volver a una conversación, siguen a mano las sugerencias de la
+      // última respuesta.
+      final List<TurnoTenshi> t = AlmacenTenshi.instancia.de(c.usuario);
+      if (t.isNotEmpty && t.last.autor == AutorTurno.tenshi) _chips = t.last.sugerencias;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (_scroll.hasClients) _scroll.jumpTo(_scroll.position.maxScrollExtent);
+      });
+      return;
+    }
 
     final RespuestaTenshi r = _mente.lectura(c);
     AlmacenTenshi.instancia.agregar(
@@ -34771,6 +34825,98 @@ class _TenshiScreenState extends State<TenshiScreen> {
         _scroll.jumpTo(pos.maxScrollExtent);
       }
     });
+  }
+
+  /// Corta sin partir un emoji por la mitad.
+  static String _cortar(String s, int n) {
+    if (n >= s.length) return s;
+    if (n <= 0) return '';
+    int fin = n;
+    final int u = s.codeUnitAt(fin - 1);
+    if (u >= 0xD800 && u <= 0xDBFF) fin -= 1;
+    return s.substring(0, fin);
+  }
+
+  void _avisarAlcanzado() {
+    final Completer<void>? a = _alcanzado;
+    _alcanzado = null;
+    if (a != null && !a.isCompleted) a.complete();
+  }
+
+  /// Avanza el texto visible hacia lo que ya llegó: rápido cuando falta
+  /// mucho, más despacio al final, como quien termina de escribir.
+  void _revelar() {
+    final int total = (_borrador ?? '').length;
+    if (_reducir) _mostrado = total;
+    if (_mostrado >= total) {
+      _revelador?.cancel();
+      _revelador = null;
+      _avisarAlcanzado();
+      return;
+    }
+    if (_revelador != null) return;
+    _revelador = Timer.periodic(const Duration(milliseconds: 33), (Timer t) {
+      if (!mounted) {
+        t.cancel();
+        return;
+      }
+      final int objetivo = (_borrador ?? '').length;
+      final int falta = objetivo - _mostrado;
+      if (falta <= 0) {
+        t.cancel();
+        _revelador = null;
+        _avisarAlcanzado();
+        return;
+      }
+      final int paso = (falta * 0.06).round().clamp(3, 18);
+      setState(() => _mostrado = math.min(objetivo, _mostrado + paso));
+      _bajar();
+    });
+  }
+
+  Future<void> _esperarRevelado() {
+    final int total = (_borrador ?? '').length;
+    if (total == 0 || _mostrado >= total || _reducir) return Future<void>.value();
+    _alcanzado ??= Completer<void>();
+    final Future<void> f = _alcanzado!.future;
+    _revelar();
+    return f;
+  }
+
+  /// «Detener»: lo que ya se escribió se queda; el resto no llega.
+  void _detener() {
+    if (!_ocupado || _detenido) return;
+    HapticFeedback.selectionClick();
+    _detenido = true;
+    _flujo?.cancel();
+    _flujo = null;
+    _revelador?.cancel();
+    _revelador = null;
+    _avisarAlcanzado();
+    final Completer<void>? c = _corte;
+    if (c != null && !c.isCompleted) c.complete();
+  }
+
+  void _copiar(String texto) {
+    Clipboard.setData(ClipboardData(text: texto));
+    HapticFeedback.selectionClick();
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(
+        SnackBar(
+          behavior: SnackBarBehavior.floating,
+          duration: const Duration(milliseconds: 1600),
+          backgroundColor: TempleColors.superficieAlta,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(TempleRadius.campo),
+            side: const BorderSide(color: TempleColors.borde),
+          ),
+          content: const Text(
+            'Respuesta copiada',
+            style: TextStyle(color: TempleColors.texto, fontSize: 13),
+          ),
+        ),
+      );
   }
 
   Future<void> _enviar(String texto, ContextoTenshi c) async {
@@ -34805,9 +34951,11 @@ class _TenshiScreenState extends State<TenshiScreen> {
 
     setState(() {
       _ocupado = true;
+      _detenido = false;
       _estado = EstadoAvatar.pensando;
       _chips = const <SugerenciaTenshi>[];
       _borrador = null;
+      _mostrado = 0;
       _borradorKokoro = registro == RegistroTurno.kokoro;
     });
     _bajar(forzar: true);
@@ -34821,39 +34969,80 @@ class _TenshiScreenState extends State<TenshiScreen> {
     final bool completa = registro == RegistroTurno.crisis || UsoPase.instancia.tenshiDisponible;
     final TenshiGateway mente = completa ? _mente : const CerebroLocal();
 
-    await for (final EventoTenshi e in mente.conversar(peticion)) {
-      if (!mounted) return;
-      if (e.esFin) {
-        fin = e;
-        break;
-      }
-      crudo += e.delta!;
-      final String visible = InterpreteTenshi.visible(crudo);
-      setState(() {
-        _borrador = visible;
-        _estado = _borradorKokoro ? EstadoAvatar.kokoro : EstadoAvatar.pensando;
-      });
-      _bajar();
-    }
+    final Completer<void> corte = Completer<void>();
+    _corte = corte;
+    _flujo = mente.conversar(peticion).listen(
+      (EventoTenshi e) {
+        if (!mounted || _detenido) return;
+        if (e.esFin) {
+          fin = e;
+          if (!corte.isCompleted) corte.complete();
+          return;
+        }
+        crudo += e.delta!;
+        final String visible = InterpreteTenshi.visible(crudo);
+        setState(() {
+          _borrador = visible;
+          _estado = _borradorKokoro ? EstadoAvatar.kokoro : EstadoAvatar.pensando;
+        });
+        _revelar();
+        _bajar();
+      },
+      onError: (Object _) {
+        if (!corte.isCompleted) corte.complete();
+      },
+      onDone: () {
+        if (!corte.isCompleted) corte.complete();
+      },
+      cancelOnError: true,
+    );
+    await corte.future;
+    await _flujo?.cancel();
+    _flujo = null;
+    _corte = null;
     if (!mounted) return;
 
-    // Si el flujo se cerró sin evento final, se interpreta lo que llegó.
-    fin ??= InterpreteTenshi.interpretar(crudo, c,
-        kokoro: registro == RegistroTurno.kokoro);
+    if (_detenido) {
+      final String hecho = _cortar(_borrador ?? '', _mostrado).trimRight();
+      if (hecho.isEmpty) {
+        // Se detuvo antes de que llegara nada: no queda turno de Tenshi.
+        setState(() {
+          _ocupado = false;
+          _detenido = false;
+          _borrador = null;
+          _mostrado = 0;
+          _estado = EstadoAvatar.reposo;
+        });
+        return;
+      }
+      fin = InterpreteTenshi.interpretar(hecho, c,
+          kokoro: registro == RegistroTurno.kokoro);
+    } else {
+      // Se termina de escribir lo que llegó antes de cerrar el turno.
+      await _esperarRevelado();
+      if (!mounted) return;
+    }
 
-    final RespuestaTenshi r = fin.respuesta!;
-    if (completa && registro != RegistroTurno.crisis && !fin.local) UsoPase.instancia.sumarTenshi();
-    for (final String h in fin.recuerdos) {
+    // Si el flujo se cerró sin evento final, se interpreta lo que llegó.
+    final EventoTenshi f = fin ??
+        InterpreteTenshi.interpretar(crudo, c,
+            kokoro: registro == RegistroTurno.kokoro);
+
+    final RespuestaTenshi r = f.respuesta!;
+    if (completa && registro != RegistroTurno.crisis && !f.local) UsoPase.instancia.sumarTenshi();
+    for (final String h in f.recuerdos) {
       a.recordar(c.usuario, h);
     }
-    for (final String h in fin.olvidos) {
+    for (final String h in f.olvidos) {
       a.olvidarFragmento(c.usuario, h);
     }
 
+    final String id = AlmacenTenshi.nuevoId();
+    if ((_borrador ?? '').isNotEmpty) _sinEntrada.add(id);
     a.agregar(
       c.usuario,
       TurnoTenshi(
-        id: AlmacenTenshi.nuevoId(),
+        id: id,
         autor: AutorTurno.tenshi,
         texto: r.texto,
         creadoEn: DateTime.now(),
@@ -34866,8 +35055,10 @@ class _TenshiScreenState extends State<TenshiScreen> {
     if (registro != RegistroTurno.crisis) sonar(SonidoTemplo.tenshi);
     setState(() {
       _ocupado = false;
+      _detenido = false;
       _borrador = null;
-      _sinConexion = fin!.local && TenshiConfig.conectada;
+      _mostrado = 0;
+      _sinConexion = f.local && TenshiConfig.conectada;
       _estado = r.kokoro ? EstadoAvatar.kokoro : EstadoAvatar.reposo;
       _chips = r.sugerencias;
     });
@@ -34911,7 +35102,7 @@ class _TenshiScreenState extends State<TenshiScreen> {
     mostrarMenuTemplo(
       context,
       titulo: 'Tenshi',
-      subtitulo: 'Tu maestro del templo',
+      subtitulo: 'Tu maestro del templo, con IA',
       guia: 'tenshi',
       opciones: <OpcionHoja>[
         if (puedeBorrar)
@@ -35002,6 +35193,7 @@ class _TenshiScreenState extends State<TenshiScreen> {
     AlmacenTenshi.instancia.borrar(c.usuario);
     _iniciado = false;
     _sinConexion = false;
+    _sinEntrada.clear();
     setState(() {});
   }
 
@@ -35013,100 +35205,173 @@ class _TenshiScreenState extends State<TenshiScreen> {
     final List<TurnoTenshi> turnos = AlmacenTenshi.instancia.de(c.usuario);
     final int nRecuerdos =
         AlmacenTenshi.instancia.recuerdos(c.usuario).length;
+    final bool escribiendo = (_borrador ?? '').isNotEmpty;
+    final DateTime ahora = DateTime.now();
+
+    // El hilo: la presentación, los días y los turnos.
+    final List<Widget> hilo = <Widget>[
+      _TshPresentacion(tono: c.tono, espiritu: c.espiritu),
+    ];
+    DateTime? dia;
+    for (int i = 0; i < turnos.length; i++) {
+      final TurnoTenshi t = turnos[i];
+      final DateTime d = DateUtils.dateOnly(t.creadoEn);
+      if (dia == null || d != dia) {
+        dia = d;
+        hilo.add(_TshSeparadorDia(dia: d));
+      }
+      final bool nuevo = !_sinEntrada.contains(t.id) &&
+          ahora.difference(t.creadoEn) < const Duration(seconds: 2);
+      hilo.add(_TshEntrada(
+        key: ValueKey<String>('turno_${t.id}'),
+        animar: nuevo,
+        deLaDerecha: t.autor == AutorTurno.usuario,
+        child: _TshTurno(
+          turno: t,
+          tono: c.tono,
+          onCopiar: t.autor == AutorTurno.tenshi && !t.auxilio
+              ? () => _copiar(t.texto)
+              : null,
+          onReportar: t.autor == AutorTurno.tenshi && !t.auxilio && i > 0
+              ? () => reportarRespuestaTenshi(context, t, turnos)
+              : null,
+        ),
+      ));
+      if (t.auxilio) hilo.add(const _TshLineasApoyo());
+      hilo.add(const SizedBox(height: 14));
+    }
+    if (_ocupado) {
+      hilo.add(_TshEntrada(
+        key: const ValueKey<String>('en_curso'),
+        animar: true,
+        deLaDerecha: false,
+        child: _TshTurno(
+          turno: TurnoTenshi(
+            id: 'borrador',
+            autor: AutorTurno.tenshi,
+            texto: escribiendo ? _cortar(_borrador!, _mostrado) : '',
+            creadoEn: ahora,
+            kokoro: _borradorKokoro,
+          ),
+          tono: c.tono,
+          enCurso: true,
+        ),
+      ));
+      hilo.add(const SizedBox(height: 14));
+    }
 
     return Stack(
       fit: StackFit.expand,
       children: <Widget>[
         // Pétalos de cerezo que caen despacio detrás de la conversación.
         const Positioned.fill(child: PetalosSakura()),
+        // Resplandor del acento de la voz detrás de la cabecera.
+        Positioned(
+          top: -160,
+          left: -80,
+          right: -80,
+          height: 420,
+          child: IgnorePointer(
+            child: AnimatedContainer(
+              duration: const Duration(milliseconds: 700),
+              decoration: BoxDecoration(
+                gradient: RadialGradient(
+                  colors: <Color>[
+                    c.tono.acento.withValues(alpha: 0.16),
+                    c.tono.acento.withValues(alpha: 0.0),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
         SafeArea(
           bottom: false,
-          child: Column(
-            children: <Widget>[
-              Aparece(
-                desde: 0.0,
-                hasta: 0.42,
-                desplazamiento: -12,
-                child: _TshCabecera(
-                estado: _estado,
-                tono: c.tono,
-                espiritu: c.espiritu,
-                escribiendo: _borrador != null,
-                sinConexion: _sinConexion,
-                recuerdos: nRecuerdos,
-                onVoz: () => _cambiarVoz(c),
-                onRecuerdos: () => _verRecuerdos(c),
-                onBorrar: turnos.length <= 1 || _ocupado
-                    ? null
-                    : () => _borrarConversacion(c),
-                onMenu: () => _menu(c, puedeBorrar: turnos.length > 1 && !_ocupado),
-              ),
-              ),
-              Expanded(
-                child: Aparece(
-                  desde: 0.12,
-                  hasta: 0.58,
-                  desplazamiento: 22,
-                  child: GestureDetector(
-                  onTap: () => _foco.unfocus(),
-                  behavior: HitTestBehavior.translucent,
-                  child: ListView(
-                    controller: _scroll,
-                    physics: const BouncingScrollPhysics(),
-                    padding: const EdgeInsets.fromLTRB(20, 6, 20, 12),
-                    children: <Widget>[
-                      for (int i = 0; i < turnos.length; i++) ...<Widget>[
-                        _TshTurno(
-                          turno: turnos[i],
-                          tono: c.tono,
-                          onReportar: turnos[i].autor == AutorTurno.tenshi && !turnos[i].auxilio && i > 0
-                              ? () => reportarRespuestaTenshi(context, turnos[i], turnos)
-                              : null,
-                        ),
-                        if (turnos[i].auxilio) const _TshLineasApoyo(),
-                        const SizedBox(height: 18),
-                      ],
-                      if (_ocupado && (_borrador == null || _borrador!.isEmpty))
-                        _TshPensando(tono: c.tono),
-                      if (_borrador != null && _borrador!.isNotEmpty)
-                        _TshTurno(
-                          turno: TurnoTenshi(
-                            id: 'borrador',
-                            autor: AutorTurno.tenshi,
-                            texto: _borrador!,
-                            creadoEn: DateTime.now(),
-                            kokoro: _borradorKokoro,
+          child: Align(
+            alignment: Alignment.topCenter,
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 760),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: <Widget>[
+                  Aparece(
+                    desde: 0.0,
+                    hasta: 0.42,
+                    desplazamiento: -12,
+                    child: _TshCabecera(
+                      estado: _estado,
+                      tono: c.tono,
+                      escribiendo: escribiendo,
+                      sinConexion: _sinConexion,
+                      recuerdos: nRecuerdos,
+                      onVoz: () => _cambiarVoz(c),
+                      onRecuerdos: () => _verRecuerdos(c),
+                      onMenu: () => _menu(c, puedeBorrar: turnos.length > 1 && !_ocupado),
+                    ),
+                  ),
+                  Expanded(
+                    child: Aparece(
+                      desde: 0.12,
+                      hasta: 0.58,
+                      desplazamiento: 22,
+                      child: Stack(
+                        children: <Widget>[
+                          Positioned.fill(
+                            child: GestureDetector(
+                              onTap: () => _foco.unfocus(),
+                              behavior: HitTestBehavior.translucent,
+                              child: ListView(
+                                controller: _scroll,
+                                physics: const BouncingScrollPhysics(
+                                    parent: AlwaysScrollableScrollPhysics()),
+                                padding: const EdgeInsets.fromLTRB(14, 2, 14, 12),
+                                children: hilo,
+                              ),
+                            ),
                           ),
-                          tono: c.tono,
-                        ),
-                    ],
+                          Positioned(
+                            right: 14,
+                            bottom: 10,
+                            child: ValueListenableBuilder<bool>(
+                              valueListenable: _lejos,
+                              builder: (BuildContext context, bool lejos, _) => _TshBotonBajar(
+                                visible: lejos,
+                                tono: c.tono,
+                                onTap: () => _bajar(forzar: true),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
                   ),
-                ),
-                ),
-              ),
-              if (_chips.isNotEmpty && !_ocupado)
-                Aparece(
-                  desde: 0.26,
-                  hasta: 0.68,
-                  child: _TshChips(
-                    sugerencias: _chips,
-                    tono: c.tono,
-                    onTexto: (String m) => _enviar(m, c),
+                  if (_chips.isNotEmpty && !_ocupado)
+                    Aparece(
+                      desde: 0.26,
+                      hasta: 0.68,
+                      child: _TshChips(
+                        key: ValueKey<int>(identityHashCode(_chips)),
+                        sugerencias: _chips,
+                        tono: c.tono,
+                        onTexto: (String m) => _enviar(m, c),
+                      ),
+                    ),
+                  Aparece(desde: 0.30, hasta: 0.72, child: _TshCupo(tono: c.tono)),
+                  Aparece(
+                    desde: 0.32,
+                    hasta: 0.74,
+                    child: _TshCampo(
+                      controller: _campo,
+                      foco: _foco,
+                      tono: c.tono,
+                      ocupado: _ocupado,
+                      onEnviar: () => _enviar(_campo.text, c),
+                      onDetener: _detener,
+                    ),
                   ),
-                ),
-              Aparece(desde: 0.30, hasta: 0.72, child: _TshCupo(tono: c.tono)),
-              Aparece(
-                desde: 0.32,
-                hasta: 0.74,
-                child: _TshCampo(
-                  controller: _campo,
-                  foco: _foco,
-                  tono: c.tono,
-                  habilitado: !_ocupado,
-                  onEnviar: () => _enviar(_campo.text, c),
-                ),
+                ],
               ),
-            ],
+            ),
           ),
         ),
       ],
@@ -35120,118 +35385,236 @@ class _TshCabecera extends StatelessWidget {
   const _TshCabecera({
     required this.estado,
     required this.tono,
-    required this.espiritu,
     required this.escribiendo,
     required this.sinConexion,
     required this.recuerdos,
     required this.onVoz,
     required this.onRecuerdos,
-    required this.onBorrar,
     required this.onMenu,
   });
 
-  final VoidCallback onMenu;
   final EstadoAvatar estado;
   final TonoTenshi tono;
-  final String espiritu;
   final bool escribiendo;
   final bool sinConexion;
   final int recuerdos;
   final VoidCallback onVoz;
   final VoidCallback onRecuerdos;
-  final VoidCallback? onBorrar;
+  final VoidCallback onMenu;
+
+  bool get _trabajando => escribiendo || estado == EstadoAvatar.pensando;
 
   /// El estado se nombra, no se deja adivinar por la animación.
   String get _pie {
-    if (escribiendo) return 'Escribiendo';
+    if (escribiendo) return 'Escribiendo…';
     switch (estado) {
       case EstadoAvatar.pensando:
-        return 'Pensando';
+        return 'Pensando…';
       case EstadoAvatar.escuchando:
-        return 'Te escucha';
+        return 'Te escucha…';
       case EstadoAvatar.kokoro:
         return 'Aquí, sin prisa';
       case EstadoAvatar.reposo:
         return sinConexion
-            ? 'Sin conexión · solo lee el templo'
-            : tono.titulo;
+            ? 'Sin conexión · Tenshi ligero'
+            : 'En línea · ${tono.titulo}';
     }
+  }
+
+  Color get _punto {
+    if (_trabajando) return tono.acento;
+    if (sinConexion && estado == EstadoAvatar.reposo) return TempleColors.textoTenue;
+    return TempleColors.exito;
   }
 
   @override
   Widget build(BuildContext context) {
     return Padding(
-      padding: const EdgeInsets.fromLTRB(18, 6, 6, 4),
-      child: Row(
-        children: <Widget>[
-          AvatarTenshi(estado: estado, tono: tono, size: 64),
-          const SizedBox(width: 10),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              mainAxisSize: MainAxisSize.min,
-              children: <Widget>[
-                Row(
-                  children: <Widget>[
-                    const Flexible(
-                      child: Text(
-                        'TENSHI',
-                        maxLines: 1,
-                        overflow: TextOverflow.fade,
-                        softWrap: false,
-                        style: TextStyle(
-                          fontSize: 17,
-                          fontWeight: FontWeight.w600,
-                          letterSpacing: 3,
-                          color: TempleColors.blancoLuna,
+      padding: const EdgeInsets.fromLTRB(12, 6, 12, 6),
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 700),
+        curve: Curves.easeInOutCubic,
+        padding: const EdgeInsets.fromLTRB(4, 4, 2, 4),
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(26),
+          gradient: LinearGradient(
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+            colors: <Color>[
+              Color.alphaBlend(tono.acento.withValues(alpha: 0.10), TempleColors.superficieAlta)
+                  .withValues(alpha: 0.90),
+              TempleColors.superficie.withValues(alpha: 0.84),
+            ],
+          ),
+          border: Border.all(color: tono.acento.withValues(alpha: 0.22)),
+          boxShadow: <BoxShadow>[
+            BoxShadow(
+              color: Colors.black.withValues(alpha: 0.26),
+              blurRadius: 20,
+              offset: const Offset(0, 8),
+            ),
+            BoxShadow(color: tono.acento.withValues(alpha: 0.10), blurRadius: 26),
+          ],
+        ),
+        child: Row(
+          children: <Widget>[
+            AvatarTenshi(estado: estado, tono: tono, size: 50),
+            const SizedBox(width: 4),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: <Widget>[
+                  Row(
+                    children: <Widget>[
+                      const Flexible(
+                        child: Text(
+                          'Tenshi',
+                          maxLines: 1,
+                          overflow: TextOverflow.fade,
+                          softWrap: false,
+                          style: TextStyle(
+                            fontSize: 17,
+                            fontWeight: FontWeight.w700,
+                            letterSpacing: 0.3,
+                            color: TempleColors.blancoLuna,
+                          ),
                         ),
                       ),
-                    ),
-                    const SizedBox(width: 9),
-                    Text(
-                      kanjiDeEspiritu(espiritu),
-                      style: TextStyle(fontSize: 14, color: tono.acento),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 3),
-                AnimatedSwitcher(
-                  duration: TempleMotion.rapido,
-                  child: Text(
-                    _pie,
-                    key: ValueKey<String>(_pie),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(
-                      fontSize: 11.5,
-                      letterSpacing: 0.4,
-                      color: sinConexion && estado == EstadoAvatar.reposo
-                          ? TempleColors.textoTenue
-                          : TempleColors.textoSuave,
-                    ),
+                      const SizedBox(width: 7),
+                      _TshInsigniaIA(tono: tono),
+                    ],
                   ),
-                ),
-              ],
+                  const SizedBox(height: 4),
+                  Row(
+                    children: <Widget>[
+                      AnimatedContainer(
+                        duration: TempleMotion.medio,
+                        width: 7,
+                        height: 7,
+                        decoration: BoxDecoration(
+                          shape: BoxShape.circle,
+                          color: _punto,
+                          boxShadow: <BoxShadow>[
+                            BoxShadow(color: _punto.withValues(alpha: 0.6), blurRadius: 6),
+                          ],
+                        ),
+                      ),
+                      const SizedBox(width: 6),
+                      Flexible(
+                        child: AnimatedSwitcher(
+                          duration: TempleMotion.rapido,
+                          child: Text(
+                            _pie,
+                            key: ValueKey<String>(_pie),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                              fontSize: 11.5,
+                              letterSpacing: 0.2,
+                              color: _trabajando
+                                  ? Color.lerp(tono.acento, TempleColors.blancoLuna, 0.3)
+                                  : TempleColors.textoSuave,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+            _TshBotonCabecera(
+              tooltip: 'Cómo te habla',
+              onTap: onVoz,
+              child: TempleIcon(tono.glifo, size: 18, color: tono.acento),
+            ),
+            _TshBotonCabecera(
+              tooltip: 'Lo que Tenshi recuerda',
+              onTap: onRecuerdos,
+              child: Badge(
+                isLabelVisible: recuerdos > 0,
+                label: Text('$recuerdos'),
+                backgroundColor: tono.acento.withValues(alpha: 0.9),
+                textColor: ColoresTradicion.negro,
+                child: const Icon(Icons.bookmark_border_rounded,
+                    size: 20, color: TempleColors.textoSuave),
+              ),
+            ),
+            BotonMenuTemplo(onTap: onMenu),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _TshBotonCabecera extends StatelessWidget {
+  const _TshBotonCabecera({
+    required this.tooltip,
+    required this.onTap,
+    required this.child,
+  });
+
+  final String tooltip;
+  final VoidCallback onTap;
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    return Tooltip(
+      message: tooltip,
+      child: Material(
+        type: MaterialType.transparency,
+        child: InkWell(
+          customBorder: const CircleBorder(),
+          onTap: () {
+            HapticFeedback.selectionClick();
+            onTap();
+          },
+          child: SizedBox(width: 38, height: 38, child: Center(child: child)),
+        ),
+      ),
+    );
+  }
+}
+
+/// La insignia «IA»: se ve de un vistazo que Tenshi es una inteligencia
+/// artificial, no una persona ni un mensaje fijo.
+class _TshInsigniaIA extends StatelessWidget {
+  const _TshInsigniaIA({required this.tono, this.grande = false});
+
+  final TonoTenshi tono;
+  final bool grande;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: EdgeInsets.fromLTRB(grande ? 7 : 5, 2, grande ? 9 : 7, 2),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(99),
+        gradient: LinearGradient(
+          colors: <Color>[
+            tono.acento.withValues(alpha: 0.30),
+            TempleColors.violeta.withValues(alpha: 0.18),
+          ],
+        ),
+        border: Border.all(color: tono.acento.withValues(alpha: 0.5)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: <Widget>[
+          TempleIcon(TempleGlyph.chispa, size: grande ? 12 : 10, color: tono.acento, trazo: 1.6),
+          const SizedBox(width: 3),
+          Text(
+            'IA',
+            style: TextStyle(
+              fontSize: grande ? 11.5 : 10,
+              fontWeight: FontWeight.w800,
+              letterSpacing: 1.1,
+              color: Color.lerp(tono.acento, TempleColors.blancoLuna, 0.35),
             ),
           ),
-          IconButton(
-            onPressed: onVoz,
-            tooltip: 'Cómo te habla',
-            icon: TempleIcon(tono.glifo, size: 19, color: tono.acento),
-          ),
-          IconButton(
-            onPressed: onRecuerdos,
-            tooltip: 'Lo que Tenshi recuerda',
-            icon: Badge(
-              isLabelVisible: recuerdos > 0,
-              label: Text('$recuerdos'),
-              backgroundColor: tono.acento.withValues(alpha: 0.85),
-              textColor: TempleColors.negro,
-              child: const Icon(Icons.bookmark_border_rounded,
-                  size: 20, color: TempleColors.textoSuave),
-            ),
-          ),
-          BotonMenuTemplo(onTap: onMenu),
         ],
       ),
     );
@@ -35393,17 +35776,207 @@ class _TshHojaRecuerdosState extends State<_TshHojaRecuerdos> {
   }
 }
 
-// -- Un turno ---------------------------------------------------------------
+// -- Presentación (arriba del hilo) -----------------------------------------
 
-/// Los turnos de Tenshi NO son burbujas.
+/// Lo primero del hilo: quién es Tenshi, qué sabe hacer y que es una IA que
+/// puede equivocarse. Sube con la conversación; no ocupa sitio fijo.
+class _TshPresentacion extends StatelessWidget {
+  const _TshPresentacion({required this.tono, required this.espiritu});
+
+  final TonoTenshi tono;
+  final String espiritu;
+
+  @override
+  Widget build(BuildContext context) {
+    const List<(TempleGlyph, String)> sabe = <(TempleGlyph, String)>[
+      (TempleGlyph.espadas, 'Rutinas'),
+      (TempleGlyph.cuenco, 'Comida'),
+      (TempleGlyph.loto, 'Recuperación'),
+      (TempleGlyph.chispa, 'Tu progreso'),
+    ];
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(8, 10, 8, 4),
+      child: Column(
+        children: <Widget>[
+          AvatarTenshi(estado: EstadoAvatar.reposo, tono: tono, size: 92),
+          Row(
+            mainAxisSize: MainAxisSize.min,
+            children: <Widget>[
+              const Text(
+                'Tenshi',
+                style: TextStyle(
+                  fontSize: 22,
+                  fontWeight: FontWeight.w700,
+                  letterSpacing: 0.4,
+                  color: TempleColors.blancoLuna,
+                ),
+              ),
+              const SizedBox(width: 8),
+              _TshInsigniaIA(tono: tono, grande: true),
+              const SizedBox(width: 8),
+              Text(
+                kanjiDeEspiritu(espiritu),
+                style: TextStyle(fontSize: 15, color: tono.acento.withValues(alpha: 0.8)),
+              ),
+            ],
+          ),
+          const SizedBox(height: 5),
+          const Text(
+            'Tu maestro del templo, con inteligencia artificial',
+            textAlign: TextAlign.center,
+            style: TextStyle(fontSize: 13, height: 1.4, color: TempleColors.textoSuave),
+          ),
+          const SizedBox(height: 12),
+          Wrap(
+            alignment: WrapAlignment.center,
+            spacing: 6,
+            runSpacing: 6,
+            children: <Widget>[
+              for (final (TempleGlyph, String) e in sabe)
+                Container(
+                  padding: const EdgeInsets.fromLTRB(9, 5, 11, 5),
+                  decoration: BoxDecoration(
+                    borderRadius: BorderRadius.circular(99),
+                    color: TempleColors.superficie.withValues(alpha: 0.7),
+                    border: Border.all(color: TempleColors.borde),
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: <Widget>[
+                      TempleIcon(e.$1, size: 12, color: tono.acento.withValues(alpha: 0.9)),
+                      const SizedBox(width: 5),
+                      Text(e.$2, style: const TextStyle(fontSize: 11.5, color: TempleColors.textoSuave)),
+                    ],
+                  ),
+                ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 340),
+            child: const Text(
+              'Lee tus sesiones, tu racha y tus récords para responderte con tus datos. '
+              'Es una IA: puede equivocarse y no reemplaza a un profesional.',
+              textAlign: TextAlign.center,
+              style: TextStyle(fontSize: 11.5, height: 1.45, color: TempleColors.textoTenue),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// -- Separador de día ---------------------------------------------------------
+
+class _TshSeparadorDia extends StatelessWidget {
+  const _TshSeparadorDia({required this.dia});
+
+  final DateTime dia;
+
+  static const List<String> _meses = <String>[
+    'enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio',
+    'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre',
+  ];
+
+  String get _texto {
+    final int d = DateUtils.dateOnly(DateTime.now()).difference(dia).inDays;
+    if (d <= 0) return 'Hoy';
+    if (d == 1) return 'Ayer';
+    return '${dia.day} de ${_meses[dia.month - 1]}';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    Widget linea(bool izquierda) => Expanded(
+          child: Container(
+            height: 1,
+            decoration: BoxDecoration(
+              gradient: LinearGradient(
+                colors: izquierda
+                    ? <Color>[TempleColors.borde.withValues(alpha: 0), TempleColors.borde]
+                    : <Color>[TempleColors.borde, TempleColors.borde.withValues(alpha: 0)],
+              ),
+            ),
+          ),
+        );
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(20, 14, 20, 12),
+      child: Row(
+        children: <Widget>[
+          linea(true),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 12),
+            child: Text(
+              _texto.toUpperCase(),
+              style: const TextStyle(
+                fontSize: 10.5,
+                fontWeight: FontWeight.w600,
+                letterSpacing: 1.6,
+                color: TempleColors.textoTenue,
+              ),
+            ),
+          ),
+          linea(false),
+        ],
+      ),
+    );
+  }
+}
+
+// -- Entrada de un turno --------------------------------------------------------
+
+/// Cada mensaje nuevo entra deslizándose desde su lado. Los que ya estaban
+/// (al volver al módulo) aparecen quietos.
+class _TshEntrada extends StatelessWidget {
+  const _TshEntrada({
+    super.key,
+    required this.animar,
+    required this.deLaDerecha,
+    required this.child,
+  });
+
+  final bool animar;
+  final bool deLaDerecha;
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    final bool reducir = MediaQuery.maybeDisableAnimationsOf(context) ?? false;
+    return TweenAnimationBuilder<double>(
+      tween: Tween<double>(begin: animar && !reducir ? 0 : 1, end: 1),
+      duration: const Duration(milliseconds: 380),
+      curve: TempleMotion.entrada,
+      child: child,
+      builder: (BuildContext context, double v, Widget? hijo) {
+        if (v >= 1) return hijo!;
+        return Opacity(
+          opacity: v.clamp(0.0, 1.0),
+          child: Transform.translate(
+            offset: Offset((1 - v) * (deLaDerecha ? 18 : -12), (1 - v) * 14),
+            child: hijo,
+          ),
+        );
+      },
+    );
+  }
+}
+
+// -- Un turno -------------------------------------------------------------------
+
+/// Desde la 1.10.0, un chat de verdad: burbujas.
 ///
-/// Una burbuja de chat arrastra todo el vocabulario visual de la mensajería y
-/// convierte a Tenshi en un contacto más de la lista. Aquí su texto va suelto
-/// sobre el fondo, marcado con un trazo vertical a la izquierda, como una
-/// anotación en un pergamino. Solo el usuario tiene contenedor: así se
-/// distingue de un vistazo quién habla, sin etiquetas.
+/// Las de Tenshi, oscuras con el acento de su voz y su sello al lado (en
+/// kokoro y en auxilio sin acento: el momento no lleva marca encima). Las
+/// tuyas, en el violeta de las acciones de la app. Cada una con su hora.
 class _TshTurno extends StatelessWidget {
-  const _TshTurno({required this.turno, required this.tono, this.onReportar});
+  const _TshTurno({
+    required this.turno,
+    required this.tono,
+    this.onReportar,
+    this.onCopiar,
+    this.enCurso = false,
+  });
 
   final TurnoTenshi turno;
   final TonoTenshi tono;
@@ -35411,88 +35984,182 @@ class _TshTurno extends StatelessWidget {
   /// Reportar esta respuesta (sección 50). Null = sin botón.
   final VoidCallback? onReportar;
 
+  /// Copiar el texto. Null = sin botón.
+  final VoidCallback? onCopiar;
+
+  /// La respuesta que se está escribiendo ahora.
+  final bool enCurso;
+
+  static String hora(DateTime d) =>
+      '${d.hour.toString().padLeft(2, '0')}:${d.minute.toString().padLeft(2, '0')}';
+
   @override
   Widget build(BuildContext context) {
+    final double ancho = math.min(MediaQuery.sizeOf(context).width, 760);
+
     if (turno.autor == AutorTurno.usuario) {
       return Align(
         alignment: Alignment.centerRight,
         child: ConstrainedBox(
-          constraints: const BoxConstraints(maxWidth: 300),
-          child: Container(
-            padding:
-                const EdgeInsets.symmetric(horizontal: 15, vertical: 11),
-            decoration: BoxDecoration(
-              color: TempleColors.superficie.withValues(alpha: 0.92),
-              borderRadius: BorderRadius.circular(TempleRadius.tarjeta),
-              border: Border.all(color: TempleColors.borde),
-            ),
-            child: Text(
-              turno.texto,
-              style: const TextStyle(
-                  fontSize: 13.5, height: 1.45, color: TempleColors.texto),
-            ),
+          constraints: BoxConstraints(maxWidth: math.max(220, ancho * 0.78)),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.end,
+            mainAxisSize: MainAxisSize.min,
+            children: <Widget>[
+              Container(
+                padding: const EdgeInsets.fromLTRB(15, 11, 15, 11),
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    begin: Alignment.topLeft,
+                    end: Alignment.bottomRight,
+                    colors: <Color>[
+                      Color.lerp(TempleColors.violeta, TempleColors.violetaClaro, 0.12)!,
+                      Color.lerp(TempleColors.violeta, TempleColors.moradoProfundo, 0.42)!,
+                    ],
+                  ),
+                  borderRadius: const BorderRadius.only(
+                    topLeft: Radius.circular(20),
+                    topRight: Radius.circular(20),
+                    bottomLeft: Radius.circular(20),
+                    bottomRight: Radius.circular(6),
+                  ),
+                  boxShadow: <BoxShadow>[
+                    BoxShadow(
+                      color: TempleColors.violeta.withValues(alpha: 0.28),
+                      blurRadius: 18,
+                      offset: const Offset(0, 6),
+                    ),
+                  ],
+                ),
+                child: SelectionArea(
+                  child: Text(
+                    turno.texto,
+                    style: const TextStyle(fontSize: 14.5, height: 1.45, color: Colors.white),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 4),
+              Padding(
+                padding: const EdgeInsets.only(right: 4),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: <Widget>[
+                    Text(hora(turno.creadoEn),
+                        style: const TextStyle(fontSize: 10.5, color: TempleColors.textoTenue)),
+                    const SizedBox(width: 4),
+                    Icon(Icons.done_all_rounded, size: 13, color: tono.acento.withValues(alpha: 0.85)),
+                  ],
+                ),
+              ),
+            ],
           ),
         ),
       );
     }
 
-    // En kokoro y en auxilio el trazo se apaga: el momento no lleva acento de
-    // marca encima.
     final bool sobrio = turno.kokoro || turno.auxilio;
+    final bool pensando = enCurso && turno.texto.isEmpty;
+    final Color colorTexto = sobrio ? TempleColors.blancoLuna : TempleColors.texto;
+
+    final Widget contenido = pensando
+        ? _TshPuntos(color: tono.acento)
+        : _TshTexto(
+            texto: turno.texto,
+            color: colorTexto,
+            acento: sobrio ? TempleColors.textoSuave : tono.acento,
+            cursor: enCurso,
+          );
 
     return Row(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: <Widget>[
-        Container(
-          width: 2,
-          constraints: const BoxConstraints(minHeight: 26),
-          margin: const EdgeInsets.only(top: 4, right: 15),
-          decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(1),
-            gradient: LinearGradient(
-              begin: Alignment.topCenter,
-              end: Alignment.bottomCenter,
-              colors: <Color>[
-                (sobrio ? TempleColors.textoSuave : tono.acento)
-                    .withValues(alpha: sobrio ? 0.45 : 0.9),
-                Colors.transparent,
-              ],
-            ),
-          ),
-        ),
-        Expanded(
+        _TshSello(tono: tono, sobrio: sobrio),
+        const SizedBox(width: 9),
+        Flexible(
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
             children: <Widget>[
-              SelectableText(
-                turno.texto,
-                style: TextStyle(
-                  fontSize: 14,
-                  height: 1.62,
-                  color: sobrio ? TempleColors.blancoLuna : TempleColors.texto,
-                ),
-              ),
-              if (onReportar != null)
-                Align(
-                  alignment: Alignment.centerRight,
-                  child: Semantics(
-                    button: true,
-                    label: 'Reportar esta respuesta',
-                    child: InkWell(
-                      borderRadius: BorderRadius.circular(99),
-                      onTap: onReportar,
-                      child: const Padding(
-                        padding: EdgeInsets.fromLTRB(8, 4, 2, 2),
-                        child: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: <Widget>[
-                            Icon(Icons.outlined_flag_rounded, size: 14, color: TempleColors.textoTenue),
-                            SizedBox(width: 3),
-                            Text('Reportar', style: TextStyle(fontSize: 11, color: TempleColors.textoTenue)),
-                          ],
-                        ),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(3, 1, 0, 5),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: <Widget>[
+                    Text(
+                      'Tenshi',
+                      style: TextStyle(
+                        fontSize: 12.5,
+                        fontWeight: FontWeight.w600,
+                        color: Color.lerp(tono.acento, TempleColors.blancoLuna, 0.25),
                       ),
                     ),
+                    const SizedBox(width: 6),
+                    Text(
+                      enCurso
+                          ? (pensando ? 'pensando…' : 'escribiendo…')
+                          : hora(turno.creadoEn),
+                      style: TextStyle(
+                        fontSize: 11,
+                        color: enCurso ? tono.acento.withValues(alpha: 0.85) : TempleColors.textoTenue,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              AnimatedSize(
+                duration: TempleMotion.rapido,
+                curve: TempleMotion.suave,
+                alignment: Alignment.topLeft,
+                child: Container(
+                  padding: pensando
+                      ? const EdgeInsets.fromLTRB(16, 13, 16, 13)
+                      : const EdgeInsets.fromLTRB(15, 12, 15, 13),
+                  decoration: BoxDecoration(
+                    gradient: LinearGradient(
+                      begin: Alignment.topLeft,
+                      end: Alignment.bottomRight,
+                      colors: sobrio
+                          ? <Color>[
+                              TempleColors.superficie.withValues(alpha: 0.95),
+                              TempleColors.superficie.withValues(alpha: 0.88),
+                            ]
+                          : <Color>[
+                              Color.alphaBlend(tono.acento.withValues(alpha: 0.09), TempleColors.superficieAlta)
+                                  .withValues(alpha: 0.96),
+                              TempleColors.superficie.withValues(alpha: 0.94),
+                            ],
+                    ),
+                    borderRadius: const BorderRadius.only(
+                      topLeft: Radius.circular(6),
+                      topRight: Radius.circular(20),
+                      bottomLeft: Radius.circular(20),
+                      bottomRight: Radius.circular(20),
+                    ),
+                    border: Border.all(
+                      color: sobrio ? TempleColors.borde : tono.acento.withValues(alpha: 0.24),
+                    ),
+                    boxShadow: <BoxShadow>[
+                      BoxShadow(
+                        color: Colors.black.withValues(alpha: 0.22),
+                        blurRadius: 16,
+                        offset: const Offset(0, 6),
+                      ),
+                    ],
+                  ),
+                  child: enCurso ? contenido : SelectionArea(child: contenido),
+                ),
+              ),
+              if (!enCurso && (onCopiar != null || onReportar != null))
+                Padding(
+                  padding: const EdgeInsets.only(top: 3),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: <Widget>[
+                      if (onCopiar != null)
+                        _TshAccion(icono: Icons.content_copy_rounded, etiqueta: 'Copiar', onTap: onCopiar!),
+                      if (onReportar != null)
+                        _TshAccion(icono: Icons.outlined_flag_rounded, etiqueta: 'Reportar', onTap: onReportar!),
+                    ],
                   ),
                 ),
             ],
@@ -35503,31 +36170,375 @@ class _TshTurno extends StatelessWidget {
   }
 }
 
-class _TshPensando extends StatelessWidget {
-  const _TshPensando({required this.tono});
+/// El sello de Tenshi al lado de cada respuesta: la luna con el torii,
+/// quieta (una por mensaje animada sería ruido y gasto).
+class _TshSello extends StatelessWidget {
+  const _TshSello({required this.tono, this.sobrio = false});
 
   final TonoTenshi tono;
+  final bool sobrio;
 
   @override
   Widget build(BuildContext context) {
-    return Row(
-      children: <Widget>[
-        Container(
-          width: 2,
-          height: 18,
-          margin: const EdgeInsets.only(right: 15),
-          color: tono.acento.withValues(alpha: 0.5),
+    final Color acento = sobrio ? TempleColors.textoSuave : tono.acento;
+    return Container(
+      width: 32,
+      height: 32,
+      decoration: BoxDecoration(
+        shape: BoxShape.circle,
+        gradient: RadialGradient(
+          colors: <Color>[
+            Color.alphaBlend(acento.withValues(alpha: 0.20), TempleColors.superficieAlta),
+            TempleColors.superficie,
+          ],
         ),
-        SizedBox(
-          width: 16,
-          height: 16,
-          child: CircularProgressIndicator(
-            strokeWidth: 1.5,
-            valueColor: AlwaysStoppedAnimation<Color>(
-                tono.acento.withValues(alpha: 0.7)),
+        border: Border.all(color: acento.withValues(alpha: 0.45)),
+        boxShadow: <BoxShadow>[
+          BoxShadow(color: acento.withValues(alpha: sobrio ? 0.0 : 0.22), blurRadius: 12),
+        ],
+      ),
+      child: ClipOval(
+        child: RepaintBoundary(
+          child: CustomPaint(
+            painter: _AvatarTenshiPainter(
+              t: 0.25,
+              estado: EstadoAvatar.kokoro,
+              acento: acento,
+            ),
           ),
         ),
-      ],
+      ),
+    );
+  }
+}
+
+class _TshAccion extends StatelessWidget {
+  const _TshAccion({required this.icono, required this.etiqueta, required this.onTap});
+
+  final IconData icono;
+  final String etiqueta;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return Semantics(
+      button: true,
+      label: etiqueta,
+      child: Material(
+        type: MaterialType.transparency,
+        child: InkWell(
+          borderRadius: BorderRadius.circular(99),
+          onTap: onTap,
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(7, 6, 9, 6),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: <Widget>[
+                Icon(icono, size: 14, color: TempleColors.textoTenue),
+                const SizedBox(width: 4),
+                Text(etiqueta, style: const TextStyle(fontSize: 11, color: TempleColors.textoTenue)),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+// -- Texto de Tenshi con formato ligero -------------------------------------
+
+enum _TshTipoBloque { parrafo, vineta, numero, titulo }
+
+class _TshBloque {
+  _TshBloque(this.tipo, this.texto, [this.marca = '']);
+  final _TshTipoBloque tipo;
+  String texto;
+  final String marca;
+}
+
+/// Lo que escribe la IA, con formato ligero: **negrita**, listas con guion o
+/// número y títulos con #. Sin depender de un paquete de markdown: si el
+/// modelo no usa formato, se ve como texto normal.
+class _TshTexto extends StatelessWidget {
+  const _TshTexto({
+    required this.texto,
+    required this.color,
+    required this.acento,
+    this.cursor = false,
+  });
+
+  final String texto;
+  final Color color;
+  final Color acento;
+
+  /// Cursor que parpadea al final mientras escribe.
+  final bool cursor;
+
+  static final RegExp _vineta = RegExp(r'^\s*[-•*·]\s+(.*)$');
+  static final RegExp _numero = RegExp(r'^\s*(\d{1,2})[.)]\s+(.*)$');
+  static final RegExp _titulo = RegExp(r'^\s*#{1,4}\s+(.*)$');
+
+  static List<_TshBloque> bloques(String texto) {
+    final List<_TshBloque> out = <_TshBloque>[];
+    bool corte = true;
+    for (final String l in texto.split('\n')) {
+      if (l.trim().isEmpty) {
+        corte = true;
+        continue;
+      }
+      final RegExpMatch? v = _vineta.firstMatch(l);
+      if (v != null) {
+        out.add(_TshBloque(_TshTipoBloque.vineta, v.group(1)!.trim()));
+        corte = true;
+        continue;
+      }
+      final RegExpMatch? n = _numero.firstMatch(l);
+      if (n != null) {
+        out.add(_TshBloque(_TshTipoBloque.numero, n.group(2)!.trim(), n.group(1)!));
+        corte = true;
+        continue;
+      }
+      final RegExpMatch? h = _titulo.firstMatch(l);
+      if (h != null) {
+        out.add(_TshBloque(_TshTipoBloque.titulo, h.group(1)!.trim()));
+        corte = true;
+        continue;
+      }
+      if (!corte && out.isNotEmpty && out.last.tipo == _TshTipoBloque.parrafo) {
+        out.last.texto = '${out.last.texto}\n${l.trimRight()}';
+      } else {
+        out.add(_TshBloque(_TshTipoBloque.parrafo, l.trimRight()));
+      }
+      corte = false;
+    }
+    return out;
+  }
+
+  /// **negrita**. Si el cierre todavía no llegó, lo que sigue va en negrita
+  /// hasta que llegue (no se ven los asteriscos parpadeando).
+  List<InlineSpan> _enLinea(String s) {
+    final List<InlineSpan> out = <InlineSpan>[];
+    final List<String> partes = s.split('**');
+    for (int i = 0; i < partes.length; i++) {
+      if (partes[i].isEmpty) continue;
+      out.add(TextSpan(
+        text: partes[i],
+        style: i.isOdd
+            ? const TextStyle(fontWeight: FontWeight.w700, color: TempleColors.blancoLuna)
+            : null,
+      ));
+    }
+    return out;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final TextStyle base = TextStyle(fontSize: 14.5, height: 1.55, color: color);
+    final List<_TshBloque> lista = bloques(texto);
+    if (lista.isEmpty) {
+      return cursor ? _TshCursor(color: acento) : const SizedBox.shrink();
+    }
+
+    final List<Widget> hijos = <Widget>[];
+    for (int i = 0; i < lista.length; i++) {
+      final _TshBloque b = lista[i];
+      final List<InlineSpan> spans = _enLinea(b.texto);
+      if (cursor && i == lista.length - 1) {
+        spans.add(WidgetSpan(
+          alignment: PlaceholderAlignment.middle,
+          child: Padding(
+            padding: const EdgeInsets.only(left: 2),
+            child: _TshCursor(color: acento),
+          ),
+        ));
+      }
+      final Widget cuerpo = Text.rich(
+        TextSpan(children: spans),
+        style: b.tipo == _TshTipoBloque.titulo
+            ? base.copyWith(fontSize: 15.5, fontWeight: FontWeight.w700, color: TempleColors.blancoLuna)
+            : base,
+      );
+      final Widget w = switch (b.tipo) {
+        _TshTipoBloque.parrafo || _TshTipoBloque.titulo => cuerpo,
+        _TshTipoBloque.vineta => Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: <Widget>[
+              Padding(
+                padding: const EdgeInsets.fromLTRB(3, 8, 11, 0),
+                child: Container(
+                  width: 6,
+                  height: 6,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    color: acento,
+                    boxShadow: <BoxShadow>[
+                      BoxShadow(color: acento.withValues(alpha: 0.5), blurRadius: 5),
+                    ],
+                  ),
+                ),
+              ),
+              Expanded(child: cuerpo),
+            ],
+          ),
+        _TshTipoBloque.numero => Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: <Widget>[
+              SizedBox(
+                width: 24,
+                child: Text(
+                  '${b.marca}.',
+                  style: base.copyWith(fontWeight: FontWeight.w700, color: acento),
+                ),
+              ),
+              Expanded(child: cuerpo),
+            ],
+          ),
+      };
+      if (i > 0) {
+        final bool lista2 = b.tipo == _TshTipoBloque.vineta || b.tipo == _TshTipoBloque.numero;
+        final _TshTipoBloque previo = lista[i - 1].tipo;
+        final bool previoLista = previo == _TshTipoBloque.vineta || previo == _TshTipoBloque.numero;
+        hijos.add(SizedBox(height: lista2 && previoLista ? 5 : 10));
+      }
+      hijos.add(w);
+    }
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      mainAxisSize: MainAxisSize.min,
+      children: hijos,
+    );
+  }
+}
+
+/// Cursor que parpadea mientras Tenshi escribe.
+class _TshCursor extends StatefulWidget {
+  const _TshCursor({required this.color});
+
+  final Color color;
+
+  @override
+  State<_TshCursor> createState() => _TshCursorState();
+}
+
+class _TshCursorState extends State<_TshCursor> with SingleTickerProviderStateMixin {
+  late final AnimationController _c = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 520),
+  );
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (MediaQuery.maybeDisableAnimationsOf(context) ?? false) {
+      _c.stop();
+      _c.value = 1;
+    } else if (!_c.isAnimating) {
+      _c.repeat(reverse: true);
+    }
+  }
+
+  @override
+  void dispose() {
+    _c.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return FadeTransition(
+      opacity: CurvedAnimation(parent: _c, curve: Curves.easeInOut),
+      child: Container(
+        width: 8,
+        height: 16,
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(2),
+          color: widget.color,
+          boxShadow: <BoxShadow>[
+            BoxShadow(color: widget.color.withValues(alpha: 0.6), blurRadius: 6),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// Tres puntos que ondulan: Tenshi está pensando. Es movimiento con
+/// función, así que también se anima en la web.
+class _TshPuntos extends StatefulWidget {
+  const _TshPuntos({required this.color});
+
+  final Color color;
+
+  @override
+  State<_TshPuntos> createState() => _TshPuntosState();
+}
+
+class _TshPuntosState extends State<_TshPuntos> with SingleTickerProviderStateMixin {
+  late final AnimationController _c = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 1150),
+  );
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (MediaQuery.maybeDisableAnimationsOf(context) ?? false) {
+      _c.stop();
+      _c.value = 0.2;
+    } else if (!_c.isAnimating) {
+      _c.repeat();
+    }
+  }
+
+  @override
+  void dispose() {
+    _c.dispose();
+    super.dispose();
+  }
+
+  double _onda(int i) {
+    final double x = (_c.value - i * 0.16) % 1.0;
+    return x < 0.42 ? math.sin(x / 0.42 * math.pi) : 0;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Semantics(
+      label: 'Tenshi está pensando',
+      child: SizedBox(
+        height: 20,
+        child: AnimatedBuilder(
+          animation: _c,
+          builder: (BuildContext context, _) => Row(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.center,
+            children: <Widget>[
+              for (int i = 0; i < 3; i++)
+                Padding(
+                  padding: EdgeInsets.only(right: i < 2 ? 6 : 0),
+                  child: Transform.translate(
+                    offset: Offset(0, -4 * _onda(i)),
+                    child: Container(
+                      width: 8,
+                      height: 8,
+                      decoration: BoxDecoration(
+                        shape: BoxShape.circle,
+                        color: widget.color.withValues(alpha: 0.35 + 0.65 * _onda(i)),
+                        boxShadow: <BoxShadow>[
+                          BoxShadow(
+                            color: widget.color.withValues(alpha: 0.45 * _onda(i)),
+                            blurRadius: 8,
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+            ],
+          ),
+        ),
+      ),
     );
   }
 }
@@ -35541,7 +36552,7 @@ class _TshLineasApoyo extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Padding(
-      padding: const EdgeInsets.only(top: 16, left: 17),
+      padding: const EdgeInsets.only(top: 12, left: 41),
       child: Container(
         padding: const EdgeInsets.all(16),
         decoration: BoxDecoration(
@@ -35576,10 +36587,54 @@ class _TshLineasApoyo extends StatelessWidget {
   }
 }
 
+// -- Volver abajo ---------------------------------------------------------------
+
+class _TshBotonBajar extends StatelessWidget {
+  const _TshBotonBajar({required this.visible, required this.tono, required this.onTap});
+
+  final bool visible;
+  final TonoTenshi tono;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return IgnorePointer(
+      ignoring: !visible,
+      child: AnimatedOpacity(
+        opacity: visible ? 1 : 0,
+        duration: TempleMotion.rapido,
+        child: AnimatedScale(
+          scale: visible ? 1 : 0.7,
+          duration: TempleMotion.medio,
+          curve: TempleMotion.suave,
+          child: Tooltip(
+            message: 'Ir al último mensaje',
+            child: Material(
+              color: TempleColors.superficieAlta,
+              shape: CircleBorder(side: BorderSide(color: tono.acento.withValues(alpha: 0.45))),
+              elevation: 6,
+              shadowColor: Colors.black,
+              child: InkWell(
+                customBorder: const CircleBorder(),
+                onTap: onTap,
+                child: Padding(
+                  padding: const EdgeInsets.all(8),
+                  child: Icon(Icons.keyboard_arrow_down_rounded, size: 24, color: tono.acento),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 // -- Accesos rápidos --------------------------------------------------------
 
 class _TshChips extends StatelessWidget {
   const _TshChips({
+    super.key,
     required this.sugerencias,
     required this.tono,
     required this.onTexto,
@@ -35591,49 +36646,76 @@ class _TshChips extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final bool reducir = MediaQuery.maybeDisableAnimationsOf(context) ?? false;
     return SizedBox(
-      height: 44,
-      child: ListView(
+      height: 50,
+      child: ListView.separated(
         scrollDirection: Axis.horizontal,
-        padding: const EdgeInsets.symmetric(horizontal: 20),
-        children: sugerencias.map((SugerenciaTenshi s) {
-          return Padding(
-            padding: const EdgeInsets.only(right: 8),
-            child: GestureDetector(
-              onTap: () {
-                if (s.destino != null) {
-                  s.destino!(context);
-                } else {
-                  onTexto(s.mensaje);
-                }
-              },
-              child: Container(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 13, vertical: 9),
-                decoration: BoxDecoration(
-                  color: TempleColors.negro.withValues(alpha: 0.35),
-                  borderRadius: BorderRadius.circular(999),
-                  border:
-                      Border.all(color: tono.acento.withValues(alpha: 0.30)),
-                ),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: <Widget>[
-                    TempleIcon(s.glifo,
-                        size: 14,
-                        color: tono.acento.withValues(alpha: 0.85)),
-                    const SizedBox(width: 8),
-                    Text(
-                      s.etiqueta,
-                      style: const TextStyle(
-                          fontSize: 12, color: TempleColors.texto),
+        padding: const EdgeInsets.fromLTRB(14, 4, 14, 8),
+        itemCount: sugerencias.length,
+        separatorBuilder: (_, __) => const SizedBox(width: 8),
+        itemBuilder: (BuildContext context, int i) {
+          final SugerenciaTenshi s = sugerencias[i];
+          final bool abre = s.destino != null;
+          return TweenAnimationBuilder<double>(
+            tween: Tween<double>(begin: reducir ? 1 : 0, end: 1),
+            duration: Duration(milliseconds: 300 + 90 * i),
+            curve: Interval(math.min(0.6, i * 0.2), 1, curve: TempleMotion.entrada),
+            builder: (BuildContext context, double v, Widget? hijo) => Opacity(
+              opacity: v.clamp(0.0, 1.0),
+              child: Transform.translate(offset: Offset(0, (1 - v) * 10), child: hijo),
+            ),
+            child: Material(
+              type: MaterialType.transparency,
+              child: InkWell(
+                borderRadius: BorderRadius.circular(999),
+                onTap: () {
+                  HapticFeedback.selectionClick();
+                  if (s.destino != null) {
+                    s.destino!(context);
+                  } else {
+                    onTexto(s.mensaje);
+                  }
+                },
+                child: Ink(
+                  padding: const EdgeInsets.fromLTRB(12, 0, 14, 0),
+                  decoration: BoxDecoration(
+                    borderRadius: BorderRadius.circular(999),
+                    gradient: LinearGradient(
+                      begin: Alignment.topLeft,
+                      end: Alignment.bottomRight,
+                      colors: <Color>[
+                        Color.alphaBlend(tono.acento.withValues(alpha: 0.08), TempleColors.superficieAlta)
+                            .withValues(alpha: 0.95),
+                        TempleColors.superficie.withValues(alpha: 0.92),
+                      ],
                     ),
-                  ],
+                    border: Border.all(color: tono.acento.withValues(alpha: 0.34)),
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: <Widget>[
+                      TempleIcon(s.glifo, size: 14, color: tono.acento),
+                      const SizedBox(width: 7),
+                      Text(
+                        s.etiqueta,
+                        style: const TextStyle(
+                          fontSize: 12.5,
+                          fontWeight: FontWeight.w500,
+                          color: TempleColors.texto,
+                        ),
+                      ),
+                      if (abre) ...<Widget>[
+                        const SizedBox(width: 4),
+                        const Icon(Icons.north_east_rounded, size: 12, color: TempleColors.textoTenue),
+                      ],
+                    ],
+                  ),
                 ),
               ),
             ),
           );
-        }).toList(),
+        },
       ),
     );
   }
@@ -35641,82 +36723,221 @@ class _TshChips extends StatelessWidget {
 
 // -- Campo de entrada -------------------------------------------------------
 
-class _TshCampo extends StatelessWidget {
+/// El campo flotante. Se ilumina con el acento al escribir; el botón se
+/// enciende cuando hay algo que enviar y, mientras Tenshi responde, se vuelve
+/// «detener». Va pegado a la barra de navegación, o al teclado cuando se
+/// abre: el relleno inferior del cuerpo ya trae la altura de la barra.
+class _TshCampo extends StatefulWidget {
   const _TshCampo({
     required this.controller,
     required this.foco,
     required this.tono,
-    required this.habilitado,
+    required this.ocupado,
     required this.onEnviar,
+    required this.onDetener,
   });
 
   final TextEditingController controller;
   final FocusNode foco;
   final TonoTenshi tono;
-  final bool habilitado;
+  final bool ocupado;
   final VoidCallback onEnviar;
+  final VoidCallback onDetener;
+
+  @override
+  State<_TshCampo> createState() => _TshCampoState();
+}
+
+class _TshCampoState extends State<_TshCampo> {
+  bool _hayTexto = false;
+  bool _enfocado = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _hayTexto = widget.controller.text.trim().isNotEmpty;
+    _enfocado = widget.foco.hasFocus;
+    widget.controller.addListener(_cambio);
+    widget.foco.addListener(_cambio);
+  }
+
+  @override
+  void dispose() {
+    widget.controller.removeListener(_cambio);
+    widget.foco.removeListener(_cambio);
+    super.dispose();
+  }
+
+  void _cambio() {
+    final bool t = widget.controller.text.trim().isNotEmpty;
+    final bool f = widget.foco.hasFocus;
+    if (t != _hayTexto || f != _enfocado) {
+      setState(() {
+        _hayTexto = t;
+        _enfocado = f;
+      });
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      padding: EdgeInsets.fromLTRB(
-        20,
-        10,
-        12,
-        12 + kAlturaNavBar + MediaQuery.paddingOf(context).bottom,
-      ),
-      decoration: BoxDecoration(
-        border: Border(
-          top: BorderSide(color: TempleColors.borde.withValues(alpha: 0.8)),
-        ),
-      ),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.end,
+    final Color acento = widget.tono.acento;
+    final bool detener = widget.ocupado;
+    final bool puedeEnviar = _hayTexto && !detener;
+
+    return Padding(
+      padding: EdgeInsets.fromLTRB(12, 2, 12, MediaQuery.paddingOf(context).bottom + 6),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
         children: <Widget>[
-          Expanded(
-            child: TextField(
-              controller: controller,
-              focusNode: foco,
-              enabled: habilitado,
-              minLines: 1,
-              maxLines: 4,
-              textCapitalization: TextCapitalization.sentences,
-              textInputAction: TextInputAction.send,
-              onSubmitted: (_) => onEnviar(),
-              cursorColor: tono.acento,
-              style: const TextStyle(
-                  fontSize: 14, color: TempleColors.blancoLuna),
-              decoration: const InputDecoration(
-                hintText: 'Habla con Tenshi',
-                hintStyle: TextStyle(color: TempleColors.textoTenue),
-                border: InputBorder.none,
-                enabledBorder: InputBorder.none,
-                focusedBorder: InputBorder.none,
-                disabledBorder: InputBorder.none,
-                isDense: true,
-                contentPadding: EdgeInsets.symmetric(vertical: 11),
+          AnimatedContainer(
+            duration: TempleMotion.medio,
+            curve: TempleMotion.suave,
+            padding: const EdgeInsets.fromLTRB(14, 3, 5, 3),
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(28),
+              color: Color.alphaBlend(
+                acento.withValues(alpha: _enfocado ? 0.06 : 0.0),
+                TempleColors.superficieAlta,
+              ).withValues(alpha: 0.97),
+              border: Border.all(
+                color: _enfocado ? acento.withValues(alpha: 0.62) : TempleColors.bordeVivo,
+                width: _enfocado ? 1.4 : 1,
               ),
+              boxShadow: <BoxShadow>[
+                BoxShadow(
+                  color: Colors.black.withValues(alpha: 0.30),
+                  blurRadius: 18,
+                  offset: const Offset(0, 6),
+                ),
+                BoxShadow(
+                  color: acento.withValues(alpha: _enfocado ? 0.22 : 0.0),
+                  blurRadius: 24,
+                ),
+              ],
+            ),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.end,
+              children: <Widget>[
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 14, right: 10),
+                  child: TempleIcon(TempleGlyph.chispa, size: 17, color: acento.withValues(alpha: 0.9)),
+                ),
+                Expanded(
+                  child: TextField(
+                    controller: widget.controller,
+                    focusNode: widget.foco,
+                    minLines: 1,
+                    maxLines: 5,
+                    textCapitalization: TextCapitalization.sentences,
+                    textInputAction: TextInputAction.send,
+                    // Al enviar, el teclado se queda: la conversación sigue.
+                    onEditingComplete: () {},
+                    onSubmitted: (_) {
+                      if (!widget.ocupado) widget.onEnviar();
+                    },
+                    cursorColor: acento,
+                    style: const TextStyle(fontSize: 15, height: 1.35, color: TempleColors.blancoLuna),
+                    decoration: InputDecoration(
+                      hintText: detener ? 'Tenshi está respondiendo…' : 'Pregúntale a Tenshi…',
+                      hintStyle: const TextStyle(color: TempleColors.textoTenue),
+                      border: InputBorder.none,
+                      enabledBorder: InputBorder.none,
+                      focusedBorder: InputBorder.none,
+                      disabledBorder: InputBorder.none,
+                      isDense: true,
+                      contentPadding: const EdgeInsets.symmetric(vertical: 14),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 6),
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 3),
+                  child: Semantics(
+                    button: true,
+                    label: detener ? 'Detener la respuesta' : 'Enviar',
+                    child: Tooltip(
+                      message: detener ? 'Detener' : 'Enviar',
+                      child: Material(
+                        type: MaterialType.transparency,
+                        child: InkWell(
+                          customBorder: const CircleBorder(),
+                          onTap: detener ? widget.onDetener : (puedeEnviar ? widget.onEnviar : null),
+                          child: SizedBox(
+                            width: 44,
+                            height: 44,
+                            child: Stack(
+                              alignment: Alignment.center,
+                              children: <Widget>[
+                                AnimatedContainer(
+                                  duration: TempleMotion.medio,
+                                  curve: TempleMotion.suave,
+                                  width: 42,
+                                  height: 42,
+                                  decoration: BoxDecoration(
+                                    shape: BoxShape.circle,
+                                    gradient: puedeEnviar
+                                        ? LinearGradient(
+                                            begin: Alignment.topLeft,
+                                            end: Alignment.bottomRight,
+                                            colors: <Color>[
+                                              Color.lerp(TempleColors.violeta, TempleColors.violetaClaro, 0.25)!,
+                                              Color.lerp(TempleColors.violeta, TempleColors.moradoProfundo, 0.3)!,
+                                            ],
+                                          )
+                                        : null,
+                                    color: puedeEnviar
+                                        ? null
+                                        : detener
+                                            ? acento.withValues(alpha: 0.14)
+                                            : TempleColors.superficie,
+                                    boxShadow: puedeEnviar
+                                        ? <BoxShadow>[
+                                            BoxShadow(
+                                              color: TempleColors.violeta.withValues(alpha: 0.45),
+                                              blurRadius: 16,
+                                            ),
+                                          ]
+                                        : null,
+                                  ),
+                                ),
+                                if (detener)
+                                  SizedBox(
+                                    width: 42,
+                                    height: 42,
+                                    child: CircularProgressIndicator(
+                                      strokeWidth: 1.6,
+                                      valueColor: AlwaysStoppedAnimation<Color>(acento.withValues(alpha: 0.8)),
+                                    ),
+                                  ),
+                                AnimatedSwitcher(
+                                  duration: TempleMotion.rapido,
+                                  child: detener
+                                      ? Icon(Icons.stop_rounded,
+                                          key: const ValueKey<String>('detener'), size: 20, color: acento)
+                                      : Icon(
+                                          Icons.arrow_upward_rounded,
+                                          key: const ValueKey<String>('enviar'),
+                                          size: 21,
+                                          color: puedeEnviar ? Colors.white : TempleColors.textoTenue,
+                                        ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ],
             ),
           ),
-          const SizedBox(width: 8),
-          // Se apaga durante la respuesta en vez de desaparecer: un control
-          // que se va y vuelve hace saltar la fila entera.
-          AnimatedOpacity(
-            opacity: habilitado ? 1 : 0.35,
-            duration: TempleMotion.rapido,
-            child: Material(
-              color: tono.acento.withValues(alpha: 0.16),
-              shape: const CircleBorder(),
-              child: InkWell(
-                customBorder: const CircleBorder(),
-                onTap: habilitado ? onEnviar : null,
-                child: Padding(
-                  padding: const EdgeInsets.all(11),
-                  child: Icon(Icons.arrow_upward_rounded,
-                      size: 20, color: tono.acento),
-                ),
-              ),
-            ),
+          const SizedBox(height: 5),
+          const Text(
+            'Tenshi es una IA y puede equivocarse.',
+            textAlign: TextAlign.center,
+            style: TextStyle(fontSize: 10.5, letterSpacing: 0.2, color: TempleColors.textoTenue),
           ),
         ],
       ),
@@ -77965,6 +79186,52 @@ class _FraseTenshi extends StatelessWidget {
       ),
     );
   }
+}
+
+/// Solo para la vista de prueba: una conversación de ejemplo con Tenshi, con
+/// lista, negrita y sugerencias, para ver el chat en capturas.
+void sembrarCharlaDePrueba() {
+  final AlmacenTenshi a = AlmacenTenshi.instancia;
+  if (!a.vacia('Kenji')) return;
+  final DateTime ahora = DateTime.now();
+  int n = 0;
+  void turno(AutorTurno autor, String texto, int minutos, {List<SugerenciaTenshi> sugerencias = const <SugerenciaTenshi>[]}) {
+    a.agregar(
+      'Kenji',
+      TurnoTenshi(
+        id: 'charla_${n++}',
+        autor: autor,
+        texto: texto,
+        creadoEn: ahora.subtract(Duration(minutes: minutos)),
+        sugerencias: sugerencias,
+      ),
+    );
+  }
+
+  turno(AutorTurno.tenshi,
+      'Nivel 12, racha de 4 y la disposición en 75. Buen terreno para empujar un poco.\n\nDime qué necesitas hoy.', 9);
+  turno(AutorTurno.usuario, 'Tengo 40 minutos. ¿Qué entreno hoy?', 8);
+  turno(
+    AutorTurno.tenshi,
+    'Con 40 minutos y la espalda descansada desde el lunes, te propongo un **tirón corto**:\n\n'
+        '- Remo con barra: 4 × 8\n'
+        '- Dominadas: 3 series, dejando 1 repetición en reserva\n'
+        '- Face pull: 3 × 15\n\n'
+        'Si el remo sale limpio en las cuatro series, la próxima vez sube **2,5 kg**.',
+    7,
+  );
+  turno(AutorTurno.usuario, '¿Y qué como después?', 2);
+  turno(
+    AutorTurno.tenshi,
+    'Algo con proteína y un poco de carbohidrato en las dos horas siguientes. Por ejemplo, arroz con pollo, '
+        'o huevos con arepa. Nada de contar calorías: come hasta quedar bien.',
+    1,
+    sugerencias: const <SugerenciaTenshi>[
+      SugerenciaTenshi(etiqueta: '¿Y si entreno de noche?', mensaje: '¿Y si entreno de noche?', glifo: TempleGlyph.luna),
+      SugerenciaTenshi(etiqueta: 'Algo corto hoy', mensaje: 'Hoy tengo poco tiempo', glifo: TempleGlyph.reloj),
+      SugerenciaTenshi(etiqueta: 'Qué como hoy', mensaje: '¿Qué como hoy?', glifo: TempleGlyph.cuenco),
+    ],
+  );
 }
 
 /// Solo para la vista de prueba: una sesión de ejemplo de Kenji para ver la
