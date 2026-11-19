@@ -34733,6 +34733,12 @@ class _TenshiScreenState extends State<TenshiScreen> {
   /// escribe solo se redibuja su burbuja, no toda la conversación.
   final ValueNotifier<int> _visible = ValueNotifier<int>(0);
   Timer? _revelador;
+
+  /// El paso se mide en tiempo, no en latidos: en un teléfono lento (o en
+  /// la web con mucha carga) los latidos se espacian y la respuesta no debe
+  /// quedarse atrás.
+  final Stopwatch _reloj = Stopwatch()..start();
+  int _ultimoMs = 0;
   Completer<void>? _alcanzado;
 
   /// La respuesta en curso, para poder detenerla.
@@ -34857,6 +34863,7 @@ class _TenshiScreenState extends State<TenshiScreen> {
       return;
     }
     if (_revelador != null) return;
+    _ultimoMs = _reloj.elapsedMilliseconds;
     _revelador = Timer.periodic(const Duration(milliseconds: 33), (Timer t) {
       if (!mounted) {
         t.cancel();
@@ -34870,7 +34877,10 @@ class _TenshiScreenState extends State<TenshiScreen> {
         _avisarAlcanzado();
         return;
       }
-      final int paso = (falta * 0.06).round().clamp(3, 18);
+      final int ms = _reloj.elapsedMilliseconds;
+      final double latidos = ((ms - _ultimoMs) / 33.0).clamp(1.0, 8.0);
+      _ultimoMs = ms;
+      final int paso = ((falta * 0.06).clamp(3.0, 18.0) * latidos).round();
       _mostrar(math.min(objetivo, _visible.value + paso));
       _bajar();
     });
