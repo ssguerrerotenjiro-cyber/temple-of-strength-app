@@ -1,0 +1,14 @@
+{
+  "version": 8,
+  "name": "Camino del templo (fuentes)",
+  "sources": {
+    "openmaptiles": {
+      "type": "vector",
+      "url": "https://tiles.openfreemap.org/planet",
+      "attribution": "OpenFreeMap © OpenMapTiles · Datos de © OpenStreetMap"
+    }
+  },
+  "layers": [
+    { "id": "fondo", "type": "background", "paint": { "background-color": "#0E0A18" } }
+  ]
+}
